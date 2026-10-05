@@ -2,6 +2,7 @@ package offer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -35,7 +36,12 @@ func NewService(offers Repository, routingRepo routing.Repository, requests requ
 // Offer only if it carries a real business classification (not
 // UNCLASSIFIED, not UNAVAILABLE — a vendor saying "no" is not an offer)
 // and has been reviewed (REVIEWED or CORRECTED, never NEEDS_REVIEW).
-func eligible(resp *routing.VendorResponse) bool {
+func eligible(resp *routing.VendorResponse) bool { return IsEligible(resp) }
+
+// IsEligible is the exported PRD 3 §15 gate, also used by the Phase 3.1
+// offer loop to withdraw offers whose source response was later corrected
+// into an ineligible state.
+func IsEligible(resp *routing.VendorResponse) bool {
 	if resp.Status == routing.ResponseUnclassified || resp.Status == routing.ResponseUnavailable {
 		return false
 	}
@@ -72,6 +78,11 @@ func (s *Service) BuildForBuyerRequest(ctx context.Context, buyerRequestID uuid.
 	}
 	if req == nil {
 		return nil, fmt.Errorf("buyer request %s not found", buyerRequestID)
+	}
+	// Phase 3.1 §3A-2: offers are marketplace execution — never generated
+	// for an unconfirmed request.
+	if err := req.EnsureConfirmed(); err != nil {
+		return nil, err
 	}
 
 	return s.buildForRequest(ctx, req)
@@ -129,6 +140,9 @@ func (s *Service) buildForRequest(ctx context.Context, req *request.BuyerRequest
 		}
 
 		created, err := s.offers.Create(ctx, o)
+		if errors.Is(err, ErrAlreadyExists) {
+			continue // a concurrent build created it first — one logical Offer per response
+		}
 		if err != nil {
 			s.logger.Error("creating offer", "response_id", resp.ID, "error", err)
 			continue
@@ -259,3 +273,116 @@ func formatNaira(amount int64) string {
 	}
 	return string(out)
 }
+
+// RequestSummary is the buyer-facing description of what the buyer asked
+// for, used to label offers. Only buyer-stated information — never internal.
+type RequestSummary struct {
+	Product   string
+	Variant   string
+	Condition string
+}
+
+// FormatOfferDelivery renders the buyer-facing WhatsApp message for a batch
+// of newly delivered offers (Phase 3.1). Each offer is shown with its
+// stable PresentationOrdinal, so "1" always means the same offer for this
+// request even when later batches add options 2, 3, ...
+//
+// Only commercial information appears: product, variant, condition, price
+// and availability. Never scores, ranking reasons, confidence, vendor IDs,
+// database IDs or operator metadata.
+//
+// For EXACT and CAN_SOURCE offers the vendor answered *this* request, so
+// when the vendor didn't restate variant/condition, the buyer's own stated
+// variant/condition is shown (the vendor confirmed that request). For
+// ALTERNATIVE/PARTIAL offers only what the vendor actually said is shown.
+func FormatOfferDelivery(req RequestSummary, batch []*Offer, highestOrdinal int, followUp bool) string {
+	var b strings.Builder
+	noun := "option"
+	if len(batch) > 1 {
+		noun = "options"
+	}
+	product := req.Product
+	if product == "" {
+		product = "your request"
+	}
+	switch {
+	case followUp && len(batch) == 1:
+		fmt.Fprintf(&b, "I found another option for %s 👀\n\n", product)
+	case followUp:
+		fmt.Fprintf(&b, "I found %d more options for %s 👀\n\n", len(batch), product)
+	default:
+		fmt.Fprintf(&b, "I found %d %s for %s 👀\n\n", len(batch), noun, product)
+	}
+
+	for _, o := range batch {
+		ordinal := 0
+		if o.PresentationOrdinal != nil {
+			ordinal = *o.PresentationOrdinal
+		}
+		fmt.Fprintf(&b, "%d. %s\n", ordinal, offerTitle(req, o))
+		if o.Price != nil {
+			fmt.Fprintf(&b, "   ₦%s\n", formatNaira(*o.Price))
+		} else {
+			b.WriteString("   Price on request\n")
+		}
+		details := []string{availabilityLabel(o.Type)}
+		if c := offerCondition(req, o); c != "" {
+			details = append(details, strings.ToLower(c))
+		}
+		fmt.Fprintf(&b, "   %s\n\n", strings.Join(details, " · "))
+	}
+
+	if highestOrdinal <= 1 {
+		b.WriteString("Reply 1 if you want this one.")
+	} else {
+		fmt.Fprintf(&b, "Reply with the number (1-%d) of the one you want.", highestOrdinal)
+	}
+	return b.String()
+}
+
+func offerTitle(req RequestSummary, o *Offer) string {
+	product := req.Product
+	if o.Product != nil && *o.Product != "" {
+		product = *o.Product
+	}
+	if product == "" {
+		product = "Item"
+	}
+	variant := ""
+	if o.Variant != nil && *o.Variant != "" {
+		variant = *o.Variant
+	} else if o.Type == TypeExact || o.Type == TypeCanSource {
+		variant = req.Variant
+	}
+	if variant != "" && !strings.Contains(strings.ToLower(product), strings.ToLower(variant)) {
+		return product + " " + variant
+	}
+	return product
+}
+
+func offerCondition(req RequestSummary, o *Offer) string {
+	if o.Condition != nil && *o.Condition != "" {
+		return *o.Condition
+	}
+	if o.Type == TypeExact || o.Type == TypeCanSource {
+		return req.Condition
+	}
+	return ""
+}
+
+func availabilityLabel(t Type) string {
+	switch t {
+	case TypeCanSource:
+		return "Can be sourced"
+	case TypeAlternative:
+		return "Alternative to what you asked for"
+	case TypePartial:
+		return "Available now (similar item)"
+	default:
+		return "Available now"
+	}
+}
+
+// FormatNaira exposes the existing naira formatter to the buyer-facing
+// messaging in other packages (selection confirmation).
+func FormatNaira(amount int64) string { return formatNaira(amount) }

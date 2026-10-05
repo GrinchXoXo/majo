@@ -23,16 +23,16 @@ func scanRequestRow(scanner interface {
 	Scan(dest ...any) error
 }) (*request.BuyerRequest, error) {
 	var (
-		r                  request.BuyerRequest
-		idStr, convStr, buyerStr string
-		originStr          sql.NullString
-		category, product, variant sql.NullString
-		budgetMin, budgetMax sql.NullInt64
+		r                            request.BuyerRequest
+		idStr, convStr, buyerStr     string
+		originStr                    sql.NullString
+		category, product, variant   sql.NullString
+		budgetMin, budgetMax         sql.NullInt64
 		location, condition, urgency sql.NullString
-		quantity           sql.NullInt32
-		prefsBytes         []byte
-		extractedBytes     []byte
-		confirmedAt        sql.NullTime
+		quantity                     sql.NullInt32
+		prefsBytes                   []byte
+		extractedBytes               []byte
+		confirmedAt                  sql.NullTime
 	)
 
 	err := scanner.Scan(
@@ -266,17 +266,25 @@ func (r *RequestRepository) UpdateFields(ctx context.Context, id uuid.UUID, fiel
 	return scanRequestRow(row)
 }
 
+// Confirm transitions NEEDS_REVIEW -> CONFIRMED. Confirming an already
+// CONFIRMED request is an idempotent no-op (confirmed_at is preserved).
+// Any other current status (e.g. EXTRACTING, before the AI result exists)
+// returns request.ErrInvalidTransition.
 func (r *RequestRepository) Confirm(ctx context.Context, id uuid.UUID) (*request.BuyerRequest, error) {
 	row := r.db.QueryRowContext(ctx, `
 		UPDATE buyer_requests SET
 			status = 'CONFIRMED',
-			confirmed_at = now(),
+			confirmed_at = COALESCE(confirmed_at, now()),
 			updated_at = now()
-		WHERE id = $1
+		WHERE id = $1 AND status IN ('NEEDS_REVIEW', 'CONFIRMED')
 		RETURNING `+requestColumns,
 		id.String(),
 	)
-	return scanRequestRow(row)
+	req, err := scanRequestRow(row)
+	if err == sql.ErrNoRows {
+		return nil, request.ErrInvalidTransition
+	}
+	return req, err
 }
 
 func (r *RequestRepository) FindLatestOpenByConversation(ctx context.Context, conversationID uuid.UUID) (*request.BuyerRequest, error) {

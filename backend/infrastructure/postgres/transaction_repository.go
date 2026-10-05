@@ -3,8 +3,11 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/middleman/backend/internal/transaction"
 )
@@ -17,37 +20,16 @@ func NewTransactionRepository(db *sql.DB) *TransactionRepository {
 	return &TransactionRepository{db: db}
 }
 
-func (r *TransactionRepository) CreateSelection(ctx context.Context, s *transaction.Selection) (*transaction.Selection, error) {
-	if s.ID == uuid.Nil {
-		s.ID = uuid.New()
-	}
-	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO buyer_selections (id, buyer_request_id, offer_id, buyer_id)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, buyer_request_id, offer_id, buyer_id, created_at
-	`, s.ID.String(), s.BuyerRequestID.String(), s.OfferID.String(), s.BuyerID.String())
-
-	var idStr, brIDStr, offerIDStr, buyerIDStr string
-	if err := row.Scan(&idStr, &brIDStr, &offerIDStr, &buyerIDStr, &s.CreatedAt); err != nil {
-		return nil, err
-	}
-	s.ID, _ = uuid.Parse(idStr)
-	s.BuyerRequestID, _ = uuid.Parse(brIDStr)
-	s.OfferID, _ = uuid.Parse(offerIDStr)
-	s.BuyerID, _ = uuid.Parse(buyerIDStr)
-	return s, nil
-}
-
 func (r *TransactionRepository) FindSelectionByBuyerRequest(ctx context.Context, buyerRequestID uuid.UUID) (*transaction.Selection, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, buyer_request_id, offer_id, buyer_id, created_at
-		FROM buyer_selections WHERE buyer_request_id = $1
+		SELECT id, buyer_request_id, offer_id, buyer_id, status, created_at
+		FROM buyer_selections WHERE buyer_request_id = $1 AND status = 'ACTIVE'
 		ORDER BY created_at DESC LIMIT 1
 	`, buyerRequestID.String())
 
 	var s transaction.Selection
 	var idStr, brIDStr, offerIDStr, buyerIDStr string
-	err := row.Scan(&idStr, &brIDStr, &offerIDStr, &buyerIDStr, &s.CreatedAt)
+	err := row.Scan(&idStr, &brIDStr, &offerIDStr, &buyerIDStr, &s.Status, &s.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -70,10 +52,10 @@ const transactionColumns = `
 
 func scanTransactionRow(scanner interface{ Scan(dest ...any) error }) (*transaction.Transaction, error) {
 	var (
-		t                                                          transaction.Transaction
+		t                                                                   transaction.Transaction
 		idStr, selectionIDStr, brIDStr, offerIDStr, buyerIDStr, vendorIDStr string
-		listingIDStr                                              sql.NullString
-		paymentProvider, paymentReference                         sql.NullString
+		listingIDStr                                                        sql.NullString
+		paymentProvider, paymentReference                                   sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -107,7 +89,17 @@ func scanTransactionRow(scanner interface{ Scan(dest ...any) error }) (*transact
 	return &t, nil
 }
 
-func (r *TransactionRepository) CreateTransaction(ctx context.Context, t *transaction.Transaction) (*transaction.Transaction, error) {
+// CreateSelectionWithTransaction: see transaction.Repository. One DB
+// transaction: selection INSERT (guarded by uq_buyer_selections_active_request),
+// transaction INSERT (guarded by uq_transactions_buyer_selection), and the
+// offer's move to ACCEPTED. Any failure rolls back all three.
+func (r *TransactionRepository) CreateSelectionWithTransaction(ctx context.Context, s *transaction.Selection, t *transaction.Transaction) (*transaction.Selection, *transaction.Transaction, error) {
+	if s.ID == uuid.Nil {
+		s.ID = uuid.New()
+	}
+	if s.Status == "" {
+		s.Status = transaction.SelectionActive
+	}
 	if t.ID == uuid.Nil {
 		t.ID = uuid.New()
 	}
@@ -124,12 +116,30 @@ func (r *TransactionRepository) CreateTransaction(ctx context.Context, t *transa
 		t.FulfilmentStatus = transaction.FulfilmentPending
 	}
 
+	dbtx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer dbtx.Rollback()
+
+	if err := dbtx.QueryRowContext(ctx, `
+		INSERT INTO buyer_selections (id, buyer_request_id, offer_id, buyer_id, status)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING created_at
+	`, s.ID.String(), s.BuyerRequestID.String(), s.OfferID.String(), s.BuyerID.String(), s.Status).Scan(&s.CreatedAt); err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return nil, nil, transaction.ErrSelectionExists
+		}
+		return nil, nil, fmt.Errorf("inserting selection: %w", err)
+	}
+
+	t.BuyerSelectionID = s.ID
 	var listingID any
 	if t.SupplyListingID != nil {
 		listingID = t.SupplyListingID.String()
 	}
-
-	row := r.db.QueryRowContext(ctx, `
+	row := dbtx.QueryRowContext(ctx, `
 		INSERT INTO transactions (
 			id, buyer_selection_id, buyer_request_id, offer_id, buyer_id, vendor_id, supply_listing_id,
 			status, payment_status, fulfilment_status,
@@ -140,8 +150,21 @@ func (r *TransactionRepository) CreateTransaction(ctx context.Context, t *transa
 		t.Status, t.PaymentStatus, t.FulfilmentStatus,
 		t.GrossAmount, t.PlatformFee, t.PaymentFee, t.VendorAmount, t.RefundAmount, t.Currency,
 	)
+	created, err := scanTransactionRow(row)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inserting transaction: %w", err)
+	}
 
-	return scanTransactionRow(row)
+	if _, err := dbtx.ExecContext(ctx, `
+		UPDATE offers SET status = 'ACCEPTED', updated_at = now() WHERE id = $1
+	`, s.OfferID.String()); err != nil {
+		return nil, nil, fmt.Errorf("marking offer accepted: %w", err)
+	}
+
+	if err := dbtx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return s, created, nil
 }
 
 func (r *TransactionRepository) FindTransactionByID(ctx context.Context, id uuid.UUID) (*transaction.Transaction, error) {

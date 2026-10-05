@@ -13,7 +13,10 @@ import {
   routeToVendors,
   getVendorRequests,
   getOffers,
+  deliverOffers,
+  getSelection,
   selectOffer,
+  type SelectionDTO,
   type BuyerRequestDTO,
   type RequestEventDTO,
   type MatchCandidateDTO,
@@ -68,18 +71,23 @@ export default function RequestDetailPage() {
   const [loadingMatches, setLoadingMatches] = useState(false);
   const [offers, setOffers] = useState<OfferDTO[]>([]);
   const [loadingOffers, setLoadingOffers] = useState(false);
+  const [selection, setSelection] = useState<SelectionDTO | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [req, evts, vrs] = await Promise.all([
+      const [req, evts, vrs, offs, sel] = await Promise.all([
         getRequest(id),
         getRequestEvents(id),
         getVendorRequests(id).catch(() => []),
+        getOffers(id).catch(() => []),
+        getSelection(id).catch(() => null),
       ]);
       setRequest(req);
       setFields(toEditable(req));
       setEvents(evts);
       setVendorRequests(vrs);
+      setOffers(offs);
+      setSelection(sel);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to load request");
@@ -192,13 +200,23 @@ export default function RequestDetailPage() {
     }
   };
 
-  const handleBuildOffers = async () => {
+  // Offers are delivered automatically when vendor replies arrive. This is
+  // the explicit operator retry (e.g. after a failed WhatsApp send); it never
+  // re-sends an offer the buyer already received.
+  const handleDeliverOffers = async () => {
     setLoadingOffers(true);
     setMessage(null);
     try {
-      setOffers(await getOffers(id));
+      const result = await deliverOffers(id);
+      setMessage(
+        result.delivered > 0
+          ? `Delivered ${result.delivered} offer(s) to the buyer (options ${(result.ordinals ?? []).join(", ")}).`
+          : `Nothing new to deliver${result.skipped ? ` (${result.skipped.replace("_", " ")})` : ""}.`
+      );
+      await load();
     } catch (e) {
-      setMessage(e instanceof Error ? `Failed to build offers: ${e.message}` : "Failed to build offers");
+      setMessage(e instanceof Error ? e.message : "Delivery failed");
+      await load();
     } finally {
       setLoadingOffers(false);
     }
@@ -211,6 +229,7 @@ export default function RequestDetailPage() {
     try {
       const result = await selectOffer(id, offerId, request.buyer_id);
       setMessage(`Offer selected. Transaction ${result.transaction_id} created (payment: ${result.payment_status}).`);
+      await load();
     } catch (e) {
       setMessage(e instanceof Error ? `Selection failed: ${e.message}` : "Selection failed");
     } finally {
@@ -390,9 +409,18 @@ export default function RequestDetailPage() {
             {vendorRequests.map((vr) => (
               <div key={vr.id} style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: "0.85em", color: "#666", marginBottom: 4 }}>
-                  <strong>{vr.public_reference}</strong> · {vr.status}
+                  <strong>{vr.public_reference}</strong> ·{" "}
+                  <span style={{ color: vr.status === "SEND_FAILED" ? "crimson" : undefined, fontWeight: vr.status === "SEND_FAILED" ? 600 : undefined }}>
+                    {vr.status}
+                  </span>
                   {vr.match_score !== null && ` · match score ${vr.match_score}`}
                 </div>
+                {vr.status === "SEND_FAILED" && (
+                  <p style={{ color: "crimson", fontSize: "0.8em", margin: "0 0 6px" }}>
+                    WhatsApp rejected this request — the vendor never received it, so their messages will not be treated as replies to it.
+                    {vr.send_error && <><br /><code style={{ fontSize: "0.9em" }}>{vr.send_error}</code></>}
+                  </p>
+                )}
                 {vr.response ? (
                   <VendorResponseCard
                     response={vr.response}
@@ -414,39 +442,97 @@ export default function RequestDetailPage() {
       <section style={{ marginBottom: 32 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <strong style={{ fontSize: "0.85em", color: "#666" }}>OFFERS</strong>
-          <button onClick={handleBuildOffers} disabled={loadingOffers} style={{ padding: "4px 12px", fontSize: "0.85em", cursor: "pointer" }}>
-            {loadingOffers ? "Building..." : "Build / Refresh Offers"}
+          <button
+            onClick={handleDeliverOffers}
+            disabled={loadingOffers || request.status !== "CONFIRMED" || !!selection?.selection}
+            title="Offers are delivered automatically when vendors reply. Use this to retry a failed delivery; already-delivered offers are never re-sent."
+            style={{ padding: "4px 12px", fontSize: "0.85em", cursor: "pointer" }}
+          >
+            {loadingOffers ? "Delivering..." : "Deliver pending offers"}
           </button>
         </div>
 
         {offers.length === 0 && (
           <p style={{ color: "#666", fontSize: "0.9em" }}>
             No offers yet — only reviewed, classified vendor responses (never UNCLASSIFIED or
-            NEEDS_REVIEW) become buyer-facing offers.
+            NEEDS_REVIEW) on a CONFIRMED request become buyer-facing offers. They are sent to the
+            buyer on WhatsApp automatically.
           </p>
         )}
 
-        {offers.map((o) => (
-          <div key={o.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, marginBottom: 8, background: "#fff" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <strong>{o.type}</strong>{" "}
-                <span style={{ color: "#666", fontSize: "0.85em" }}>
-                  {o.price ? `₦${o.price.toLocaleString()}` : "price on request"} · score {o.ranking_score}
-                </span>
+        {offers.map((o) => {
+          const delivered = o.status === "SENT" || o.status === "ACCEPTED";
+          const selectable = (o.status === "SENT" || o.status === "REVIEWED") && !selection?.selection;
+          return (
+            <div key={o.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, marginBottom: 8, background: "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  {o.presentation_ordinal !== null && <strong style={{ marginRight: 6 }}>#{o.presentation_ordinal}</strong>}
+                  <strong>{o.type}</strong>{" "}
+                  <span style={{ color: "#666", fontSize: "0.85em" }}>
+                    {o.price ? `₦${o.price.toLocaleString()}` : "price on request"} · score {o.ranking_score}
+                  </span>{" "}
+                  <span
+                    style={{
+                      fontSize: "0.75em",
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      marginLeft: 4,
+                      background: o.status === "ACCEPTED" ? "#dcfce7" : delivered ? "#dbeafe" : o.status === "WITHDRAWN" ? "#fee2e2" : "#f3f4f6",
+                    }}
+                  >
+                    {o.status}
+                  </span>
+                </div>
+                <button
+                  onClick={() => handleSelectOffer(o.id)}
+                  disabled={saving || !selectable}
+                  title="Operator override — normally the buyer selects by replying with the option number on WhatsApp."
+                  style={{ padding: "4px 12px", background: selectable ? "#15803d" : "#9ca3af", color: "white", border: "none", borderRadius: 6, cursor: selectable ? "pointer" : "default", fontSize: "0.85em" }}
+                >
+                  Select for buyer
+                </button>
               </div>
-              <button
-                onClick={() => handleSelectOffer(o.id)}
-                disabled={saving}
-                style={{ padding: "4px 12px", background: "#15803d", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: "0.85em" }}
-              >
-                Select for buyer
-              </button>
+              <div style={{ fontSize: "0.8em", color: "#666", marginTop: 4 }}>{o.ranking_reasons.join(" · ")}</div>
+              <div style={{ fontSize: "0.8em", color: "#666", marginTop: 4 }}>
+                {o.sent_at
+                  ? `Delivered to buyer ${new Date(o.sent_at).toLocaleString()}${o.expires_at ? ` · selectable until ${new Date(o.expires_at).toLocaleString()}` : ""}`
+                  : "Not yet delivered to buyer"}
+                {o.delivery_attempts > 0 && ` · ${o.delivery_attempts} delivery attempt(s)`}
+              </div>
+              {o.last_delivery_error && !o.sent_at && (
+                <div style={{ fontSize: "0.8em", color: "crimson", marginTop: 4 }}>
+                  Last delivery failed: <code>{o.last_delivery_error}</code>
+                </div>
+              )}
             </div>
-            <div style={{ fontSize: "0.8em", color: "#666", marginTop: 4 }}>{o.ranking_reasons.join(" · ")}</div>
-          </div>
-        ))}
+          );
+        })}
       </section>
+
+      {selection?.selection && (
+        <section style={{ marginBottom: 32 }}>
+          <strong style={{ fontSize: "0.85em", color: "#666" }}>BUYER SELECTION &amp; TRANSACTION</strong>
+          <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 8, padding: 12, marginTop: 8, fontSize: "0.9em" }}>
+            <div>
+              Selected offer{" "}
+              <strong>
+                #{offers.find((o) => o.id === selection.selection?.offer_id)?.presentation_ordinal ?? "?"}
+              </strong>{" "}
+              at {new Date(selection.selection.created_at).toLocaleString()}
+            </div>
+            {selection.transaction && (
+              <div style={{ marginTop: 6 }}>
+                Transaction <code>{selection.transaction.id}</code> · {selection.transaction.status} · payment{" "}
+                <strong>{selection.transaction.payment_status}</strong> · fulfilment {selection.transaction.fulfilment_status}
+                <br />
+                Gross ₦{selection.transaction.gross_amount.toLocaleString()} · platform fee ₦
+                {selection.transaction.platform_fee.toLocaleString()} · vendor ₦{selection.transaction.vendor_amount.toLocaleString()}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <section style={{ marginTop: 32 }}>
         <strong style={{ fontSize: "0.85em", color: "#666" }}>EVENT HISTORY</strong>

@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,26 +13,32 @@ import (
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/logging"
-	"github.com/middleman/backend/internal/request"
+	"github.com/middleman/backend/internal/marketplace"
 	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/vendor"
 )
 
-// WhatsAppWebhookHandler receives Meta webhook traffic and, per PRD 1
-// §9-11, drives the full Phase 1 loop: find/create buyer and conversation,
-// persist the message idempotently, immediately acknowledge the buyer,
-// create a BuyerRequest, and run AI extraction in the background.
+// maxWebhookBody bounds how much of a webhook body is read (Meta payloads
+// are small; this prevents unbounded reads from unauthenticated callers).
+const maxWebhookBody = 1 << 20 // 1 MiB
+
+// WhatsAppWebhookHandler is the WhatsApp channel adapter. Since Phase 3.1 it
+// does only channel work — verify, parse, persist, de-duplicate, identify
+// the sender — and hands every buyer message to marketplace.BuyerInbound,
+// which owns context resolution (new request vs. offer selection). Vendor
+// messages still go to routing.ProcessVendorMessage (unchanged).
 type WhatsAppWebhookHandler struct {
-	provider    whatsapp.MessagingProvider
-	convRepo    conversation.Repository
-	buyerRepo   buyer.Repository
-	vendorRepo  vendor.Repository
-	eventWriter event.Writer
-	reqService  *request.Service
-	routingService *routing.Service
-	jobs        *jobs.Runner
-	verifyToken string
-	logger      *slog.Logger
+	provider              whatsapp.MessagingProvider
+	convRepo              conversation.Repository
+	buyerRepo             buyer.Repository
+	vendorRepo            vendor.Repository
+	eventWriter           event.Writer
+	buyerInbound          *marketplace.BuyerInbound
+	routingService        *routing.Service
+	jobs                  *jobs.Runner
+	verifyToken           string
+	allowUnsignedWebhooks bool
+	logger                *slog.Logger
 }
 
 func NewWhatsAppWebhookHandler(
@@ -40,23 +47,25 @@ func NewWhatsAppWebhookHandler(
 	buyerRepo buyer.Repository,
 	vendorRepo vendor.Repository,
 	eventWriter event.Writer,
-	reqService *request.Service,
+	buyerInbound *marketplace.BuyerInbound,
 	routingService *routing.Service,
 	jobRunner *jobs.Runner,
 	verifyToken string,
+	allowUnsignedWebhooks bool,
 	logger *slog.Logger,
 ) *WhatsAppWebhookHandler {
 	return &WhatsAppWebhookHandler{
-		provider:    provider,
-		convRepo:    convRepo,
-		buyerRepo:   buyerRepo,
-		vendorRepo:  vendorRepo,
-		eventWriter: eventWriter,
-		reqService:  reqService,
-		routingService: routingService,
-		jobs:        jobRunner,
-		verifyToken: verifyToken,
-		logger:      logger,
+		provider:              provider,
+		convRepo:              convRepo,
+		buyerRepo:             buyerRepo,
+		vendorRepo:            vendorRepo,
+		eventWriter:           eventWriter,
+		buyerInbound:          buyerInbound,
+		routingService:        routingService,
+		jobs:                  jobRunner,
+		verifyToken:           verifyToken,
+		allowUnsignedWebhooks: allowUnsignedWebhooks,
+		logger:                logger,
 	}
 }
 
@@ -91,10 +100,20 @@ func (h *WhatsAppWebhookHandler) handleIncoming(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	log := logging.FromContext(ctx, h.logger)
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
 	if err != nil {
 		log.Error("reading webhook body", "error", err)
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Phase 3.1 §3A-1: authenticate the payload with Meta's documented
+	// X-Hub-Signature-256 HMAC before anything is persisted or acted on.
+	// Unsigned traffic is accepted ONLY in development with no App Secret
+	// configured (config.AllowUnsignedWebhooks), for local simulation.
+	if !h.allowUnsignedWebhooks && !h.provider.VerifyWebhookSignature(body, r.Header.Get("X-Hub-Signature-256")) {
+		log.Warn("rejected webhook with missing or invalid signature", "remote_addr", r.RemoteAddr)
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -121,16 +140,26 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 		return
 	}
 
+	// Fast-path duplicate check; SaveMessage below is the authoritative,
+	// race-safe gate (ErrDuplicateMessage).
 	exists, err := h.convRepo.MessageExists(ctx, conv.ID, msg.ExternalMessageID)
 	if err != nil {
 		log.Error("checking message idempotency", "error", err)
 		return
 	}
 	if exists {
-		// Duplicate webhook delivery — safe to ignore (PRD 0 FINAL §32,
-		// preserved into Phase 1 per PRD 1 §10).
 		log.Info("duplicate message ignored", "external_message_id", msg.ExternalMessageID)
 		return
+	}
+
+	mediaRef := toMediaRef(msg.Media)
+	content := map[string]any{"text": msg.Text}
+	if mediaRef != nil {
+		content["media"] = mediaRef
+	}
+	metadata := map[string]any{}
+	if msg.ProfileName != "" {
+		metadata["profile_name"] = msg.ProfileName
 	}
 
 	savedMsg, err := h.convRepo.SaveMessage(ctx, &conversation.Message{
@@ -138,32 +167,15 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 		Direction:         conversation.DirectionInbound,
 		ExternalMessageID: msg.ExternalMessageID,
 		MessageType:       msg.Type,
-		Content:           map[string]any{"text": msg.Text},
+		Content:           content,
+		Metadata:          metadata,
 	})
-	if err != nil {
-		log.Error("saving inbound message", "error", err)
+	if errors.Is(err, conversation.ErrDuplicateMessage) {
+		log.Info("duplicate message ignored (concurrent delivery)", "external_message_id", msg.ExternalMessageID)
 		return
 	}
-
-	if err := h.eventWriter.Write(ctx, &event.Event{
-		EventType:  event.MessageReceived,
-		EntityType: "conversation",
-		EntityID:   &conv.ID,
-		ActorType:  event.ActorBuyer,
-		Payload: map[string]any{
-			"channel": "whatsapp",
-			"from":    msg.From,
-		},
-	}); err != nil {
-		log.Error("writing MESSAGE_RECEIVED event", "error", err)
-	}
-
-	// Phase 1: only free-text messages become BuyerRequests. Interactive
-	// replies (button/list selections) will be handled by later phases
-	// (vendor responses, offer selection) once those flows exist.
-	if msg.Type != "text" || msg.Text == "" {
-		log.Info("non-text inbound message persisted, no request created",
-			"conversation_id", conv.ID, "message_type", msg.Type)
+	if err != nil {
+		log.Error("saving inbound message", "error", err)
 		return
 	}
 
@@ -175,11 +187,39 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 		log.Error("checking vendor identity", "error", err, "from", msg.From)
 		return
 	}
-	if v != nil && v.Status == vendor.StatusActive {
+	isVendor := v != nil && v.Status == vendor.StatusActive
+
+	actor := event.ActorBuyer
+	if isVendor {
+		actor = event.ActorVendor
+	}
+	if err := h.eventWriter.Write(ctx, &event.Event{
+		EventType:  event.MessageReceived,
+		EntityType: "conversation",
+		EntityID:   &conv.ID,
+		ActorType:  actor,
+		Payload: map[string]any{
+			"channel": "whatsapp", "from": msg.From, "message_type": msg.Type, "has_media": mediaRef != nil,
+		},
+	}); err != nil {
+		log.Error("writing MESSAGE_RECEIVED event", "error", err)
+	}
+
+	if isVendor {
+		if msg.Type != "text" || msg.Text == "" {
+			// Vendor media (e.g. product photos) is persisted with its
+			// MediaRef but not yet processed.
+			log.Info("non-text vendor message persisted, not processed", "vendor_id", v.ID, "message_type", msg.Type)
+			return
+		}
 		log.Info("inbound message from known active vendor, routing to vendor pipeline",
 			"vendor_id", v.ID, "vendor_name", v.BusinessName)
+		vendorRef := v
+		text := msg.Text
 		h.jobs.Enqueue(func(bgCtx context.Context) {
-			h.routingService.ProcessVendorMessage(bgCtx, v, msg.Text)
+			// ProcessVendorMessage notifies the marketplace offer loop
+			// (ResponseListener) once the response is persisted.
+			h.routingService.ProcessVendorMessage(bgCtx, vendorRef, text)
 		})
 		return
 	}
@@ -191,43 +231,29 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 	}
 	if err := h.convRepo.LinkBuyer(ctx, conv.ID, b.ID); err != nil {
 		log.Error("linking buyer to conversation", "error", err)
-		// Not fatal — the request can still be created; the conversation
-		// simply won't show the buyer link until the next message.
+		// Not fatal — the conversation simply won't show the buyer link
+		// until the next message.
 	}
 
-	// Immediate acknowledgement (PRD 1 §11): the buyer must not wait for
-	// AI processing to know Middleman received their message.
-	if err := h.provider.SendText(ctx, msg.From, "Got it — I'm looking into that."); err != nil {
-		log.Error("sending immediate acknowledgement", "error", err)
-		// Not fatal for request creation — the request still gets created
-		// and reviewed even if the ack failed to send.
-	} else {
-		if err := h.eventWriter.Write(ctx, &event.Event{
-			EventType:  event.MessageSent,
-			EntityType: "conversation",
-			EntityID:   &conv.ID,
-			ActorType:  event.ActorSystem,
-			Payload:    map[string]any{"kind": "acknowledgement"},
-		}); err != nil {
-			log.Error("writing MESSAGE_SENT event", "error", err)
-		}
-	}
-
-	created, err := h.reqService.CreateFromMessage(ctx, conv.ID, b.ID, savedMsg.ID, msg.Text)
-	if err != nil {
-		log.Error("creating buyer request", "error", err)
-		return
-	}
-
-	log.Info("buyer request created, queuing extraction",
-		"conversation_id", conv.ID,
-		"request_id", created.ID,
-	)
-
-	// Extraction runs in the background (PRD 1 §12): the webhook response
-	// and buyer acknowledgement never wait on the AI service.
-	requestID := created.ID
-	h.jobs.Enqueue(func(bgCtx context.Context) {
-		h.reqService.RunExtraction(bgCtx, requestID)
+	h.buyerInbound.Handle(ctx, marketplace.InboundBuyerMessage{
+		ConversationID: conv.ID,
+		BuyerID:        b.ID,
+		MessageID:      savedMsg.ID,
+		ReplyTo:        msg.From,
+		Type:           msg.Type,
+		Text:           msg.Text,
+		Media:          mediaRef,
 	})
+}
+
+// toMediaRef maps the WhatsApp-specific media description onto the
+// channel-agnostic conversation.MediaRef.
+func toMediaRef(m *whatsapp.Media) *conversation.MediaRef {
+	if m == nil {
+		return nil
+	}
+	return &conversation.MediaRef{
+		Kind: m.Kind, Provider: "whatsapp", ProviderRef: m.ID, MimeType: m.MimeType,
+		SHA256: m.SHA256, Caption: m.Caption, Filename: m.Filename, Voice: m.Voice,
+	}
 }

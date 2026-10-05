@@ -6,6 +6,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,11 +15,16 @@ import (
 type VendorRequestStatus string
 
 const (
-	VendorRequestPending   VendorRequestStatus = "PENDING"
-	VendorRequestSent      VendorRequestStatus = "SENT"
-	VendorRequestResponded VendorRequestStatus = "RESPONDED"
-	VendorRequestExpired   VendorRequestStatus = "EXPIRED"
-	VendorRequestCancelled VendorRequestStatus = "CANCELLED"
+	VendorRequestPending VendorRequestStatus = "PENDING"
+	VendorRequestSent    VendorRequestStatus = "SENT"
+	// VendorRequestSendFailed (Phase 3.1 §3A-4): WhatsApp rejected the
+	// outbound message (e.g. 24h customer-service window closed / template
+	// required). The vendor never received it, so it is NOT awaiting a
+	// reply and must never capture the vendor's next message.
+	VendorRequestSendFailed VendorRequestStatus = "SEND_FAILED"
+	VendorRequestResponded  VendorRequestStatus = "RESPONDED"
+	VendorRequestExpired    VendorRequestStatus = "EXPIRED"
+	VendorRequestCancelled  VendorRequestStatus = "CANCELLED"
 )
 
 // VendorRequest represents Middleman asking one vendor about one
@@ -34,7 +40,25 @@ type VendorRequest struct {
 	MatchBreakdown  map[string]any
 	CreatedAt       time.Time
 	SentAt          *time.Time
+	SendError       *string
+	SendFailedAt    *time.Time
 }
+
+// Sentinel errors (Phase 3.1).
+var (
+	// ErrDuplicateReference: the generated public reference collided with
+	// an existing one (DB unique constraint). The caller retries with a
+	// fresh reference.
+	ErrDuplicateReference = errors.New("vendor request public reference already exists")
+	// ErrDuplicateVendorRequest: this vendor already has a VendorRequest
+	// for this BuyerRequest (PRD 2 §47 unique pair).
+	ErrDuplicateVendorRequest = errors.New("vendor already has a request for this buyer request")
+	// ErrCrossVendorAssociation: a response may only be associated with a
+	// VendorRequest belonging to the same vendor (Phase 3.1 §3A-3).
+	ErrCrossVendorAssociation = errors.New("vendor response cannot be associated with another vendor's request")
+	// ErrNotFound for missing response/request in association.
+	ErrNotFound = errors.New("not found")
+)
 
 // ResponseStatus is the vendor's business claim about the item.
 // UNCLASSIFIED (PRD 2.1 §1-2) means the system could not safely determine
@@ -80,37 +104,41 @@ const (
 // with a specific VendorRequest is still persisted — attributed to the
 // vendor via VendorID — rather than discarded or guessed at.
 type VendorResponse struct {
-	ID              uuid.UUID
-	VendorRequestID *uuid.UUID
-	VendorID        uuid.UUID
-	Status          ResponseStatus
-	ReviewState     ReviewState
-	Product         *string
-	Variant         *string
-	Condition       *string
-	Price           *int64
-	Currency        string
-	Quantity        *int
-	Location        *string
-	Notes           *string
-	RawMessage      string
-	ExtractedData   map[string]any
-	Confidence      float64
+	ID               uuid.UUID
+	VendorRequestID  *uuid.UUID
+	VendorID         uuid.UUID
+	Status           ResponseStatus
+	ReviewState      ReviewState
+	Product          *string
+	Variant          *string
+	Condition        *string
+	Price            *int64
+	Currency         string
+	Quantity         *int
+	Location         *string
+	Notes            *string
+	RawMessage       string
+	ExtractedData    map[string]any
+	Confidence       float64
 	ExtractionMethod ExtractionMethod
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // Repository is the persistence boundary for vendor requests + responses.
 type Repository interface {
 	CreateVendorRequest(ctx context.Context, vr *VendorRequest) (*VendorRequest, error)
 	MarkSent(ctx context.Context, id uuid.UUID) error
+	// MarkSendFailed records that the outbound WhatsApp message for this
+	// VendorRequest was rejected (status SEND_FAILED + error detail).
+	MarkSendFailed(ctx context.Context, id uuid.UUID, sendErr string) error
 	FindVendorRequestByID(ctx context.Context, id uuid.UUID) (*VendorRequest, error)
 	FindVendorRequestByPublicReference(ctx context.Context, ref string) (*VendorRequest, error)
 	ListVendorRequestsByBuyerRequest(ctx context.Context, buyerRequestID uuid.UUID) ([]*VendorRequest, error)
 	// ListActiveByVendor returns every VendorRequest for this vendor that
-	// is still awaiting a response (PENDING or SENT, not yet RESPONDED/
-	// EXPIRED/CANCELLED). The caller — not this method — decides what to
+	// is still awaiting a response: status SENT only (Phase 3.1 — PENDING
+	// and SEND_FAILED requests were never delivered to the vendor, so they
+	// cannot be awaiting a reply). The caller — not this method — decides what to
 	// do when there is more than one (PRD 2.1 §4: multiple active requests
 	// must never be silently collapsed into "the most recent one").
 	ListActiveByVendor(ctx context.Context, vendorID uuid.UUID) ([]*VendorRequest, error)

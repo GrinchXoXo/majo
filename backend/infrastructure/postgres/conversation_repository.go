@@ -83,13 +83,18 @@ func (r *ConversationRepository) SaveMessage(ctx context.Context, msg *conversat
 		externalID = msg.ExternalMessageID
 	}
 
-	_, err = r.db.ExecContext(ctx, `
+	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO messages (id, conversation_id, direction, external_message_id, message_type, content, metadata, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (conversation_id, external_message_id) DO NOTHING
 	`, msg.ID.String(), msg.ConversationID.String(), msg.Direction, externalID, msg.MessageType, contentBytes, metaBytes, msg.CreatedAt)
 	if err != nil {
 		return nil, err
+	}
+	// Before 3.1 a conflicting insert was silently reported as success, so
+	// two concurrent deliveries of the same webhook could both be processed.
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return nil, conversation.ErrDuplicateMessage
 	}
 
 	return msg, nil

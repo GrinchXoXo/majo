@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -31,15 +32,41 @@ type MessagingProvider interface {
 // VendorRequests once an operator approves a shortlist, and processing
 // inbound vendor messages (supply submissions and VendorRequest replies).
 type Service struct {
-	vendors   vendor.Repository
-	supplies  supply.Repository
-	routing   Repository
-	requests  request.Repository
+	vendors    vendor.Repository
+	supplies   supply.Repository
+	routing    Repository
+	requests   request.Repository
 	aiProvider ai.Provider
-	events    event.Writer
-	audits    audit.Writer
-	messaging MessagingProvider
-	logger    *slog.Logger
+	events     event.Writer
+	audits     audit.Writer
+	messaging  MessagingProvider
+	logger     *slog.Logger
+
+	// listener is notified after a VendorResponse is created, corrected or
+	// re-associated (Phase 3.1). Set via SetResponseListener; nil means
+	// nobody is listening (Phase 2 behaviour).
+	listener ResponseListener
+}
+
+// ResponseListener is notified whenever a VendorResponse that is attached
+// to a VendorRequest is recorded or changed. It exists so the buyer-facing
+// offer loop (internal/marketplace) can react to vendor replies without the
+// routing package importing the offer package (which already imports
+// routing). Implementations must be safe to call repeatedly for the same
+// response (idempotent).
+type ResponseListener interface {
+	VendorResponseChanged(ctx context.Context, resp *VendorResponse)
+}
+
+// SetResponseListener wires the post-response hook. Called once from the
+// composition root.
+func (s *Service) SetResponseListener(l ResponseListener) { s.listener = l }
+
+func (s *Service) notifyResponseChanged(ctx context.Context, resp *VendorResponse) {
+	if s.listener == nil || resp == nil || resp.VendorRequestID == nil {
+		return
+	}
+	s.listener.VendorResponseChanged(ctx, resp)
 }
 
 func NewService(
@@ -66,6 +93,11 @@ func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) 
 	req, err := s.requests.FindByID(ctx, buyerRequestID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading buyer request: %w", err)
+	}
+	// Phase 3.1 §3A-2: matching is marketplace execution — an unconfirmed
+	// request (still EXTRACTING / NEEDS_REVIEW) never enters it.
+	if err := req.EnsureConfirmed(); err != nil {
+		return nil, req, err
 	}
 
 	category := ""
@@ -120,18 +152,18 @@ func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) 
 // VendorRequest per approved vendor and sends the WhatsApp message. Never
 // called automatically — matching only ever suggests.
 func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest, vendorIDs []uuid.UUID, scores map[uuid.UUID]int, breakdowns map[uuid.UUID]map[string]any) ([]*VendorRequest, error) {
+	// Phase 3.1 §3A-2: never route an unconfirmed request to vendors.
+	if err := req.EnsureConfirmed(); err != nil {
+		return nil, err
+	}
+
 	var created []*VendorRequest
 
 	for _, vendorID := range vendorIDs {
 		v, err := s.vendors.FindByID(ctx, vendorID)
-		if err != nil {
+		if err != nil || v == nil {
 			s.logger.Error("loading vendor for routing", "vendor_id", vendorID, "error", err)
 			continue
-		}
-
-		ref, err := s.generateUniqueReference(ctx)
-		if err != nil {
-			return created, fmt.Errorf("generating public reference: %w", err)
 		}
 
 		var scorePtr *int
@@ -140,23 +172,38 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 		}
 		breakdown := breakdowns[vendorID]
 
-		vr, err := s.routing.CreateVendorRequest(ctx, &VendorRequest{
-			BuyerRequestID:  req.ID,
-			VendorID:        vendorID,
-			PublicReference: ref,
-			MatchScore:      scorePtr,
-			MatchBreakdown:  breakdown,
+		vr, err := s.createVendorRequestWithReference(ctx, &VendorRequest{
+			BuyerRequestID: req.ID,
+			VendorID:       vendorID,
+			MatchScore:     scorePtr,
+			MatchBreakdown: breakdown,
 		})
 		if err != nil {
+			// ErrDuplicateVendorRequest: PRD 2 §47 unique pair — this
+			// vendor was already asked about this request.
 			s.logger.Error("creating vendor request", "vendor_id", vendorID, "error", err)
-			continue // PRD 2 §47: duplicate active requests for the same vendor+buyer_request are prevented by a unique constraint
+			continue
 		}
+		ref := vr.PublicReference
 
 		message := buildVendorRequestMessage(ref, req)
 		if err := s.messaging.SendText(ctx, v.WhatsAppExternalID, message); err != nil {
 			s.logger.Error("sending vendor request via whatsapp", "vendor_id", vendorID, "error", err)
-			// VendorRequest still persists as PENDING — visible to the
-			// operator, not silently lost (PRD 2 §57).
+			// Phase 3.1 §3A-4: a rejected send is a distinct, visible
+			// state (SEND_FAILED), never an "awaiting reply" request.
+			if mErr := s.routing.MarkSendFailed(ctx, vr.ID, err.Error()); mErr != nil {
+				s.logger.Error("marking vendor request send-failed", "error", mErr)
+			}
+			vr.Status = VendorRequestSendFailed
+			errStr := err.Error()
+			vr.SendError = &errStr
+			if wErr := s.events.Write(ctx, &event.Event{
+				EventType: event.VendorRequestSendFailed, EntityType: "vendor_request", EntityID: &vr.ID,
+				ActorType: event.ActorSystem,
+				Payload:   map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vendorID.String(), "reference": ref, "error": err.Error()},
+			}); wErr != nil {
+				s.logger.Error("writing VENDOR_REQUEST_SEND_FAILED event", "error", wErr)
+			}
 		} else {
 			if err := s.routing.MarkSent(ctx, vr.ID); err != nil {
 				s.logger.Error("marking vendor request sent", "error", err)
@@ -209,13 +256,18 @@ var mmReferencePattern = regexp.MustCompile(`(?i)\bMM-(\d+)\b`)
 //     resolution.
 //  4. No active requests at all -> treat as a supply submission instead
 //     (existing PRD 2 §39-40 behavior, unchanged).
-func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, rawText string) {
+//
+// Returns the persisted VendorResponse (nil when the message was treated as
+// a supply submission or could not be persisted). After a response attached
+// to a VendorRequest is persisted, the ResponseListener is notified so the
+// buyer-facing offer loop can run.
+func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, rawText string) *VendorResponse {
 	_ = s.vendors.RecordMessageActivity(ctx, v.ID)
 
 	active, err := s.routing.ListActiveByVendor(ctx, v.ID)
 	if err != nil {
 		s.logger.Error("listing active vendor requests", "vendor_id", v.ID, "error", err)
-		return
+		return nil
 	}
 
 	// Priority 1: explicit MM-XXXX reference, checked regardless of how
@@ -231,19 +283,18 @@ func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, ra
 		case referenced == nil:
 			// Reference doesn't exist — do not guess (PRD 2.1 §4).
 			s.logger.Info("vendor cited an unknown reference, persisting unmatched", "vendor_id", v.ID, "reference", ref)
-			s.processAsVendorResponse(ctx, v, nil, rawText)
-			return
+			return s.processAsVendorResponse(ctx, v, nil, rawText)
 		case referenced.VendorID != v.ID:
 			// Reference exists but belongs to a different vendor — never
 			// cross-attach (PRD 2.1 §4 test: "request belonging to
 			// another vendor").
 			s.logger.Info("vendor cited a reference belonging to another vendor, persisting unmatched",
 				"vendor_id", v.ID, "reference", ref, "actual_owner", referenced.VendorID)
-			s.processAsVendorResponse(ctx, v, nil, rawText)
-			return
+			return s.processAsVendorResponse(ctx, v, nil, rawText)
 		default:
-			s.processAsVendorResponse(ctx, v, referenced, rawText)
-			return
+			resp := s.processAsVendorResponse(ctx, v, referenced, rawText)
+			s.notifyResponseChanged(ctx, resp)
+			return resp
 		}
 	}
 
@@ -251,15 +302,18 @@ func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, ra
 	case 0:
 		// No active request at all -> supply submission (PRD 2 §39-40).
 		s.processAsSupplySubmission(ctx, v, rawText)
+		return nil
 	case 1:
 		// Priority 2/3: exactly one active request — safe to use.
-		s.processAsVendorResponse(ctx, v, active[0], rawText)
+		resp := s.processAsVendorResponse(ctx, v, active[0], rawText)
+		s.notifyResponseChanged(ctx, resp)
+		return resp
 	default:
 		// Priority 4: multiple active requests, no reference to
 		// disambiguate. PRD 2.1 §4 is explicit: DO NOT AUTO-ASSOCIATE.
 		s.logger.Info("vendor has multiple active requests and no reference, persisting unmatched",
 			"vendor_id", v.ID, "active_count", len(active))
-		s.processAsVendorResponse(ctx, v, nil, rawText)
+		return s.processAsVendorResponse(ctx, v, nil, rawText)
 	}
 }
 
@@ -322,7 +376,7 @@ func (s *Service) processAsSupplySubmission(ctx context.Context, v *vendor.Vendo
 // the response is recorded UNCLASSIFIED + NEEDS_REVIEW, exactly like a
 // heuristically-ambiguous message, and the raw message is always
 // preserved either way.
-func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor, vr *VendorRequest, rawText string) {
+func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor, vr *VendorRequest, rawText string) *VendorResponse {
 	result, err := s.aiProvider.ExtractVendorResponse(ctx, rawText)
 
 	status := ResponseUnclassified
@@ -377,7 +431,7 @@ func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor,
 	})
 	if err != nil {
 		s.logger.Error("persisting vendor response", "vendor_id", v.ID, "error", err)
-		return
+		return nil
 	}
 
 	_ = s.vendors.RecordResponseActivity(ctx, v.ID)
@@ -393,6 +447,7 @@ func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor,
 
 	s.logger.Info("vendor response recorded",
 		"vendor_id", v.ID, "response_id", resp.ID, "status", status, "review_state", reviewState, "matched", vr != nil)
+	return resp
 }
 
 // CorrectResponse applies an operator correction to a vendor response's
@@ -455,6 +510,9 @@ func (s *Service) CorrectResponse(ctx context.Context, responseID uuid.UUID, fie
 		s.logger.Error("writing VENDOR_RESPONSE_CORRECTED event", "error", err)
 	}
 
+	// A correction can make a response newly eligible for an Offer (e.g.
+	// UNCLASSIFIED -> AVAILABLE) or ineligible (-> UNAVAILABLE).
+	s.notifyResponseChanged(ctx, after)
 	return after, nil
 }
 
@@ -468,7 +526,33 @@ func (s *Service) AssociateResponse(ctx context.Context, responseID, newVendorRe
 		return nil, fmt.Errorf("loading target vendor request: %w", err)
 	}
 	if newVR == nil {
-		return nil, fmt.Errorf("vendor request %s not found", newVendorRequestID)
+		return nil, fmt.Errorf("vendor request %s: %w", newVendorRequestID, ErrNotFound)
+	}
+
+	// Phase 3.1 §3A-3: vendor identity is authoritative. A response may
+	// only ever be attached to a VendorRequest that was sent to the SAME
+	// vendor. There is no privileged override (no operator auth exists to
+	// make one safe); a genuinely mis-attributed vendor must be fixed at
+	// the vendor-identity level, not by re-pointing the response.
+	resp, err := s.routing.FindResponseByID(ctx, responseID)
+	if err != nil {
+		return nil, fmt.Errorf("loading vendor response: %w", err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("vendor response %s: %w", responseID, ErrNotFound)
+	}
+	if resp.VendorID != newVR.VendorID {
+		if wErr := s.events.Write(ctx, &event.Event{
+			EventType: event.VendorResponseAssociationRejected, EntityType: "vendor_response", EntityID: &responseID,
+			ActorType: event.ActorOperator, ActorID: operatorID,
+			Payload: map[string]any{
+				"response_vendor_id": resp.VendorID.String(), "target_vendor_request_id": newVendorRequestID.String(),
+				"target_vendor_id": newVR.VendorID.String(), "reason": "cross_vendor",
+			},
+		}); wErr != nil {
+			s.logger.Error("writing association-rejected event", "error", wErr)
+		}
+		return nil, ErrCrossVendorAssociation
 	}
 
 	previous, updated, err := s.routing.UpdateAssociation(ctx, responseID, newVendorRequestID)
@@ -498,6 +582,7 @@ func (s *Service) AssociateResponse(ctx context.Context, responseID, newVendorRe
 		s.logger.Error("writing VENDOR_RESPONSE_ASSOCIATION_CORRECTED event", "error", err)
 	}
 
+	s.notifyResponseChanged(ctx, updated)
 	return updated, nil
 }
 
@@ -600,20 +685,48 @@ func derefIntP(i *int) any {
 
 // --- helpers ---
 
-func (s *Service) generateUniqueReference(ctx context.Context) (string, error) {
-	for i := 0; i < 5; i++ {
-		n, err := rand.Int(rand.Reader, big.NewInt(9000))
-		if err != nil {
-			return "", err
-		}
-		ref := fmt.Sprintf("MM-%04d", 1000+n.Int64())
-		return ref, nil // uniqueness enforced by DB constraint; collisions vanishingly rare at pilot scale
+// maxReferenceAttempts bounds retries when a generated public reference
+// collides with an existing one.
+const maxReferenceAttempts = 8
+
+// generateReference returns a random human-readable public reference.
+//
+// Phase 3.1 §3A-5: the original 4-digit space (MM-1000..MM-9999, 9,000
+// values, globally unique and never reused) made collisions likely within
+// a few hundred requests and exhausted completely at 9,000 — and a
+// collision silently skipped the vendor. New references use 6 digits
+// (MM-100000..MM-999999). Existing 4-digit references stay valid: the
+// prefix is unchanged and mmReferencePattern accepts any digit count.
+func generateReference() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(900000))
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("failed to generate unique reference")
+	return fmt.Sprintf("MM-%06d", 100000+n.Int64()), nil
+}
+
+// createVendorRequestWithReference assigns a fresh public reference and
+// retries on a reference collision (detected authoritatively by the DB
+// unique constraint), instead of silently skipping the vendor.
+func (s *Service) createVendorRequestWithReference(ctx context.Context, vr *VendorRequest) (*VendorRequest, error) {
+	for attempt := 0; attempt < maxReferenceAttempts; attempt++ {
+		ref, err := generateReference()
+		if err != nil {
+			return nil, fmt.Errorf("generating public reference: %w", err)
+		}
+		vr.PublicReference = ref
+		created, err := s.routing.CreateVendorRequest(ctx, vr)
+		if errors.Is(err, ErrDuplicateReference) {
+			s.logger.Warn("public reference collision, retrying", "reference", ref, "attempt", attempt+1)
+			continue
+		}
+		return created, err
+	}
+	return nil, fmt.Errorf("could not allocate a unique public reference after %d attempts", maxReferenceAttempts)
 }
 
 func buildVendorRequestMessage(ref string, req *request.BuyerRequest) string {
-	msg := fmt.Sprintf("Middleman Request #%s\n\nA buyer is looking for:\n\n%s", ref, derefStr(req.Product))
+	msg := fmt.Sprintf("Majo Request #%s\n\nA buyer is looking for:\n\n%s", ref, derefStr(req.Product))
 	if req.Variant != nil {
 		msg += fmt.Sprintf("\n%s", *req.Variant)
 	}

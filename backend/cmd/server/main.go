@@ -22,6 +22,7 @@ import (
 	"github.com/middleman/backend/internal/httpserver"
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/logging"
+	"github.com/middleman/backend/internal/marketplace"
 	"github.com/middleman/backend/internal/offer"
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
@@ -64,7 +65,12 @@ func main() {
 		cfg.WhatsAppAccessToken,
 		cfg.WhatsAppPhoneNumberID,
 		cfg.WhatsAppVerifyToken,
+		cfg.WhatsAppAppSecret,
 	)
+	if cfg.AllowUnsignedWebhooks {
+		logger.Warn("WHATSAPP_APP_SECRET is not set: webhook signature verification is DISABLED (development only). " +
+			"Any caller that can reach /webhooks/whatsapp can impersonate buyers and vendors.")
+	}
 
 	convRepo := postgres.NewConversationRepository(pool)
 	buyerRepo := postgres.NewBuyerRepository(pool)
@@ -90,12 +96,25 @@ func main() {
 
 	listingService := supply.NewListingService(supplyRepo, listingRepo, eventWriter, auditWriter, logger)
 	offerService := offer.NewService(offerRepo, routingRepo, requestRepo, eventWriter, auditWriter, logger)
-	txService := transaction.NewService(txRepo, offerRepo, eventWriter, auditWriter, logger)
+	txService := transaction.NewService(txRepo, offerRepo, requestRepo, eventWriter, auditWriter, logger)
 
 	// Bounded worker pool for background extraction (PRD 1 §12, PRD 0.2 §19).
 	// 4 workers / 256-deep queue is deliberately generous for pilot-scale
 	// traffic; revisit only if evidence shows it's insufficient.
 	jobRunner := jobs.NewRunner(logger, 4, 256)
+
+	// --- Phase 3.1: buyer-side marketplace loop ---
+	// OfferDelivery reacts to vendor replies (via routing's ResponseListener)
+	// and delivers offers to the buyer; BuyerInbound resolves each buyer
+	// message to a new request or an offer selection.
+	offerDelivery := marketplace.NewOfferDelivery(
+		requestRepo, convRepo, offerService, offerRepo, offerRepo, routingRepo, txRepo, whatsappProvider, eventWriter, logger,
+	)
+	routingService.SetResponseListener(offerDelivery)
+	contextResolver := marketplace.NewContextResolver(offerRepo, offerRepo)
+	buyerInbound := marketplace.NewBuyerInbound(
+		contextResolver, requestService, requestRepo, txService, offerRepo, routingRepo, whatsappProvider, eventWriter, jobRunner, logger,
+	)
 
 	// --- HTTP ---
 
@@ -104,8 +123,8 @@ func main() {
 	mux.HandleFunc("GET /ready", httpserver.ReadyHandler(pool, aiProvider))
 
 	webhookHandler := httpserver.NewWhatsAppWebhookHandler(
-		whatsappProvider, convRepo, buyerRepo, vendorRepo, eventWriter, requestService, routingService, jobRunner,
-		cfg.WhatsAppVerifyToken, logger,
+		whatsappProvider, convRepo, buyerRepo, vendorRepo, eventWriter, buyerInbound, routingService, jobRunner,
+		cfg.WhatsAppVerifyToken, cfg.AllowUnsignedWebhooks, logger,
 	)
 	mux.Handle("/webhooks/whatsapp", webhookHandler)
 
@@ -142,10 +161,12 @@ func main() {
 	mux.HandleFunc("POST /api/supply-listings/{id}/activate", supplyListingHandlers.Activate)
 	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", supplyListingHandlers.ListByVendor)
 
-	offerHandlers := httpserver.NewOfferHandlers(offerRepo, offerService, txService)
-	mux.HandleFunc("GET /api/requests/{id}/offers", offerHandlers.BuildAndList)
+	offerHandlers := httpserver.NewOfferHandlers(offerRepo, requestRepo, txService, txRepo, offerDelivery)
+	mux.HandleFunc("GET /api/requests/{id}/offers", offerHandlers.List) // read-only since Phase 3.1
 	mux.HandleFunc("GET /api/requests/{id}/offers/preview", offerHandlers.BuyerMessagePreview)
+	mux.HandleFunc("POST /api/requests/{id}/offers/deliver", offerHandlers.Deliver)
 	mux.HandleFunc("POST /api/requests/{id}/select", offerHandlers.Select)
+	mux.HandleFunc("GET /api/requests/{id}/selection", offerHandlers.Selection)
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)
 	mux.HandleFunc("GET /api/transactions/{id}", transactionHandlers.Get)

@@ -62,19 +62,34 @@ const (
 	VendorResponseAssociationCorrected Type = "VENDOR_RESPONSE_ASSOCIATION_CORRECTED"
 
 	// --- Phase 3 vocabulary (supply listings, offers, transactions) ---
-	SupplyListingCreated           Type = "SUPPLY_LISTING_CREATED"
-	SupplyListingUpdated           Type = "SUPPLY_LISTING_UPDATED"
-	SupplyListingExpired           Type = "SUPPLY_LISTING_EXPIRED"
+	SupplyListingCreated            Type = "SUPPLY_LISTING_CREATED"
+	SupplyListingUpdated            Type = "SUPPLY_LISTING_UPDATED"
+	SupplyListingExpired            Type = "SUPPLY_LISTING_EXPIRED"
 	SupplyListingDuplicateRefreshed Type = "SUPPLY_LISTING_DUPLICATE_REFRESHED"
 
-	OfferReviewed  Type = "OFFER_REVIEWED"
-	OfferSent      Type = "OFFER_SENT"
-	OfferAccepted  Type = "OFFER_ACCEPTED"
-	OfferRejected  Type = "OFFER_REJECTED"
-	OfferExpired   Type = "OFFER_EXPIRED"
+	OfferReviewed Type = "OFFER_REVIEWED"
+	OfferSent     Type = "OFFER_SENT"
+	OfferAccepted Type = "OFFER_ACCEPTED"
+	OfferRejected Type = "OFFER_REJECTED"
+	OfferExpired  Type = "OFFER_EXPIRED"
 
 	BuyerSelectionCreated Type = "BUYER_SELECTION_CREATED"
 	TransactionCreated    Type = "TRANSACTION_CREATED"
+
+	// --- Phase 3.1 vocabulary (offer delivery, selection loop, §3A fixes) ---
+	// OfferSent (above) = delivered to the buyer's channel. OfferSendFailed
+	// = the delivery attempt was rejected; the offer stays deliverable.
+	OfferSendFailed Type = "OFFER_SEND_FAILED"
+	// OfferWithdrawn: the offer's source response stopped being eligible
+	// (e.g. corrected to UNAVAILABLE) before the buyer selected it.
+	OfferWithdrawn Type = "OFFER_WITHDRAWN"
+	// BuyerReplyUnresolved: a buyer reply in an offer-selection context
+	// could not be deterministically mapped to an offer (ambiguous, out of
+	// range, or no longer available). No state was changed.
+	BuyerReplyUnresolved Type = "BUYER_REPLY_UNRESOLVED"
+
+	VendorRequestSendFailed           Type = "VENDOR_REQUEST_SEND_FAILED"
+	VendorResponseAssociationRejected Type = "VENDOR_RESPONSE_ASSOCIATION_REJECTED"
 )
 
 // ActorType identifies who/what caused an event.

@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Middleman Ops",
+  title: "Majo Ops",
   description: "Internal operations dashboard — Phase 0 shell",
 };
 
@@ -14,7 +14,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <nav style={{ padding: "12px 20px", borderBottom: "1px solid #ddd", display: "flex", gap: "16px" }}>
-          <strong>Middleman Ops</strong>
+          <strong>Majo Ops</strong>
           <a href="/dashboard">Dashboard</a>
           <a href="/requests">Requests</a>
           <a href="/vendors">Vendors</a>

@@ -6,6 +6,7 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,8 +18,8 @@ import (
 type Status string
 
 const (
-	StatusActive    Status = "ACTIVE"
-	StatusClosed    Status = "CLOSED"
+	StatusActive Status = "ACTIVE"
+	StatusClosed Status = "CLOSED"
 )
 
 // Conversation is a channel-agnostic thread with a single external party.
@@ -43,14 +44,38 @@ const (
 
 // Message is a single message within a conversation.
 type Message struct {
-	ID                 uuid.UUID
-	ConversationID     uuid.UUID
-	Direction          Direction
-	ExternalMessageID  string // used for webhook idempotency
-	MessageType        string
-	Content            map[string]any
-	Metadata           map[string]any
-	CreatedAt          time.Time
+	ID                uuid.UUID
+	ConversationID    uuid.UUID
+	Direction         Direction
+	ExternalMessageID string // used for webhook idempotency
+	MessageType       string
+	Content           map[string]any
+	Metadata          map[string]any
+	CreatedAt         time.Time
+}
+
+// ErrDuplicateMessage is returned by SaveMessage when a message with the
+// same (conversation, external message ID) already exists. It is the
+// race-safe idempotency gate for webhook redelivery: MessageExists is a
+// fast-path check, but only the insert itself can be authoritative when two
+// deliveries of the same message are processed concurrently.
+var ErrDuplicateMessage = errors.New("conversation: duplicate external message")
+
+// MediaRef is a channel-agnostic reference to an inbound media attachment
+// (Phase 3.1 input foundation). It records WHAT was received and WHERE the
+// channel provider can resolve it (Provider + ProviderRef, e.g. a WhatsApp
+// media ID) — never a provider download URL, which is short-lived and
+// channel-specific. Persisted in Message.Content["media"]; not yet
+// downloaded, stored or transcribed.
+type MediaRef struct {
+	Kind        string `json:"kind"`         // audio | image | video | document | sticker
+	Provider    string `json:"provider"`     // e.g. "whatsapp"
+	ProviderRef string `json:"provider_ref"` // provider's opaque media ID
+	MimeType    string `json:"mime_type,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Caption     string `json:"caption,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	Voice       bool   `json:"voice,omitempty"` // a recorded voice note, not an audio file
 }
 
 // Repository is the persistence boundary for conversations/messages.
@@ -58,6 +83,8 @@ type Message struct {
 type Repository interface {
 	FindOrCreateByExternalID(ctx context.Context, channel, externalID string) (*Conversation, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*Conversation, error)
+	// SaveMessage persists a message. Returns ErrDuplicateMessage if the
+	// (conversation, external message ID) pair already exists.
 	SaveMessage(ctx context.Context, msg *Message) (*Message, error)
 	// MessageExists supports idempotent webhook processing: if a WhatsApp
 	// message ID has already been persisted, the webhook handler can safely

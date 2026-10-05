@@ -78,6 +78,9 @@ func (f *fakeRoutingRepoForOffers) CreateVendorRequest(ctx context.Context, vr *
 	return nil, nil
 }
 func (f *fakeRoutingRepoForOffers) MarkSent(ctx context.Context, id uuid.UUID) error { return nil }
+func (f *fakeRoutingRepoForOffers) MarkSendFailed(ctx context.Context, id uuid.UUID, sendErr string) error {
+	return nil
+}
 func (f *fakeRoutingRepoForOffers) FindVendorRequestByID(ctx context.Context, id uuid.UUID) (*routing.VendorRequest, error) {
 	return f.vendorRequests[id], nil
 }
@@ -118,7 +121,9 @@ func (f *fakeRoutingRepoForOffers) UpdateAssociation(ctx context.Context, respon
 	return nil, nil, nil
 }
 
-type fakeRequestRepoForOffers struct{ requests map[uuid.UUID]*request.BuyerRequest }
+type fakeRequestRepoForOffers struct {
+	requests map[uuid.UUID]*request.BuyerRequest
+}
 
 func (f *fakeRequestRepoForOffers) Create(ctx context.Context, r *request.BuyerRequest) (*request.BuyerRequest, error) {
 	return nil, nil
@@ -164,7 +169,7 @@ func i64p(i int64) *int64      { return &i }
 
 func TestBuildForBuyerRequest_EligibleAvailableResponseBecomesExactOffer(t *testing.T) {
 	buyerReqID := uuid.New()
-	req := &request.BuyerRequest{ID: buyerReqID, Product: strp("iPhone 13"), BudgetMax: i64p(700000)}
+	req := &request.BuyerRequest{ID: buyerReqID, Status: request.StatusConfirmed, Product: strp("iPhone 13"), BudgetMax: i64p(700000)}
 	vr := &routing.VendorRequest{ID: uuid.New(), BuyerRequestID: buyerReqID, VendorID: uuid.New()}
 	resp := &routing.VendorResponse{
 		ID: uuid.New(), VendorRequestID: &vr.ID, Status: routing.ResponseAvailable, ReviewState: routing.ReviewReviewed,
@@ -200,7 +205,7 @@ func TestBuildForBuyerRequest_EligibleAvailableResponseBecomesExactOffer(t *test
 
 func TestBuildForBuyerRequest_UnclassifiedResponseNeverBecomesOffer(t *testing.T) {
 	buyerReqID := uuid.New()
-	req := &request.BuyerRequest{ID: buyerReqID, Product: strp("iPhone 13")}
+	req := &request.BuyerRequest{ID: buyerReqID, Status: request.StatusConfirmed, Product: strp("iPhone 13")}
 	vr := &routing.VendorRequest{ID: uuid.New(), BuyerRequestID: buyerReqID, VendorID: uuid.New()}
 	resp := &routing.VendorResponse{
 		ID: uuid.New(), VendorRequestID: &vr.ID, Status: routing.ResponseUnclassified, ReviewState: routing.ReviewNeedsReview,
@@ -226,7 +231,7 @@ func TestBuildForBuyerRequest_NeedsReviewResponseNeverBecomesOffer(t *testing.T)
 	// Even a confidently-classified AVAILABLE response must not become an
 	// offer while it still needs human review (e.g. unmatched association).
 	buyerReqID := uuid.New()
-	req := &request.BuyerRequest{ID: buyerReqID, Product: strp("iPhone 13")}
+	req := &request.BuyerRequest{ID: buyerReqID, Status: request.StatusConfirmed, Product: strp("iPhone 13")}
 	vr := &routing.VendorRequest{ID: uuid.New(), BuyerRequestID: buyerReqID, VendorID: uuid.New()}
 	resp := &routing.VendorResponse{
 		ID: uuid.New(), VendorRequestID: &vr.ID, Status: routing.ResponseAvailable, ReviewState: routing.ReviewNeedsReview,
@@ -247,7 +252,7 @@ func TestBuildForBuyerRequest_NeedsReviewResponseNeverBecomesOffer(t *testing.T)
 
 func TestBuildForBuyerRequest_UnavailableResponseNeverBecomesOffer(t *testing.T) {
 	buyerReqID := uuid.New()
-	req := &request.BuyerRequest{ID: buyerReqID, Product: strp("iPhone 13")}
+	req := &request.BuyerRequest{ID: buyerReqID, Status: request.StatusConfirmed, Product: strp("iPhone 13")}
 	vr := &routing.VendorRequest{ID: uuid.New(), BuyerRequestID: buyerReqID, VendorID: uuid.New()}
 	resp := &routing.VendorResponse{
 		ID: uuid.New(), VendorRequestID: &vr.ID, Status: routing.ResponseUnavailable, ReviewState: routing.ReviewReviewed,
@@ -267,7 +272,7 @@ func TestBuildForBuyerRequest_UnavailableResponseNeverBecomesOffer(t *testing.T)
 
 func TestBuildForBuyerRequest_AlternativeAndCanSourceRepresentedCorrectly(t *testing.T) {
 	buyerReqID := uuid.New()
-	req := &request.BuyerRequest{ID: buyerReqID, Product: strp("iPhone 13")}
+	req := &request.BuyerRequest{ID: buyerReqID, Status: request.StatusConfirmed, Product: strp("iPhone 13")}
 
 	vr1 := &routing.VendorRequest{ID: uuid.New(), BuyerRequestID: buyerReqID, VendorID: uuid.New()}
 	resp1 := &routing.VendorResponse{ID: uuid.New(), VendorRequestID: &vr1.ID, Status: routing.ResponseAlternative, ReviewState: routing.ReviewReviewed, Variant: strp("256GB"), Price: i64p(700000)}
@@ -302,7 +307,7 @@ func TestBuildForBuyerRequest_AlternativeAndCanSourceRepresentedCorrectly(t *tes
 
 func TestBuildForBuyerRequest_IdempotentOnRepeatedCalls(t *testing.T) {
 	buyerReqID := uuid.New()
-	req := &request.BuyerRequest{ID: buyerReqID, Product: strp("iPhone 13")}
+	req := &request.BuyerRequest{ID: buyerReqID, Status: request.StatusConfirmed, Product: strp("iPhone 13")}
 	vr := &routing.VendorRequest{ID: uuid.New(), BuyerRequestID: buyerReqID, VendorID: uuid.New()}
 	resp := &routing.VendorResponse{ID: uuid.New(), VendorRequestID: &vr.ID, Status: routing.ResponseAvailable, ReviewState: routing.ReviewReviewed, Product: strp("iPhone 13")}
 

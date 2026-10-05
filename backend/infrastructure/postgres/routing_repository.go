@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/middleman/backend/internal/routing"
 )
@@ -22,7 +24,8 @@ func NewRoutingRepository(db *sql.DB) *RoutingRepository {
 }
 
 const vendorRequestColumns = `
-	id, buyer_request_id, vendor_id, public_reference, status, match_score, match_breakdown, created_at, sent_at
+	id, buyer_request_id, vendor_id, public_reference, status, match_score, match_breakdown, created_at, sent_at,
+	send_error, send_failed_at
 `
 
 func scanVendorRequestRow(scanner interface{ Scan(dest ...any) error }) (*routing.VendorRequest, error) {
@@ -32,9 +35,12 @@ func scanVendorRequestRow(scanner interface{ Scan(dest ...any) error }) (*routin
 		matchScore                  sql.NullInt32
 		breakdownBytes              []byte
 		sentAt                      sql.NullTime
+		sendError                   sql.NullString
+		sendFailedAt                sql.NullTime
 	)
 
-	err := scanner.Scan(&idStr, &brIDStr, &vendorIDStr, &vr.PublicReference, &vr.Status, &matchScore, &breakdownBytes, &vr.CreatedAt, &sentAt)
+	err := scanner.Scan(&idStr, &brIDStr, &vendorIDStr, &vr.PublicReference, &vr.Status, &matchScore, &breakdownBytes, &vr.CreatedAt, &sentAt,
+		&sendError, &sendFailedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +58,12 @@ func scanVendorRequestRow(scanner interface{ Scan(dest ...any) error }) (*routin
 	}
 	if sentAt.Valid {
 		vr.SentAt = &sentAt.Time
+	}
+	if sendError.Valid {
+		vr.SendError = &sendError.String
+	}
+	if sendFailedAt.Valid {
+		vr.SendFailedAt = &sendFailedAt.Time
 	}
 
 	return &vr, nil
@@ -75,7 +87,31 @@ func (r *RoutingRepository) CreateVendorRequest(ctx context.Context, vr *routing
 		RETURNING `+vendorRequestColumns,
 		vr.ID.String(), vr.BuyerRequestID.String(), vr.VendorID.String(), vr.PublicReference, vr.Status, vr.MatchScore, breakdownBytes,
 	)
-	return scanVendorRequestRow(row)
+	created, err := scanVendorRequestRow(row)
+	if err != nil {
+		// Map unique violations to domain errors so the service can tell a
+		// reference collision (retry) from a duplicate vendor+request pair.
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			if strings.Contains(pqErr.Constraint, "public_reference") {
+				return nil, routing.ErrDuplicateReference
+			}
+			return nil, routing.ErrDuplicateVendorRequest
+		}
+		return nil, err
+	}
+	return created, nil
+}
+
+// MarkSendFailed records a rejected outbound WhatsApp send (Phase 3.1).
+// Only a not-yet-sent request can become SEND_FAILED.
+func (r *RoutingRepository) MarkSendFailed(ctx context.Context, id uuid.UUID, sendErr string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE vendor_requests
+		SET status = 'SEND_FAILED', send_error = $2, send_failed_at = now()
+		WHERE id = $1 AND status IN ('PENDING', 'SEND_FAILED')
+	`, id.String(), sendErr)
+	return err
 }
 
 func (r *RoutingRepository) MarkSent(ctx context.Context, id uuid.UUID) error {
@@ -128,13 +164,15 @@ func (r *RoutingRepository) ListVendorRequestsByBuyerRequest(ctx context.Context
 }
 
 // ListActiveByVendor returns every VendorRequest still awaiting a
-// response for this vendor (PENDING or SENT). Per PRD 2.1 §4, the caller
+// response for this vendor: SENT only. PENDING (send not yet confirmed)
+// and SEND_FAILED requests never reached the vendor, so a vendor message
+// can never be a reply to them (Phase 3.1 §3A-4). Per PRD 2.1 §4, the caller
 // must inspect the length of this list itself — this method does not
 // collapse ambiguity by picking one.
 func (r *RoutingRepository) ListActiveByVendor(ctx context.Context, vendorID uuid.UUID) ([]*routing.VendorRequest, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+vendorRequestColumns+` FROM vendor_requests
-		WHERE vendor_id = $1 AND status IN ('PENDING', 'SENT')
+		WHERE vendor_id = $1 AND status = 'SENT'
 		ORDER BY sent_at DESC NULLS LAST, created_at DESC
 	`, vendorID.String())
 	if err != nil {
@@ -185,13 +223,13 @@ const vendorResponseColumns = `
 
 func scanVendorResponseRow(scanner interface{ Scan(dest ...any) error }) (*routing.VendorResponse, error) {
 	var (
-		resp                                          routing.VendorResponse
-		idStr, vendorIDStr                            string
-		vrIDStr                                       sql.NullString
-		product, variant, condition, location, notes  sql.NullString
-		price                                         sql.NullInt64
-		quantity                                      sql.NullInt32
-		extractedBytes                                []byte
+		resp                                         routing.VendorResponse
+		idStr, vendorIDStr                           string
+		vrIDStr                                      sql.NullString
+		product, variant, condition, location, notes sql.NullString
+		price                                        sql.NullInt64
+		quantity                                     sql.NullInt32
+		extractedBytes                               []byte
 	)
 
 	err := scanner.Scan(
@@ -357,6 +395,7 @@ func (r *RoutingRepository) FindResponseByID(ctx context.Context, id uuid.UUID) 
 func (r *RoutingRepository) FindResponseByVendorRequest(ctx context.Context, vendorRequestID uuid.UUID) (*routing.VendorResponse, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT `+vendorResponseColumns+` FROM vendor_responses WHERE vendor_request_id = $1
+		ORDER BY created_at DESC, id DESC LIMIT 1
 	`, vendorRequestID.String())
 	resp, err := scanVendorResponseRow(row)
 	if err == sql.ErrNoRows {

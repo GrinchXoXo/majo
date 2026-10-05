@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -12,12 +13,13 @@ import (
 )
 
 // RequestHandlers implements the operator-facing request API from PRD 1 §31:
-//   GET    /api/requests
-//   GET    /api/requests/:id
-//   PATCH  /api/requests/:id
-//   POST   /api/requests/:id/confirm
-//   POST   /api/requests/:id/clarify
-//   GET    /api/requests/:id/events
+//
+//	GET    /api/requests
+//	GET    /api/requests/:id
+//	PATCH  /api/requests/:id
+//	POST   /api/requests/:id/confirm
+//	POST   /api/requests/:id/clarify
+//	GET    /api/requests/:id/events
 type RequestHandlers struct {
 	requests request.Repository
 	service  *request.Service
@@ -32,28 +34,28 @@ func NewRequestHandlers(requests request.Repository, service *request.Service, e
 // from the domain type so internal representation can evolve independently
 // of the API contract.
 type requestDTO struct {
-	ID              string         `json:"id"`
-	ConversationID  string         `json:"conversation_id"`
-	BuyerID         string         `json:"buyer_id"`
-	Status          string         `json:"status"`
-	Category        *string        `json:"category"`
-	Product         *string        `json:"product"`
-	Variant         *string        `json:"variant"`
-	BudgetMin       *int64         `json:"budget_min"`
-	BudgetMax       *int64         `json:"budget_max"`
-	Currency        string         `json:"currency"`
-	Location        *string        `json:"location"`
-	Condition       *string        `json:"condition"`
-	Quantity        *int           `json:"quantity"`
-	Urgency         *string        `json:"urgency"`
-	Preferences     []string       `json:"preferences"`
-	RawMessage      string         `json:"raw_message"`
-	ExtractedData   map[string]any `json:"extracted_data"`
-	Confidence      float64        `json:"confidence"`
-	Completeness    string         `json:"completeness"`
-	CreatedAt       string         `json:"created_at"`
-	UpdatedAt       string         `json:"updated_at"`
-	ConfirmedAt     *string        `json:"confirmed_at"`
+	ID             string         `json:"id"`
+	ConversationID string         `json:"conversation_id"`
+	BuyerID        string         `json:"buyer_id"`
+	Status         string         `json:"status"`
+	Category       *string        `json:"category"`
+	Product        *string        `json:"product"`
+	Variant        *string        `json:"variant"`
+	BudgetMin      *int64         `json:"budget_min"`
+	BudgetMax      *int64         `json:"budget_max"`
+	Currency       string         `json:"currency"`
+	Location       *string        `json:"location"`
+	Condition      *string        `json:"condition"`
+	Quantity       *int           `json:"quantity"`
+	Urgency        *string        `json:"urgency"`
+	Preferences    []string       `json:"preferences"`
+	RawMessage     string         `json:"raw_message"`
+	ExtractedData  map[string]any `json:"extracted_data"`
+	Confidence     float64        `json:"confidence"`
+	Completeness   string         `json:"completeness"`
+	CreatedAt      string         `json:"created_at"`
+	UpdatedAt      string         `json:"updated_at"`
+	ConfirmedAt    *string        `json:"confirmed_at"`
 }
 
 func toDTO(r *request.BuyerRequest) requestDTO {
@@ -188,6 +190,10 @@ func (h *RequestHandlers) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	confirmed, err := h.service.Confirm(r.Context(), id, nil)
+	if errors.Is(err, request.ErrInvalidTransition) {
+		writeError(w, http.StatusConflict, "request can only be confirmed from NEEDS_REVIEW (extraction may still be running)")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to confirm request")
 		return

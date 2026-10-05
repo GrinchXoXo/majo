@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -11,42 +12,64 @@ import (
 	"github.com/middleman/backend/internal/audit"
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/offer"
+	"github.com/middleman/backend/internal/request"
 )
 
 type fakeTxRepo struct {
-	selections   map[uuid.UUID]*Selection
-	transactions map[uuid.UUID]*Transaction
+	mu             sync.Mutex
+	selections     map[uuid.UUID]*Selection
+	transactions   map[uuid.UUID]*Transaction
+	acceptedOffers []uuid.UUID
 }
 
 func newFakeTxRepo() *fakeTxRepo {
 	return &fakeTxRepo{selections: map[uuid.UUID]*Selection{}, transactions: map[uuid.UUID]*Transaction{}}
 }
-func (f *fakeTxRepo) CreateSelection(ctx context.Context, s *Selection) (*Selection, error) {
+
+// CreateSelectionWithTransaction mirrors the Postgres contract: at most one
+// ACTIVE selection per buyer request (unique index) and an all-or-nothing
+// write of selection + transaction + offer ACCEPTED.
+func (f *fakeTxRepo) CreateSelectionWithTransaction(ctx context.Context, s *Selection, t *Transaction) (*Selection, *Transaction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, existing := range f.selections {
+		if existing.BuyerRequestID == s.BuyerRequestID && existing.Status == SelectionActive {
+			return nil, nil, ErrSelectionExists
+		}
+	}
 	if s.ID == uuid.Nil {
 		s.ID = uuid.New()
 	}
+	if s.Status == "" {
+		s.Status = SelectionActive
+	}
+	if t.ID == uuid.Nil {
+		t.ID = uuid.New()
+	}
+	t.BuyerSelectionID = s.ID
 	f.selections[s.ID] = s
-	return s, nil
+	f.transactions[t.ID] = t
+	f.acceptedOffers = append(f.acceptedOffers, s.OfferID)
+	return s, t, nil
 }
 func (f *fakeTxRepo) FindSelectionByBuyerRequest(ctx context.Context, buyerRequestID uuid.UUID) (*Selection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, s := range f.selections {
-		if s.BuyerRequestID == buyerRequestID {
+		if s.BuyerRequestID == buyerRequestID && s.Status == SelectionActive {
 			return s, nil
 		}
 	}
 	return nil, nil
 }
-func (f *fakeTxRepo) CreateTransaction(ctx context.Context, t *Transaction) (*Transaction, error) {
-	if t.ID == uuid.Nil {
-		t.ID = uuid.New()
-	}
-	f.transactions[t.ID] = t
-	return t, nil
-}
 func (f *fakeTxRepo) FindTransactionByID(ctx context.Context, id uuid.UUID) (*Transaction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.transactions[id], nil
 }
 func (f *fakeTxRepo) FindTransactionBySelection(ctx context.Context, selectionID uuid.UUID) (*Transaction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for _, t := range f.transactions {
 		if t.BuyerSelectionID == selectionID {
 			return t, nil
@@ -55,9 +78,28 @@ func (f *fakeTxRepo) FindTransactionBySelection(ctx context.Context, selectionID
 	return nil, nil
 }
 
+// fakeRequestsForTx holds CONFIRMED requests owned by a buyer.
+type fakeRequestsForTx struct {
+	requests map[uuid.UUID]*request.BuyerRequest
+}
+
+func (f *fakeRequestsForTx) FindByID(ctx context.Context, id uuid.UUID) (*request.BuyerRequest, error) {
+	return f.requests[id], nil
+}
+
+func confirmedRequests(owner uuid.UUID, ids ...uuid.UUID) *fakeRequestsForTx {
+	f := &fakeRequestsForTx{requests: map[uuid.UUID]*request.BuyerRequest{}}
+	for _, id := range ids {
+		f.requests[id] = &request.BuyerRequest{ID: id, BuyerID: owner, Status: request.StatusConfirmed}
+	}
+	return f
+}
+
 type fakeOfferRepoForTx struct{ offers map[uuid.UUID]*offer.Offer }
 
-func (f *fakeOfferRepoForTx) Create(ctx context.Context, o *offer.Offer) (*offer.Offer, error) { return o, nil }
+func (f *fakeOfferRepoForTx) Create(ctx context.Context, o *offer.Offer) (*offer.Offer, error) {
+	return o, nil
+}
 func (f *fakeOfferRepoForTx) Update(ctx context.Context, id uuid.UUID, fields offer.Fields) (*offer.Offer, error) {
 	return nil, nil
 }
@@ -92,11 +134,11 @@ func TestSelectOffer_CreatesSelectionAndTransaction(t *testing.T) {
 	repo := newFakeTxRepo()
 	buyerReqID, offerID, buyerID, vendorID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	offerRepo := &fakeOfferRepoForTx{offers: map[uuid.UUID]*offer.Offer{
-		offerID: {ID: offerID, BuyerRequestID: buyerReqID, VendorID: vendorID, Price: i64p(620000)},
+		offerID: {ID: offerID, BuyerRequestID: buyerReqID, VendorID: vendorID, Price: i64p(620000), Status: offer.StatusSent},
 	}}
 	events := &fakeEventsForTx{}
 	audits := &fakeAuditsForTx{}
-	svc := NewService(repo, offerRepo, events, audits, testLogger())
+	svc := NewService(repo, offerRepo, confirmedRequests(buyerID, buyerReqID), events, audits, testLogger())
 
 	selection, tx, err := svc.SelectOffer(context.Background(), buyerReqID, offerID, buyerID)
 	if err != nil {
@@ -150,9 +192,9 @@ func TestSelectOffer_RejectsOfferFromDifferentBuyerRequest(t *testing.T) {
 	realBuyerReq, wrongBuyerReq := uuid.New(), uuid.New()
 	offerID, buyerID := uuid.New(), uuid.New()
 	offerRepo := &fakeOfferRepoForTx{offers: map[uuid.UUID]*offer.Offer{
-		offerID: {ID: offerID, BuyerRequestID: realBuyerReq, Price: i64p(100000)},
+		offerID: {ID: offerID, BuyerRequestID: realBuyerReq, Price: i64p(100000), Status: offer.StatusSent},
 	}}
-	svc := NewService(repo, offerRepo, &fakeEventsForTx{}, &fakeAuditsForTx{}, testLogger())
+	svc := NewService(repo, offerRepo, confirmedRequests(buyerID, realBuyerReq, wrongBuyerReq), &fakeEventsForTx{}, &fakeAuditsForTx{}, testLogger())
 
 	_, _, err := svc.SelectOffer(context.Background(), wrongBuyerReq, offerID, buyerID)
 	if err == nil {
@@ -167,9 +209,9 @@ func TestSelectOffer_TransactionBoundaryDoesNotImplyPaymentEvenWithZeroPrice(t *
 	repo := newFakeTxRepo()
 	buyerReqID, offerID, buyerID := uuid.New(), uuid.New(), uuid.New()
 	offerRepo := &fakeOfferRepoForTx{offers: map[uuid.UUID]*offer.Offer{
-		offerID: {ID: offerID, BuyerRequestID: buyerReqID}, // no price
+		offerID: {ID: offerID, BuyerRequestID: buyerReqID, Status: offer.StatusSent}, // no price
 	}}
-	svc := NewService(repo, offerRepo, &fakeEventsForTx{}, &fakeAuditsForTx{}, testLogger())
+	svc := NewService(repo, offerRepo, confirmedRequests(buyerID, buyerReqID), &fakeEventsForTx{}, &fakeAuditsForTx{}, testLogger())
 
 	_, tx, err := svc.SelectOffer(context.Background(), buyerReqID, offerID, buyerID)
 	if err != nil {

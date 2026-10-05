@@ -8,6 +8,7 @@ package transaction
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,20 +22,48 @@ type Selection struct {
 	BuyerRequestID uuid.UUID
 	OfferID        uuid.UUID
 	BuyerID        uuid.UUID
+	Status         SelectionStatus
 	CreatedAt      time.Time
 }
+
+// SelectionStatus: ACTIVE is the single live selection for a BuyerRequest
+// (DB-enforced, Phase 3.1). VOID marks pre-3.1 duplicates retired by
+// migration 0006.
+type SelectionStatus string
+
+const (
+	SelectionActive SelectionStatus = "ACTIVE"
+	SelectionVoid   SelectionStatus = "VOID"
+)
+
+// Phase 3.1 selection errors.
+var (
+	// ErrSelectionExists is returned by the repository when the DB unique
+	// index rejects a second ACTIVE selection for the same BuyerRequest.
+	ErrSelectionExists = errors.New("buyer request already has a selection")
+	// ErrAlreadySelected: the buyer already chose a DIFFERENT offer for
+	// this request. One request -> at most one selection.
+	ErrAlreadySelected = errors.New("a different offer was already selected for this request")
+	// ErrNotRequestOwner: the selecting buyer does not own the request.
+	ErrNotRequestOwner = errors.New("buyer does not own this buyer request")
+	// ErrOfferNotSelectable: the offer is withdrawn, expired, or otherwise
+	// no longer selectable.
+	ErrOfferNotSelectable = errors.New("offer is no longer available for selection")
+	// ErrOfferNotFound: no such offer for this request.
+	ErrOfferNotFound = errors.New("offer not found for this buyer request")
+)
 
 type Status string
 
 const (
-	StatusCreated          Status = "CREATED"
-	StatusPaymentPending   Status = "PAYMENT_PENDING"
-	StatusPaid             Status = "PAID"
-	StatusPaymentFailed    Status = "PAYMENT_FAILED"
-	StatusFulfilling       Status = "FULFILLING"
-	StatusCompleted        Status = "COMPLETED"
-	StatusCancelled        Status = "CANCELLED"
-	StatusRefunded         Status = "REFUNDED"
+	StatusCreated           Status = "CREATED"
+	StatusPaymentPending    Status = "PAYMENT_PENDING"
+	StatusPaid              Status = "PAID"
+	StatusPaymentFailed     Status = "PAYMENT_FAILED"
+	StatusFulfilling        Status = "FULFILLING"
+	StatusCompleted         Status = "COMPLETED"
+	StatusCancelled         Status = "CANCELLED"
+	StatusRefunded          Status = "REFUNDED"
 	StatusPartiallyRefunded Status = "PARTIALLY_REFUNDED"
 )
 
@@ -52,10 +81,10 @@ const (
 type FulfilmentStatus string
 
 const (
-	FulfilmentPending   FulfilmentStatus = "PENDING"
+	FulfilmentPending    FulfilmentStatus = "PENDING"
 	FulfilmentInProgress FulfilmentStatus = "IN_PROGRESS"
-	FulfilmentDelivered FulfilmentStatus = "DELIVERED"
-	FulfilmentCancelled FulfilmentStatus = "CANCELLED"
+	FulfilmentDelivered  FulfilmentStatus = "DELIVERED"
+	FulfilmentCancelled  FulfilmentStatus = "CANCELLED"
 )
 
 // Transaction is the structural boundary for a future real
@@ -93,10 +122,17 @@ type Transaction struct {
 
 // Repository is the persistence boundary for selections + transactions.
 type Repository interface {
-	CreateSelection(ctx context.Context, s *Selection) (*Selection, error)
+	// CreateSelectionWithTransaction atomically (one DB transaction)
+	// inserts the ACTIVE BuyerSelection, its Transaction shell, and moves
+	// the chosen offer to ACCEPTED. Returns ErrSelectionExists if the
+	// request already has an ACTIVE selection (DB unique index) — nothing
+	// is written in that case. Phase 3.1 replaced the separate
+	// CreateSelection/CreateTransaction calls, which could leave a
+	// selection without a transaction and allowed unlimited duplicates.
+	CreateSelectionWithTransaction(ctx context.Context, s *Selection, t *Transaction) (*Selection, *Transaction, error)
+	// FindSelectionByBuyerRequest returns the ACTIVE selection, or nil.
 	FindSelectionByBuyerRequest(ctx context.Context, buyerRequestID uuid.UUID) (*Selection, error)
 
-	CreateTransaction(ctx context.Context, t *Transaction) (*Transaction, error)
 	FindTransactionByID(ctx context.Context, id uuid.UUID) (*Transaction, error)
 	FindTransactionBySelection(ctx context.Context, selectionID uuid.UUID) (*Transaction, error)
 }

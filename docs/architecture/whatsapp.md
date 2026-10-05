@@ -1,6 +1,6 @@
 # WhatsApp Integration Notes
 
-Middleman uses the **Meta WhatsApp Cloud API directly** (no BSP) per
+Majo uses the **Meta WhatsApp Cloud API directly** (no BSP) per
 Middleman_Technical_Spec_v1 §1.
 
 ## What you need from Meta Business Manager
@@ -15,6 +15,12 @@ Middleman_Technical_Spec_v1 §1.
    - `WHATSAPP_PHONE_NUMBER_ID` — found under WhatsApp > API Setup.
    - `WHATSAPP_VERIFY_TOKEN` — a string you choose yourself; Meta echoes
      it back during webhook verification to prove ownership.
+   - `WHATSAPP_APP_SECRET` — App Dashboard > App settings > Basic > App
+     Secret. Meta signs every webhook POST with it (`X-Hub-Signature-256`);
+     the backend rejects any POST whose signature doesn't verify (401).
+     **Required unless `APP_ENV=development`** — without it the backend
+     refuses to start, because anyone who can reach the webhook URL could
+     otherwise impersonate buyers and vendors.
 
 ## Webhook configuration
 
@@ -32,6 +38,20 @@ dashboard.
 
 Subscribe to the `messages` webhook field so incoming buyer/vendor
 messages are delivered as `POST` requests.
+
+## The 24-hour customer-service window
+
+Free-form text can only be sent to a user within 24 hours of their last
+message to the business number. Outside that window Meta rejects the send
+(error 131047, "Re-engagement message") and an approved **template** is
+required. Majo does not send templates yet. Consequences today:
+
+- A vendor who hasn't messaged Majo in the last 24h cannot receive a
+  VendorRequest. The request is recorded as `SEND_FAILED` (with Meta's error)
+  and is never treated as awaiting a reply.
+- An offer delivered more than 24h after the buyer's last message fails the
+  same way; the offer stays deliverable and the failure is shown on the
+  dashboard (retry with "Deliver pending offers" after the buyer writes again).
 
 ## Verification timeline
 

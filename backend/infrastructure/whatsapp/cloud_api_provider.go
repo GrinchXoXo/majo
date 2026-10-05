@@ -2,10 +2,15 @@ package whatsapp
 
 import (
 	"bytes"
-	"encoding/json"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,15 +22,17 @@ type CloudAPIProvider struct {
 	accessToken   string
 	phoneNumberID string
 	verifyToken   string
+	appSecret     string
 	client        *http.Client
 }
 
-func NewCloudAPIProvider(apiURL, accessToken, phoneNumberID, verifyToken string) *CloudAPIProvider {
+func NewCloudAPIProvider(apiURL, accessToken, phoneNumberID, verifyToken, appSecret string) *CloudAPIProvider {
 	return &CloudAPIProvider{
 		apiURL:        apiURL,
 		accessToken:   accessToken,
 		phoneNumberID: phoneNumberID,
 		verifyToken:   verifyToken,
+		appSecret:     appSecret,
 		client:        &http.Client{Timeout: 10 * time.Second},
 	}
 }
@@ -91,9 +98,36 @@ func (p *CloudAPIProvider) send(ctx context.Context, payload map[string]any) err
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("whatsapp api returned status %d", resp.StatusCode)
+		// Include Meta's error body (bounded): it carries the error code
+		// (e.g. 131047 "re-engagement message" when the 24h customer
+		// service window has closed and a template is required), which is
+		// what the operator needs to see on a failed VendorRequest/Offer.
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("whatsapp api returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	return nil
+}
+
+// VerifyWebhookSignature implements Meta's documented webhook payload
+// signature check: X-Hub-Signature-256 = "sha256=" + hex(HMAC-SHA256(raw
+// body, App Secret)). Constant-time comparison. Fails closed when no App
+// Secret is configured — whether unsigned traffic is tolerated at all is a
+// decision made explicitly by the caller (development only), never here.
+func (p *CloudAPIProvider) VerifyWebhookSignature(payload []byte, signatureHeader string) bool {
+	if p.appSecret == "" {
+		return false
+	}
+	const prefix = "sha256="
+	if !strings.HasPrefix(signatureHeader, prefix) {
+		return false
+	}
+	got, err := hex.DecodeString(strings.TrimPrefix(signatureHeader, prefix))
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(p.appSecret))
+	mac.Write(payload)
+	return hmac.Equal(got, mac.Sum(nil))
 }
 
 // VerifyWebhookToken implements Meta's webhook verification handshake:
@@ -106,13 +140,29 @@ func (p *CloudAPIProvider) VerifyWebhookToken(mode, token, challenge, expectedTo
 }
 
 // ParseWebhookPayload extracts inbound messages from a raw Meta webhook body.
-// Phase 0 only needs this to exist and not panic on real payloads; full
-// parsing of every message type is a Phase 1 concern.
+// Text bodies, media references (image/audio/video/document/sticker) and the
+// sender's profile name are extracted. Media is referenced by Meta media ID
+// only; nothing is downloaded here. Status callbacks (sent/delivered/read/
+// failed) are not parsed yet.
 func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage, error) {
+	type mediaPayload struct {
+		ID       string `json:"id"`
+		MimeType string `json:"mime_type"`
+		SHA256   string `json:"sha256"`
+		Caption  string `json:"caption"`
+		Filename string `json:"filename"`
+		Voice    bool   `json:"voice"`
+	}
 	var raw struct {
 		Entry []struct {
 			Changes []struct {
 				Value struct {
+					Contacts []struct {
+						WaID    string `json:"wa_id"`
+						Profile struct {
+							Name string `json:"name"`
+						} `json:"profile"`
+					} `json:"contacts"`
 					Messages []struct {
 						From      string `json:"from"`
 						ID        string `json:"id"`
@@ -121,6 +171,11 @@ func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage
 						Text      struct {
 							Body string `json:"body"`
 						} `json:"text"`
+						Image    *mediaPayload `json:"image"`
+						Audio    *mediaPayload `json:"audio"`
+						Video    *mediaPayload `json:"video"`
+						Document *mediaPayload `json:"document"`
+						Sticker  *mediaPayload `json:"sticker"`
 					} `json:"messages"`
 				} `json:"value"`
 			} `json:"changes"`
@@ -134,14 +189,30 @@ func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage
 	var messages []InboundMessage
 	for _, entry := range raw.Entry {
 		for _, change := range entry.Changes {
+			profileNames := map[string]string{}
+			for _, c := range change.Value.Contacts {
+				profileNames[c.WaID] = c.Profile.Name
+			}
 			for _, m := range change.Value.Messages {
-				messages = append(messages, InboundMessage{
+				msg := InboundMessage{
 					From:              m.From,
 					ExternalMessageID: m.ID,
 					Type:              m.Type,
 					Text:              m.Text.Body,
 					Timestamp:         m.Timestamp,
-				})
+					ProfileName:       profileNames[m.From],
+				}
+				for kind, mp := range map[string]*mediaPayload{
+					"image": m.Image, "audio": m.Audio, "video": m.Video, "document": m.Document, "sticker": m.Sticker,
+				} {
+					if mp != nil && mp.ID != "" {
+						msg.Media = &Media{
+							Kind: kind, ID: mp.ID, MimeType: mp.MimeType, SHA256: mp.SHA256,
+							Caption: mp.Caption, Filename: mp.Filename, Voice: mp.Voice,
+						}
+					}
+				}
+				messages = append(messages, msg)
 			}
 		}
 	}

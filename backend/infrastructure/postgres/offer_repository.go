@@ -24,26 +24,31 @@ func NewOfferRepository(db *sql.DB) *OfferRepository {
 const offerColumns = `
 	id, buyer_request_id, vendor_request_id, vendor_response_id, supply_listing_id, vendor_id,
 	type, status, product, variant, condition, price, currency, quantity, location, notes,
-	ranking_score, ranking_reasons, confidence, created_at, updated_at, expires_at
+	ranking_score, ranking_reasons, confidence, created_at, updated_at, expires_at,
+	presentation_ordinal, sent_at, delivery_attempts, last_delivery_error, last_delivery_failed_at
 `
 
 func scanOfferRow(scanner interface{ Scan(dest ...any) error }) (*offer.Offer, error) {
 	var (
-		o                                             offer.Offer
-		idStr, buyerRequestIDStr, vendorIDStr         string
-		vendorRequestIDStr, vendorResponseIDStr       sql.NullString
-		supplyListingIDStr                            sql.NullString
-		product, variant, condition, location, notes  sql.NullString
-		price                                         sql.NullInt64
-		quantity                                      sql.NullInt32
-		reasonsBytes                                  []byte
-		expiresAt                                     sql.NullTime
+		o                                            offer.Offer
+		idStr, buyerRequestIDStr, vendorIDStr        string
+		vendorRequestIDStr, vendorResponseIDStr      sql.NullString
+		supplyListingIDStr                           sql.NullString
+		product, variant, condition, location, notes sql.NullString
+		price                                        sql.NullInt64
+		quantity                                     sql.NullInt32
+		reasonsBytes                                 []byte
+		expiresAt                                    sql.NullTime
+		ordinal                                      sql.NullInt32
+		sentAt, lastFailedAt                         sql.NullTime
+		lastDeliveryError                            sql.NullString
 	)
 
 	err := scanner.Scan(
 		&idStr, &buyerRequestIDStr, &vendorRequestIDStr, &vendorResponseIDStr, &supplyListingIDStr, &vendorIDStr,
 		&o.Type, &o.Status, &product, &variant, &condition, &price, &o.Currency, &quantity, &location, &notes,
 		&o.RankingScore, &reasonsBytes, &o.Confidence, &o.CreatedAt, &o.UpdatedAt, &expiresAt,
+		&ordinal, &sentAt, &o.DeliveryAttempts, &lastDeliveryError, &lastFailedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -92,6 +97,19 @@ func scanOfferRow(scanner interface{ Scan(dest ...any) error }) (*offer.Offer, e
 	if expiresAt.Valid {
 		o.ExpiresAt = &expiresAt.Time
 	}
+	if ordinal.Valid {
+		n := int(ordinal.Int32)
+		o.PresentationOrdinal = &n
+	}
+	if sentAt.Valid {
+		o.SentAt = &sentAt.Time
+	}
+	if lastDeliveryError.Valid {
+		o.LastDeliveryError = &lastDeliveryError.String
+	}
+	if lastFailedAt.Valid {
+		o.LastDeliveryFailedAt = &lastFailedAt.Time
+	}
 	_ = json.Unmarshal(reasonsBytes, &o.RankingReasons)
 	if o.RankingReasons == nil {
 		o.RankingReasons = []string{}
@@ -132,13 +150,19 @@ func (r *OfferRepository) Create(ctx context.Context, o *offer.Offer) (*offer.Of
 			type, status, product, variant, condition, price, currency, quantity, location, notes,
 			ranking_score, ranking_reasons, confidence, expires_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		ON CONFLICT (vendor_response_id) WHERE vendor_response_id IS NOT NULL AND status <> 'DUPLICATE' DO NOTHING
 		RETURNING `+offerColumns,
 		o.ID.String(), o.BuyerRequestID.String(), vendorRequestID, vendorResponseID, supplyListingID, o.VendorID.String(),
 		o.Type, o.Status, o.Product, o.Variant, o.Condition, o.Price, o.Currency, o.Quantity, o.Location, o.Notes,
 		o.RankingScore, reasonsBytes, o.Confidence, o.ExpiresAt,
 	)
 
-	return scanOfferRow(row)
+	created, err := scanOfferRow(row)
+	if err == sql.ErrNoRows {
+		// ON CONFLICT DO NOTHING: an offer for this VendorResponse exists.
+		return nil, offer.ErrAlreadyExists
+	}
+	return created, err
 }
 
 func (r *OfferRepository) Update(ctx context.Context, id uuid.UUID, fields offer.Fields) (*offer.Offer, error) {
@@ -179,7 +203,9 @@ func (r *OfferRepository) FindByID(ctx context.Context, id uuid.UUID) (*offer.Of
 
 func (r *OfferRepository) ListByBuyerRequest(ctx context.Context, buyerRequestID uuid.UUID) ([]*offer.Offer, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+offerColumns+` FROM offers WHERE buyer_request_id = $1 ORDER BY ranking_score DESC, created_at ASC
+		SELECT `+offerColumns+` FROM offers
+		WHERE buyer_request_id = $1 AND status <> 'DUPLICATE'
+		ORDER BY presentation_ordinal ASC NULLS LAST, ranking_score DESC, created_at ASC
 	`, buyerRequestID.String())
 	if err != nil {
 		return nil, err
@@ -198,10 +224,146 @@ func (r *OfferRepository) ListByBuyerRequest(ctx context.Context, buyerRequestID
 }
 
 func (r *OfferRepository) FindByVendorResponseID(ctx context.Context, vendorResponseID uuid.UUID) (*offer.Offer, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+offerColumns+` FROM offers WHERE vendor_response_id = $1`, vendorResponseID.String())
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+offerColumns+` FROM offers
+		WHERE vendor_response_id = $1 AND status <> 'DUPLICATE'
+		ORDER BY created_at ASC LIMIT 1`, vendorResponseID.String())
 	o, err := scanOfferRow(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return o, err
+}
+
+// --- Phase 3.1: offer delivery (offer.DeliveryRepository) ---
+
+// ClaimForDelivery: see offer.DeliveryRepository. A transaction-scoped
+// advisory lock keyed on the buyer request serializes concurrent claimers
+// for the same request, so ordinal assignment (max+1) cannot race.
+func (r *OfferRepository) ClaimForDelivery(ctx context.Context, buyerRequestID uuid.UUID, staleAfter time.Duration) ([]*offer.Offer, int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('offer_delivery:' || $1))`, buyerRequestID.String()); err != nil {
+		return nil, 0, fmt.Errorf("acquiring delivery lock: %w", err)
+	}
+
+	var maxOrdinal int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(presentation_ordinal), 0) FROM offers WHERE buyer_request_id = $1
+	`, buyerRequestID.String()).Scan(&maxOrdinal); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT `+offerColumns+` FROM offers
+		WHERE buyer_request_id = $1
+		  AND (status = 'REVIEWED' OR (status = 'SENDING' AND updated_at < now() - make_interval(secs => $2)))
+		ORDER BY ranking_score DESC, created_at ASC, id ASC
+		FOR UPDATE
+	`, buyerRequestID.String(), staleAfter.Seconds())
+	if err != nil {
+		return nil, 0, err
+	}
+	var candidates []*offer.Offer
+	for rows.Next() {
+		o, err := scanOfferRow(rows)
+		if err != nil {
+			rows.Close()
+			return nil, 0, err
+		}
+		candidates = append(candidates, o)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	var claimed []*offer.Offer
+	for _, o := range candidates {
+		ordinal := 0
+		if o.PresentationOrdinal != nil {
+			ordinal = *o.PresentationOrdinal // reclaimed stale SENDING keeps its number
+		} else {
+			maxOrdinal++
+			ordinal = maxOrdinal
+		}
+		row := tx.QueryRowContext(ctx, `
+			UPDATE offers
+			SET status = 'SENDING', presentation_ordinal = $2,
+			    delivery_attempts = delivery_attempts + 1, updated_at = now()
+			WHERE id = $1
+			RETURNING `+offerColumns, o.ID.String(), ordinal)
+		updated, err := scanOfferRow(row)
+		if err != nil {
+			return nil, 0, err
+		}
+		claimed = append(claimed, updated)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return claimed, maxOrdinal, nil
+}
+
+func (r *OfferRepository) MarkDelivered(ctx context.Context, offerIDs []uuid.UUID, sentAt, expiresAt time.Time) error {
+	if len(offerIDs) == 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE offers
+		SET status = 'SENT', sent_at = $2, expires_at = $3, updated_at = now()
+		WHERE id = ANY($1::uuid[]) AND status = 'SENDING'
+	`, uuidArray(offerIDs), sentAt, expiresAt)
+	return err
+}
+
+func (r *OfferRepository) MarkDeliveryFailed(ctx context.Context, offerIDs []uuid.UUID, deliveryErr string) error {
+	if len(offerIDs) == 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE offers
+		SET status = 'REVIEWED', presentation_ordinal = NULL,
+		    last_delivery_error = $2, last_delivery_failed_at = now(), updated_at = now()
+		WHERE id = ANY($1::uuid[]) AND status = 'SENDING'
+	`, uuidArray(offerIDs), deliveryErr)
+	return err
+}
+
+func (r *OfferRepository) FindLatestPresentedRequest(ctx context.Context, conversationID uuid.UUID) (*uuid.UUID, error) {
+	var idStr string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT o.buyer_request_id
+		FROM offers o
+		JOIN buyer_requests br ON br.id = o.buyer_request_id
+		WHERE br.conversation_id = $1
+		  AND o.presentation_ordinal IS NOT NULL
+		  AND o.sent_at IS NOT NULL
+		ORDER BY o.sent_at DESC
+		LIMIT 1
+	`, conversationID.String()).Scan(&idStr)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
+func uuidArray(ids []uuid.UUID) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = id.String()
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }

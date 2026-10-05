@@ -167,10 +167,12 @@ export type VendorRequestDTO = {
   id: string;
   vendor_id: string;
   public_reference: string;
-  status: "PENDING" | "SENT" | "RESPONDED" | "EXPIRED" | "CANCELLED";
+  status: "PENDING" | "SENT" | "SEND_FAILED" | "RESPONDED" | "EXPIRED" | "CANCELLED";
   match_score: number | null;
   created_at: string;
   sent_at: string | null;
+  send_error: string | null;
+  send_failed_at: string | null;
   response?: VendorResponseDTO;
 };
 
@@ -348,18 +350,73 @@ export type OfferDTO = {
   status: string;
   product: string | null;
   variant: string | null;
+  condition: string | null;
   price: number | null;
   currency: string;
   ranking_score: number;
   ranking_reasons: string[];
   confidence: number;
   created_at: string;
+  // Phase 3.1 delivery tracking
+  presentation_ordinal: number | null;
+  sent_at: string | null;
+  expires_at: string | null;
+  delivery_attempts: number;
+  last_delivery_error: string | null;
 };
 
+// Read-only since Phase 3.1: offers are built and delivered automatically
+// when vendor replies arrive; viewing never builds or sends anything.
 export async function getOffers(requestId: string): Promise<OfferDTO[]> {
   const res = await fetch(`${API_URL}/api/requests/${requestId}/offers`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`failed to build/load offers: ${res.status}`);
+  if (!res.ok) throw new Error(`failed to load offers: ${res.status}`);
   return (await res.json()) ?? [];
+}
+
+export type DeliveryResultDTO = {
+  delivered: number;
+  ordinals: number[] | null;
+  highest_ordinal: number;
+  skipped?: string;
+};
+
+// Explicit operator action: build newly eligible offers and deliver any
+// not-yet-delivered ones (e.g. retry after a failed send). Idempotent —
+// already-delivered offers are never re-sent.
+export async function deliverOffers(requestId: string): Promise<DeliveryResultDTO> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers/deliver`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorText(res, "failed to deliver offers"));
+  return res.json();
+}
+
+export type SelectionDTO = {
+  selection: { id: string; offer_id: string; buyer_id: string; status: string; created_at: string } | null;
+  transaction: {
+    id: string;
+    status: string;
+    payment_status: string;
+    fulfilment_status: string;
+    gross_amount: number;
+    platform_fee: number;
+    vendor_amount: number;
+    currency: string;
+    created_at: string;
+  } | null;
+};
+
+export async function getSelection(requestId: string): Promise<SelectionDTO> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/selection`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load selection: ${res.status}`);
+  return res.json();
+}
+
+async function errorText(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json();
+    return body?.error ? `${fallback}: ${body.error}` : `${fallback}: ${res.status}`;
+  } catch {
+    return `${fallback}: ${res.status}`;
+  }
 }
 
 export async function getOfferPreview(requestId: string): Promise<string> {
@@ -375,6 +432,6 @@ export async function selectOffer(requestId: string, offerId: string, buyerId: s
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ offer_id: offerId, buyer_id: buyerId }),
   });
-  if (!res.ok) throw new Error(`failed to select offer: ${res.status}`);
+  if (!res.ok) throw new Error(await errorText(res, "failed to select offer"));
   return res.json();
 }

@@ -2,10 +2,12 @@ package httpserver
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 
+	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
 )
 
@@ -41,6 +43,10 @@ func (h *RoutingHandlers) Matches(w http.ResponseWriter, r *http.Request) {
 	}
 
 	candidates, _, err := h.service.SuggestVendors(r.Context(), id)
+	if errors.Is(err, request.ErrNotConfirmed) {
+		writeError(w, http.StatusConflict, "request must be CONFIRMED before matching")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to compute matches: "+err.Error())
 		return
@@ -91,6 +97,10 @@ func (h *RoutingHandlers) Route(w http.ResponseWriter, r *http.Request) {
 	// Recompute matches to get the current scores/breakdowns for the
 	// approved vendors (keeps the API stateless between suggest -> approve).
 	candidates, req, err := h.service.SuggestVendors(r.Context(), id)
+	if errors.Is(err, request.ErrNotConfirmed) {
+		writeError(w, http.StatusConflict, "request must be CONFIRMED before routing to vendors")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load request: "+err.Error())
 		return
@@ -133,6 +143,8 @@ type vendorRequestDTO struct {
 	MatchScore      *int               `json:"match_score"`
 	CreatedAt       string             `json:"created_at"`
 	SentAt          *string            `json:"sent_at"`
+	SendError       *string            `json:"send_error"`
+	SendFailedAt    *string            `json:"send_failed_at"`
 	Response        *vendorResponseDTO `json:"response,omitempty"`
 }
 
@@ -146,6 +158,11 @@ func toVendorRequestDTOs(vrs []*routing.VendorRequest) []vendorRequestDTO {
 		if vr.SentAt != nil {
 			s := vr.SentAt.Format(timeFormat)
 			dto.SentAt = &s
+		}
+		dto.SendError = vr.SendError
+		if vr.SendFailedAt != nil {
+			s := vr.SendFailedAt.Format(timeFormat)
+			dto.SendFailedAt = &s
 		}
 		dtos = append(dtos, dto)
 	}
@@ -336,6 +353,14 @@ func (h *RoutingHandlers) AssociateResponse(w http.ResponseWriter, r *http.Reque
 	}
 
 	updated, err := h.service.AssociateResponse(r.Context(), id, vendorRequestID, nil)
+	if errors.Is(err, routing.ErrCrossVendorAssociation) {
+		writeError(w, http.StatusConflict, "a response can only be associated with a request sent to the same vendor")
+		return
+	}
+	if errors.Is(err, routing.ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "association failed: "+err.Error())
 		return

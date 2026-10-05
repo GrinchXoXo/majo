@@ -6,6 +6,7 @@ package request
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,14 +23,33 @@ const (
 	StatusConfirmed   Status = "CONFIRMED"
 )
 
+// ErrNotConfirmed is returned whenever an unconfirmed BuyerRequest would
+// otherwise progress into marketplace execution (matching, vendor routing,
+// offer generation/delivery, selection, transaction). Phase 3.1 §3A-2.
+var ErrNotConfirmed = errors.New("buyer request is not confirmed")
+
+// ErrInvalidTransition is returned when a status change is not allowed
+// from the request's current status (e.g. confirming while EXTRACTING).
+var ErrInvalidTransition = errors.New("invalid buyer request status transition")
+
+// EnsureConfirmed enforces the invariant
+// "unconfirmed BuyerRequest -> cannot progress into marketplace execution".
+// Every execution entry point calls this rather than trusting its caller.
+func (r *BuyerRequest) EnsureConfirmed() error {
+	if r == nil || r.Status != StatusConfirmed {
+		return ErrNotConfirmed
+	}
+	return nil
+}
+
 // Completeness is an operator-assistance signal, not a gate (PRD 1 §29-30):
 // the system must never reject a request merely because optional fields
 // are missing.
 type Completeness string
 
 const (
-	CompletenessComplete   Completeness = "complete"
-	CompletenessPartial    Completeness = "partially_complete"
+	CompletenessComplete     Completeness = "complete"
+	CompletenessPartial      Completeness = "partially_complete"
 	CompletenessInsufficient Completeness = "insufficient"
 )
 
