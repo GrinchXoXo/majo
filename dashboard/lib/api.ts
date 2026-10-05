@@ -1,0 +1,380 @@
+// Thin API client. The dashboard talks to the Go backend only — never
+// directly to PostgreSQL (PRD 0 FINAL §24). This is the single place that
+// knows the backend's base URL, so it can change without touching every page.
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+export type HealthStatus = {
+  status: string;
+  checks?: Record<string, string>;
+};
+
+export async function getHealth(): Promise<HealthStatus> {
+  const res = await fetch(`${API_URL}/health`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`health check failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getReadiness(): Promise<HealthStatus> {
+  const res = await fetch(`${API_URL}/ready`, { cache: "no-store" });
+  return res.json(); // may be 200 or 503; both are valid, informative responses
+}
+
+// --- BuyerRequest types & client (Phase 1) ---
+
+export type BuyerRequestDTO = {
+  id: string;
+  conversation_id: string;
+  buyer_id: string;
+  status: "EXTRACTING" | "NEEDS_REVIEW" | "CONFIRMED";
+  category: string | null;
+  product: string | null;
+  variant: string | null;
+  budget_min: number | null;
+  budget_max: number | null;
+  currency: string;
+  location: string | null;
+  condition: string | null;
+  quantity: number | null;
+  urgency: string | null;
+  preferences: string[];
+  raw_message: string;
+  extracted_data: Record<string, unknown>;
+  confidence: number;
+  completeness: "complete" | "partially_complete" | "insufficient";
+  created_at: string;
+  updated_at: string;
+  confirmed_at: string | null;
+};
+
+export type RequestEventDTO = {
+  event_type: string;
+  actor_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export async function listRequests(status?: string): Promise<BuyerRequestDTO[]> {
+  const url = status
+    ? `${API_URL}/api/requests?status=${encodeURIComponent(status)}`
+    : `${API_URL}/api/requests`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to list requests: ${res.status}`);
+  const data = await res.json();
+  return data ?? [];
+}
+
+export async function getRequest(id: string): Promise<BuyerRequestDTO> {
+  const res = await fetch(`${API_URL}/api/requests/${id}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load request: ${res.status}`);
+  return res.json();
+}
+
+export async function getRequestEvents(id: string): Promise<RequestEventDTO[]> {
+  const res = await fetch(`${API_URL}/api/requests/${id}/events`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load events: ${res.status}`);
+  const data = await res.json();
+  return data ?? [];
+}
+
+export type PatchRequestBody = Partial<{
+  category: string;
+  product: string;
+  variant: string;
+  budget_min: number;
+  budget_max: number;
+  location: string;
+  condition: string;
+  quantity: number;
+  urgency: string;
+  preferences: string[];
+}>;
+
+export async function patchRequest(id: string, body: PatchRequestBody): Promise<BuyerRequestDTO> {
+  const res = await fetch(`${API_URL}/api/requests/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`failed to update request: ${res.status}`);
+  return res.json();
+}
+
+export async function confirmRequest(id: string): Promise<BuyerRequestDTO> {
+  const res = await fetch(`${API_URL}/api/requests/${id}/confirm`, { method: "POST" });
+  if (!res.ok) throw new Error(`failed to confirm request: ${res.status}`);
+  return res.json();
+}
+
+export async function clarifyRequest(id: string, question?: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/requests/${id}/clarify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question: question ?? "" }),
+  });
+  if (!res.ok) throw new Error(`failed to send clarification: ${res.status}`);
+}
+
+// --- Vendor & matching types & client (Phase 2) ---
+
+export type VendorDTO = {
+  id: string;
+  business_name: string;
+  whatsapp_external_id: string;
+  phone: string;
+  status: "PENDING" | "ACTIVE" | "INACTIVE" | "BLOCKED";
+  primary_location: string;
+  notes: string;
+  categories: string[];
+  service_areas: string[];
+  requests_received: number;
+  responses_received: number;
+  created_at: string;
+};
+
+export type MatchCandidateDTO = {
+  vendor_id: string;
+  vendor_name: string;
+  score: number;
+  match_type: string;
+  breakdown: Record<string, number>;
+  reasons: string[];
+  within_budget: boolean | null;
+  relevant_supply?: Record<string, unknown>;
+};
+
+export type VendorResponseDTO = {
+  id: string;
+  vendor_request_id: string | null;
+  vendor_id: string;
+  status: "AVAILABLE" | "UNAVAILABLE" | "CAN_SOURCE" | "ALTERNATIVE" | "UNCLASSIFIED";
+  review_state: "NEEDS_REVIEW" | "REVIEWED" | "CORRECTED";
+  product: string | null;
+  variant: string | null;
+  condition: string | null;
+  price: number | null;
+  currency: string;
+  quantity: number | null;
+  location: string | null;
+  notes: string | null;
+  raw_message: string;
+  confidence: number;
+  extraction_method: "heuristic" | "ai" | "hybrid" | "manual";
+  created_at: string;
+};
+
+export type VendorRequestDTO = {
+  id: string;
+  vendor_id: string;
+  public_reference: string;
+  status: "PENDING" | "SENT" | "RESPONDED" | "EXPIRED" | "CANCELLED";
+  match_score: number | null;
+  created_at: string;
+  sent_at: string | null;
+  response?: VendorResponseDTO;
+};
+
+export async function listVendors(status?: string): Promise<VendorDTO[]> {
+  const url = status ? `${API_URL}/api/vendors?status=${encodeURIComponent(status)}` : `${API_URL}/api/vendors`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to list vendors: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+export async function getVendor(id: string): Promise<VendorDTO> {
+  const res = await fetch(`${API_URL}/api/vendors/${id}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load vendor: ${res.status}`);
+  return res.json();
+}
+
+export type CreateVendorBody = {
+  business_name: string;
+  whatsapp_external_id: string;
+  phone?: string;
+  primary_location?: string;
+  notes?: string;
+  categories: string[];
+  service_areas: string[];
+};
+
+export async function createVendor(body: CreateVendorBody): Promise<VendorDTO> {
+  const res = await fetch(`${API_URL}/api/vendors`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`failed to create vendor: ${res.status}`);
+  return res.json();
+}
+
+export async function patchVendor(id: string, body: Partial<CreateVendorBody & { status: string }>): Promise<VendorDTO> {
+  const res = await fetch(`${API_URL}/api/vendors/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`failed to update vendor: ${res.status}`);
+  return res.json();
+}
+
+export async function getVendorSupply(id: string): Promise<Record<string, unknown>[]> {
+  const res = await fetch(`${API_URL}/api/vendors/${id}/supply`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load supply: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+export async function getMatches(requestId: string): Promise<MatchCandidateDTO[]> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/matches`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load matches: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+export async function routeToVendors(requestId: string, vendorIds: string[]): Promise<VendorRequestDTO[]> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/route`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vendor_ids: vendorIds }),
+  });
+  if (!res.ok) throw new Error(`failed to route to vendors: ${res.status}`);
+  return res.json();
+}
+
+export async function getVendorRequests(requestId: string): Promise<VendorRequestDTO[]> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/vendor-requests`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load vendor requests: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+// --- Vendor response correction & association (Phase 2.1) ---
+
+export async function getUnmatchedResponses(): Promise<VendorResponseDTO[]> {
+  const res = await fetch(`${API_URL}/api/vendor-responses/unmatched`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load unmatched responses: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+export async function getVendorResponse(id: string): Promise<VendorResponseDTO> {
+  const res = await fetch(`${API_URL}/api/vendor-responses/${id}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load vendor response: ${res.status}`);
+  return res.json();
+}
+
+export type PatchVendorResponseBody = Partial<{
+  status: string;
+  product: string;
+  variant: string;
+  condition: string;
+  price: number;
+  quantity: number;
+  location: string;
+  notes: string;
+}>;
+
+export async function patchVendorResponse(id: string, body: PatchVendorResponseBody): Promise<VendorResponseDTO> {
+  const res = await fetch(`${API_URL}/api/vendor-responses/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`failed to update vendor response: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+export async function associateVendorResponse(id: string, vendorRequestId: string): Promise<VendorResponseDTO> {
+  const res = await fetch(`${API_URL}/api/vendor-responses/${id}/associate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vendor_request_id: vendorRequestId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`failed to associate vendor response: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+export async function getVendorOwnRequests(vendorId: string): Promise<VendorRequestDTO[]> {
+  const res = await fetch(`${API_URL}/api/vendors/${vendorId}/vendor-requests`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load vendor's requests: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+// --- Phase 3: Supply listings, offers, transactions ---
+
+export type SupplyListingDTO = {
+  id: string;
+  vendor_id: string;
+  supply_signal_id: string | null;
+  category: string | null;
+  product: string | null;
+  variant: string | null;
+  condition: string | null;
+  price: number | null;
+  currency: string;
+  quantity: number | null;
+  location: string | null;
+  description: string | null;
+  status: "DRAFT" | "ACTIVE" | "PAUSED" | "SOLD" | "UNAVAILABLE" | "EXPIRED" | "ARCHIVED";
+  extraction_method: string;
+  confidence: number;
+  published_at: string | null;
+  expires_at: string;
+  created_at: string;
+};
+
+export async function searchSupplyListings(params?: Record<string, string>): Promise<SupplyListingDTO[]> {
+  const query = params ? "?" + new URLSearchParams(params).toString() : "";
+  const res = await fetch(`${API_URL}/api/supply-listings${query}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to search listings: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+export async function activateListing(id: string): Promise<SupplyListingDTO> {
+  const res = await fetch(`${API_URL}/api/supply-listings/${id}/activate`, { method: "POST" });
+  if (!res.ok) throw new Error(`failed to activate listing: ${res.status}`);
+  return res.json();
+}
+
+export type OfferDTO = {
+  id: string;
+  buyer_request_id: string;
+  vendor_id: string;
+  vendor_response_id: string | null;
+  supply_listing_id: string | null;
+  type: "EXACT" | "ALTERNATIVE" | "CAN_SOURCE" | "PARTIAL";
+  status: string;
+  product: string | null;
+  variant: string | null;
+  price: number | null;
+  currency: string;
+  ranking_score: number;
+  ranking_reasons: string[];
+  confidence: number;
+  created_at: string;
+};
+
+export async function getOffers(requestId: string): Promise<OfferDTO[]> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to build/load offers: ${res.status}`);
+  return (await res.json()) ?? [];
+}
+
+export async function getOfferPreview(requestId: string): Promise<string> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers/preview`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load offer preview: ${res.status}`);
+  const data = await res.json();
+  return data.message;
+}
+
+export async function selectOffer(requestId: string, offerId: string, buyerId: string): Promise<{ transaction_id: string; payment_status: string; gross_amount: number }> {
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ offer_id: offerId, buyer_id: buyerId }),
+  });
+  if (!res.ok) throw new Error(`failed to select offer: ${res.status}`);
+  return res.json();
+}

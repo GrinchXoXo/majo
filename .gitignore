@@ -1,0 +1,29 @@
+# Environment
+.env
+.env.local
+
+# Go
+backend/bin/
+*.test
+*.out
+
+# Node / Next.js
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/npm-debug.log*
+
+# Python
+ai/__pycache__/
+ai/**/__pycache__/
+ai/.pytest_cache/
+ai/*.egg-info/
+ai/venv/
+ai/.venv/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

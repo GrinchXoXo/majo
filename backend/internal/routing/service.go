@@ -1,0 +1,641 @@
+package routing
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"log/slog"
+	"math/big"
+	"regexp"
+
+	"github.com/google/uuid"
+
+	"github.com/middleman/backend/infrastructure/ai"
+	"github.com/middleman/backend/internal/audit"
+	"github.com/middleman/backend/internal/event"
+	"github.com/middleman/backend/internal/matching"
+	"github.com/middleman/backend/internal/request"
+	"github.com/middleman/backend/internal/supply"
+	"github.com/middleman/backend/internal/vendor"
+)
+
+// MessagingProvider is the minimal outbound surface this service needs —
+// defined locally so the routing domain stays independent of any specific
+// channel implementation (mirrors the pattern in internal/request/service.go).
+type MessagingProvider interface {
+	SendText(ctx context.Context, to, body string) error
+}
+
+// Service orchestrates the Phase 2 vendor/supply engine: generating
+// match candidates for a confirmed BuyerRequest, creating and sending
+// VendorRequests once an operator approves a shortlist, and processing
+// inbound vendor messages (supply submissions and VendorRequest replies).
+type Service struct {
+	vendors   vendor.Repository
+	supplies  supply.Repository
+	routing   Repository
+	requests  request.Repository
+	aiProvider ai.Provider
+	events    event.Writer
+	audits    audit.Writer
+	messaging MessagingProvider
+	logger    *slog.Logger
+}
+
+func NewService(
+	vendors vendor.Repository,
+	supplies supply.Repository,
+	routingRepo Repository,
+	requests request.Repository,
+	aiProvider ai.Provider,
+	events event.Writer,
+	audits audit.Writer,
+	messaging MessagingProvider,
+	logger *slog.Logger,
+) *Service {
+	return &Service{
+		vendors: vendors, supplies: supplies, routing: routingRepo, requests: requests,
+		aiProvider: aiProvider, events: events, audits: audits, messaging: messaging, logger: logger,
+	}
+}
+
+// SuggestVendors runs the deterministic matching engine against a
+// confirmed BuyerRequest (PRD 2 §16-28). Returns ranked candidates for
+// operator review — this never sends anything to vendors by itself.
+func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) ([]matching.Candidate, *request.BuyerRequest, error) {
+	req, err := s.requests.FindByID(ctx, buyerRequestID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading buyer request: %w", err)
+	}
+
+	category := ""
+	if req.Category != nil {
+		category = *req.Category
+	}
+	_ = category // category is still used by the matching engine itself for scoring/eligibility
+
+	// Load all ACTIVE vendors rather than pre-filtering by exact category
+	// string in SQL. Categories aren't always exact matches (PRD 2 §7 lists
+	// "Electronics" and "Phones" as siblings even though Phase 1's broad
+	// extraction only ever produces "electronics") — the matching engine's
+	// categoryFamilies compatibility logic is the single source of truth
+	// for eligibility, and a SQL-level pre-filter would silently exclude
+	// vendors before that logic ever runs. Vendor counts are pilot-scale
+	// (PRD 2 §61: "hundreds of vendors"), so loading them all is cheap.
+	active := vendor.StatusActive
+	candidateVendors, err := s.vendors.List(ctx, &active, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading candidate vendors: %w", err)
+	}
+
+	supplyByVendor := map[string][]*supply.Signal{}
+	for _, v := range candidateVendors {
+		signals, err := s.supplies.FreshByVendor(ctx, v.ID)
+		if err != nil {
+			s.logger.Error("loading vendor supply", "vendor_id", v.ID, "error", err)
+			continue
+		}
+		supplyByVendor[v.ID.String()] = signals
+	}
+
+	candidates := matching.Match(
+		req, candidateVendors, supplyByVendor,
+		matching.DefaultWeights(), matching.DefaultMinRelevanceScore, matching.DefaultMaxCandidates,
+	)
+
+	if err := s.events.Write(ctx, &event.Event{
+		EventType:  event.VendorsSuggested,
+		EntityType: "buyer_request",
+		EntityID:   &buyerRequestID,
+		ActorType:  event.ActorSystem,
+		Payload:    map[string]any{"candidate_count": len(candidates)},
+	}); err != nil {
+		s.logger.Error("writing VENDORS_SUGGESTED event", "error", err)
+	}
+
+	return candidates, req, nil
+}
+
+// RouteToVendors is the operator-approval step (PRD 2 §29-33): creates a
+// VendorRequest per approved vendor and sends the WhatsApp message. Never
+// called automatically — matching only ever suggests.
+func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest, vendorIDs []uuid.UUID, scores map[uuid.UUID]int, breakdowns map[uuid.UUID]map[string]any) ([]*VendorRequest, error) {
+	var created []*VendorRequest
+
+	for _, vendorID := range vendorIDs {
+		v, err := s.vendors.FindByID(ctx, vendorID)
+		if err != nil {
+			s.logger.Error("loading vendor for routing", "vendor_id", vendorID, "error", err)
+			continue
+		}
+
+		ref, err := s.generateUniqueReference(ctx)
+		if err != nil {
+			return created, fmt.Errorf("generating public reference: %w", err)
+		}
+
+		var scorePtr *int
+		if sc, ok := scores[vendorID]; ok {
+			scorePtr = &sc
+		}
+		breakdown := breakdowns[vendorID]
+
+		vr, err := s.routing.CreateVendorRequest(ctx, &VendorRequest{
+			BuyerRequestID:  req.ID,
+			VendorID:        vendorID,
+			PublicReference: ref,
+			MatchScore:      scorePtr,
+			MatchBreakdown:  breakdown,
+		})
+		if err != nil {
+			s.logger.Error("creating vendor request", "vendor_id", vendorID, "error", err)
+			continue // PRD 2 §47: duplicate active requests for the same vendor+buyer_request are prevented by a unique constraint
+		}
+
+		message := buildVendorRequestMessage(ref, req)
+		if err := s.messaging.SendText(ctx, v.WhatsAppExternalID, message); err != nil {
+			s.logger.Error("sending vendor request via whatsapp", "vendor_id", vendorID, "error", err)
+			// VendorRequest still persists as PENDING — visible to the
+			// operator, not silently lost (PRD 2 §57).
+		} else {
+			if err := s.routing.MarkSent(ctx, vr.ID); err != nil {
+				s.logger.Error("marking vendor request sent", "error", err)
+			}
+			vr.Status = VendorRequestSent
+			_ = s.vendors.RecordRequestSent(ctx, vendorID)
+		}
+
+		if err := s.events.Write(ctx, &event.Event{
+			EventType:  event.VendorsRouted,
+			EntityType: "vendor_request",
+			EntityID:   &vr.ID,
+			ActorType:  event.ActorOperator,
+			Payload:    map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vendorID.String(), "reference": ref},
+		}); err != nil {
+			s.logger.Error("writing VENDORS_ROUTED event", "error", err)
+		}
+
+		created = append(created, vr)
+	}
+
+	if err := s.events.Write(ctx, &event.Event{
+		EventType:  event.VendorShortlistModified,
+		EntityType: "buyer_request",
+		EntityID:   &req.ID,
+		ActorType:  event.ActorOperator,
+		Payload:    map[string]any{"approved_vendor_count": len(created)},
+	}); err != nil {
+		s.logger.Error("writing VENDOR_SHORTLIST_MODIFIED event", "error", err)
+	}
+
+	return created, nil
+}
+
+// ProcessVendorMessage is the entry point for any inbound WhatsApp message
+// from a known vendor. Per PRD 2 §39-40: prefer an active (SENT, not yet
+// RESPONDED) VendorRequest; if none exists, treat the message as a supply
+// submission instead.
+// mmReferencePattern extracts an explicit "MM-1234"-style reference from
+// a vendor's free-text reply (PRD 2.1 §4 priority 1).
+var mmReferencePattern = regexp.MustCompile(`(?i)\bMM-(\d+)\b`)
+
+// ProcessVendorMessage is the entry point for any inbound WhatsApp message
+// from a known vendor. Implements the PRD 2.1 §4 association priority:
+//  1. Explicit "MM-XXXX" reference in the message, if it exists and
+//     belongs to this vendor.
+//  2. Exactly one active (PENDING/SENT) VendorRequest for this vendor.
+//  3. Multiple active requests with no reference -> do NOT guess; persist
+//     the response unmatched (vendor_request_id = NULL) for operator
+//     resolution.
+//  4. No active requests at all -> treat as a supply submission instead
+//     (existing PRD 2 §39-40 behavior, unchanged).
+func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, rawText string) {
+	_ = s.vendors.RecordMessageActivity(ctx, v.ID)
+
+	active, err := s.routing.ListActiveByVendor(ctx, v.ID)
+	if err != nil {
+		s.logger.Error("listing active vendor requests", "vendor_id", v.ID, "error", err)
+		return
+	}
+
+	// Priority 1: explicit MM-XXXX reference, checked regardless of how
+	// many active requests exist — an explicit reference is always safe
+	// to honor if it resolves and belongs to this vendor.
+	if m := mmReferencePattern.FindStringSubmatch(rawText); m != nil {
+		ref := "MM-" + m[1]
+		referenced, err := s.routing.FindVendorRequestByPublicReference(ctx, ref)
+		if err != nil {
+			s.logger.Error("looking up vendor request by reference", "reference", ref, "error", err)
+		}
+		switch {
+		case referenced == nil:
+			// Reference doesn't exist — do not guess (PRD 2.1 §4).
+			s.logger.Info("vendor cited an unknown reference, persisting unmatched", "vendor_id", v.ID, "reference", ref)
+			s.processAsVendorResponse(ctx, v, nil, rawText)
+			return
+		case referenced.VendorID != v.ID:
+			// Reference exists but belongs to a different vendor — never
+			// cross-attach (PRD 2.1 §4 test: "request belonging to
+			// another vendor").
+			s.logger.Info("vendor cited a reference belonging to another vendor, persisting unmatched",
+				"vendor_id", v.ID, "reference", ref, "actual_owner", referenced.VendorID)
+			s.processAsVendorResponse(ctx, v, nil, rawText)
+			return
+		default:
+			s.processAsVendorResponse(ctx, v, referenced, rawText)
+			return
+		}
+	}
+
+	switch len(active) {
+	case 0:
+		// No active request at all -> supply submission (PRD 2 §39-40).
+		s.processAsSupplySubmission(ctx, v, rawText)
+	case 1:
+		// Priority 2/3: exactly one active request — safe to use.
+		s.processAsVendorResponse(ctx, v, active[0], rawText)
+	default:
+		// Priority 4: multiple active requests, no reference to
+		// disambiguate. PRD 2.1 §4 is explicit: DO NOT AUTO-ASSOCIATE.
+		s.logger.Info("vendor has multiple active requests and no reference, persisting unmatched",
+			"vendor_id", v.ID, "active_count", len(active))
+		s.processAsVendorResponse(ctx, v, nil, rawText)
+	}
+}
+
+func (s *Service) processAsSupplySubmission(ctx context.Context, v *vendor.Vendor, rawText string) {
+	result, err := s.aiProvider.ExtractSupply(ctx, rawText)
+	extractedData := map[string]any{}
+	availability := supply.AvailabilityAvailable
+	var category, product, variant, condition, location *string
+	var price *int64
+	var quantity *int
+	confidence := 0.0
+
+	if err != nil {
+		s.logger.Error("supply extraction failed, persisting raw message for review", "vendor_id", v.ID, "error", err)
+		extractedData["error"] = err.Error()
+	} else {
+		category, product, variant, condition, location = result.Category, result.Product, result.Variant, result.Condition, result.Location
+		price, quantity, confidence = result.Price, result.Quantity, result.Confidence
+		availability = supply.Availability(result.AvailabilityStatus)
+		extractedData = map[string]any{
+			"category": result.Category, "product": result.Product, "variant": result.Variant,
+			"condition": result.Condition, "price": result.Price, "quantity": result.Quantity,
+			"location": result.Location, "availability_status": result.AvailabilityStatus,
+		}
+	}
+
+	signal, err := s.supplies.Create(ctx, &supply.Signal{
+		VendorID: v.ID, Category: category, Product: product, Variant: variant, Condition: condition,
+		Price: price, Quantity: quantity, Location: location, AvailabilityStatus: availability,
+		RawMessage: rawText, ExtractedData: extractedData, Confidence: confidence,
+	})
+	if err != nil {
+		s.logger.Error("persisting supply signal", "vendor_id", v.ID, "error", err)
+		return
+	}
+
+	_ = s.vendors.RecordSupplySubmission(ctx, v.ID)
+
+	if err := s.events.Write(ctx, &event.Event{
+		EventType:  event.SupplySignalCreated,
+		EntityType: "supply_signal",
+		EntityID:   &signal.ID,
+		ActorType:  event.ActorVendor,
+		ActorID:    &v.ID,
+		Payload:    map[string]any{"raw_message": rawText},
+	}); err != nil {
+		s.logger.Error("writing SUPPLY_SIGNAL_CREATED event", "error", err)
+	}
+
+	s.logger.Info("supply signal created", "vendor_id", v.ID, "signal_id", signal.ID, "product", derefStr(product))
+}
+
+// processAsVendorResponse persists a vendor's reply. vr may be nil — that
+// means the response could not be safely associated with any specific
+// VendorRequest (PRD 2.1 §4/§13); it is still persisted, attributed to
+// the vendor, with vendor_request_id left NULL for later operator
+// association (see AssociateResponse).
+//
+// Extraction failure never produces UNAVAILABLE (PRD 2.1 §8): on error,
+// the response is recorded UNCLASSIFIED + NEEDS_REVIEW, exactly like a
+// heuristically-ambiguous message, and the raw message is always
+// preserved either way.
+func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor, vr *VendorRequest, rawText string) {
+	result, err := s.aiProvider.ExtractVendorResponse(ctx, rawText)
+
+	status := ResponseUnclassified
+	reviewState := ReviewNeedsReview
+	extractionMethod := ExtractionHeuristic
+	var product, variant, condition, location, notes *string
+	var price *int64
+	var quantity *int
+	confidence := 0.0
+	extractedData := map[string]any{}
+
+	if err != nil {
+		s.logger.Error("vendor response extraction failed, marking UNCLASSIFIED (never UNAVAILABLE)",
+			"vendor_id", v.ID, "error", err)
+		extractedData["error"] = err.Error()
+	} else {
+		status = ResponseStatus(result.Status)
+		if result.ReviewState != "" {
+			reviewState = ReviewState(result.ReviewState)
+		}
+		if result.ExtractionMethod != "" {
+			extractionMethod = ExtractionMethod(result.ExtractionMethod)
+		}
+		product, variant, condition, location, notes = result.Product, result.Variant, result.Condition, result.Location, result.Notes
+		price, quantity, confidence = result.Price, result.Quantity, result.Confidence
+		extractedData = map[string]any{
+			"status": result.Status, "review_state": result.ReviewState, "extraction_method": result.ExtractionMethod,
+			"product": result.Product, "variant": result.Variant,
+			"condition": result.Condition, "price": result.Price, "quantity": result.Quantity,
+			"location": result.Location, "notes": result.Notes,
+		}
+	}
+
+	var vendorRequestID *uuid.UUID
+	if vr != nil {
+		vendorRequestID = &vr.ID
+	} else {
+		// Unmatched (PRD 2.1 §4): even if the business classification
+		// itself was confident, an unassociated response always needs
+		// operator attention to resolve *which* request it belongs to.
+		// Association ambiguity and classification ambiguity are
+		// separate reasons for review, and either one is sufficient.
+		reviewState = ReviewNeedsReview
+	}
+
+	resp, err := s.routing.CreateVendorResponse(ctx, &VendorResponse{
+		VendorRequestID: vendorRequestID, VendorID: v.ID, Status: status, ReviewState: reviewState,
+		Product: product, Variant: variant, Condition: condition,
+		Price: price, Quantity: quantity, Location: location, Notes: notes,
+		RawMessage: rawText, ExtractedData: extractedData, Confidence: confidence,
+		ExtractionMethod: extractionMethod,
+	})
+	if err != nil {
+		s.logger.Error("persisting vendor response", "vendor_id", v.ID, "error", err)
+		return
+	}
+
+	_ = s.vendors.RecordResponseActivity(ctx, v.ID)
+
+	entityID := resp.ID
+	payload := map[string]any{"status": string(status), "review_state": string(reviewState), "raw_message": rawText, "matched": vr != nil}
+	if err := s.events.Write(ctx, &event.Event{
+		EventType: event.VendorResponseReceived, EntityType: "vendor_response", EntityID: &entityID,
+		ActorType: event.ActorVendor, Payload: payload,
+	}); err != nil {
+		s.logger.Error("writing VENDOR_RESPONSE_RECEIVED event", "error", err)
+	}
+
+	s.logger.Info("vendor response recorded",
+		"vendor_id", v.ID, "response_id", resp.ID, "status", status, "review_state", reviewState, "matched", vr != nil)
+}
+
+// CorrectResponse applies an operator correction to a vendor response's
+// structured fields (PRD 2.1 §12). Loads the current state first so the
+// audit record carries real before/after values — the previous
+// implementation wrote an audit action with no diff content at all,
+// which the PRD 2.1 audit flagged as a compliance gap.
+func (s *Service) CorrectResponse(ctx context.Context, responseID uuid.UUID, fields ResponseFields, operatorID *uuid.UUID) (*VendorResponse, error) {
+	before, err := s.routing.FindResponseByID(ctx, responseID)
+	if err != nil {
+		return nil, fmt.Errorf("loading response before correction: %w", err)
+	}
+	if before == nil {
+		return nil, fmt.Errorf("vendor response %s not found", responseID)
+	}
+
+	// Correcting a response is itself a human review action, per PRD 2.1
+	// §1/§12: it must move ReviewState to CORRECTED regardless of what
+	// the caller passed (an operator correction always means CORRECTED).
+	corrected := ReviewCorrected
+	fields.ReviewState = &corrected
+	manual := ExtractionManual
+	// Only override extraction_method to "manual" if the operator is
+	// actually changing a structured field (not just, hypothetically,
+	// re-saving with no changes) — computed below alongside the diff.
+
+	after, err := s.routing.UpdateVendorResponse(ctx, responseID, fields)
+	if err != nil {
+		return nil, fmt.Errorf("applying correction: %w", err)
+	}
+
+	prevValues, newValues := diffResponseFields(before, fields)
+
+	if len(prevValues) > 0 {
+		// A structured field actually changed — record that this field
+		// data is now operator-provided, not purely automated (PRD 2.1 §8).
+		fields.ExtractionMethod = &manual
+		if reAfter, err := s.routing.UpdateVendorResponse(ctx, responseID, ResponseFields{ExtractionMethod: &manual}); err == nil {
+			after = reAfter
+		}
+
+		if err := s.audits.Write(ctx, &audit.Entry{
+			ActorType: "OPERATOR", ActorID: operatorID, Action: "VENDOR_RESPONSE_CORRECTED",
+			EntityType: "vendor_response", EntityID: &responseID,
+			PreviousValue: prevValues, NewValue: newValues,
+		}); err != nil {
+			// PRD 2.1 §6: "the API must not return apparent success while
+			// silently failing to write the audit." A correction without
+			// an audit trail is not a safe correction — surface the error
+			// to the caller instead of swallowing it.
+			return nil, fmt.Errorf("correction applied but audit write failed: %w", err)
+		}
+	}
+
+	if err := s.events.Write(ctx, &event.Event{
+		EventType: event.VendorResponseCorrected, EntityType: "vendor_response", EntityID: &responseID,
+		ActorType: event.ActorOperator, ActorID: operatorID,
+		Payload: map[string]any{"previous": prevValues, "new": newValues},
+	}); err != nil {
+		s.logger.Error("writing VENDOR_RESPONSE_CORRECTED event", "error", err)
+	}
+
+	return after, nil
+}
+
+// AssociateResponse implements the operator's manual-association action
+// (PRD 2.1 §5): attaching an unmatched (or wrongly-matched) response to
+// the correct VendorRequest. Writes an audit record with the previous
+// and new vendor_request_id.
+func (s *Service) AssociateResponse(ctx context.Context, responseID, newVendorRequestID uuid.UUID, operatorID *uuid.UUID) (*VendorResponse, error) {
+	newVR, err := s.routing.FindVendorRequestByID(ctx, newVendorRequestID)
+	if err != nil {
+		return nil, fmt.Errorf("loading target vendor request: %w", err)
+	}
+	if newVR == nil {
+		return nil, fmt.Errorf("vendor request %s not found", newVendorRequestID)
+	}
+
+	previous, updated, err := s.routing.UpdateAssociation(ctx, responseID, newVendorRequestID)
+	if err != nil {
+		return nil, fmt.Errorf("updating association: %w", err)
+	}
+
+	previousValue := map[string]any{"vendor_request_id": nil}
+	if previous != nil {
+		previousValue["vendor_request_id"] = previous.String()
+	}
+	newValue := map[string]any{"vendor_request_id": newVendorRequestID.String()}
+
+	if err := s.audits.Write(ctx, &audit.Entry{
+		ActorType: "OPERATOR", ActorID: operatorID, Action: "VENDOR_RESPONSE_ASSOCIATION_CORRECTED",
+		EntityType: "vendor_response", EntityID: &responseID,
+		PreviousValue: previousValue, NewValue: newValue,
+	}); err != nil {
+		return nil, fmt.Errorf("association applied but audit write failed: %w", err)
+	}
+
+	if err := s.events.Write(ctx, &event.Event{
+		EventType: event.VendorResponseAssociationCorrected, EntityType: "vendor_response", EntityID: &responseID,
+		ActorType: event.ActorOperator, ActorID: operatorID,
+		Payload: map[string]any{"previous": previousValue, "new": newValue},
+	}); err != nil {
+		s.logger.Error("writing VENDOR_RESPONSE_ASSOCIATION_CORRECTED event", "error", err)
+	}
+
+	return updated, nil
+}
+
+// diffResponseFields compares only the fields present in patch against
+// the current response, returning previous/new value maps for an audit
+// record. Mirrors internal/request/service.go's diffFields — deliberately
+// not generalized into a shared helper across packages, since the field
+// sets differ and the extra abstraction wouldn't reduce real duplication
+// (each still needs its own per-field type handling).
+func diffResponseFields(current *VendorResponse, patch ResponseFields) (previous, new map[string]any) {
+	previous = map[string]any{}
+	new = map[string]any{}
+
+	if patch.Status != nil && (current.Status != *patch.Status) {
+		previous["status"] = string(current.Status)
+		new["status"] = string(*patch.Status)
+	}
+	if patch.Product != nil && notEqualStrP(current.Product, patch.Product) {
+		previous["product"] = derefStrP(current.Product)
+		new["product"] = derefStrP(patch.Product)
+	}
+	if patch.Variant != nil && notEqualStrP(current.Variant, patch.Variant) {
+		previous["variant"] = derefStrP(current.Variant)
+		new["variant"] = derefStrP(patch.Variant)
+	}
+	if patch.Condition != nil && notEqualStrP(current.Condition, patch.Condition) {
+		previous["condition"] = derefStrP(current.Condition)
+		new["condition"] = derefStrP(patch.Condition)
+	}
+	if patch.Price != nil && notEqualInt64P(current.Price, patch.Price) {
+		previous["price"] = derefInt64P(current.Price)
+		new["price"] = derefInt64P(patch.Price)
+	}
+	if patch.Quantity != nil && notEqualIntP(current.Quantity, patch.Quantity) {
+		previous["quantity"] = derefIntP(current.Quantity)
+		new["quantity"] = derefIntP(patch.Quantity)
+	}
+	if patch.Location != nil && notEqualStrP(current.Location, patch.Location) {
+		previous["location"] = derefStrP(current.Location)
+		new["location"] = derefStrP(patch.Location)
+	}
+	if patch.Notes != nil && notEqualStrP(current.Notes, patch.Notes) {
+		previous["notes"] = derefStrP(current.Notes)
+		new["notes"] = derefStrP(patch.Notes)
+	}
+
+	return previous, new
+}
+
+func notEqualStrP(a, b *string) bool {
+	if a == nil && b == nil {
+		return false
+	}
+	if a == nil || b == nil {
+		return true
+	}
+	return *a != *b
+}
+
+func notEqualInt64P(a, b *int64) bool {
+	if a == nil && b == nil {
+		return false
+	}
+	if a == nil || b == nil {
+		return true
+	}
+	return *a != *b
+}
+
+func notEqualIntP(a, b *int) bool {
+	if a == nil && b == nil {
+		return false
+	}
+	if a == nil || b == nil {
+		return true
+	}
+	return *a != *b
+}
+
+func derefStrP(s *string) any {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
+func derefInt64P(i *int64) any {
+	if i == nil {
+		return nil
+	}
+	return *i
+}
+
+func derefIntP(i *int) any {
+	if i == nil {
+		return nil
+	}
+	return *i
+}
+
+// --- helpers ---
+
+func (s *Service) generateUniqueReference(ctx context.Context) (string, error) {
+	for i := 0; i < 5; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(9000))
+		if err != nil {
+			return "", err
+		}
+		ref := fmt.Sprintf("MM-%04d", 1000+n.Int64())
+		return ref, nil // uniqueness enforced by DB constraint; collisions vanishingly rare at pilot scale
+	}
+	return "", fmt.Errorf("failed to generate unique reference")
+}
+
+func buildVendorRequestMessage(ref string, req *request.BuyerRequest) string {
+	msg := fmt.Sprintf("Middleman Request #%s\n\nA buyer is looking for:\n\n%s", ref, derefStr(req.Product))
+	if req.Variant != nil {
+		msg += fmt.Sprintf("\n%s", *req.Variant)
+	}
+	if req.Condition != nil {
+		msg += fmt.Sprintf("\n%s", *req.Condition)
+	}
+	if req.BudgetMax != nil {
+		msg += fmt.Sprintf("\nUp to ₦%d", *req.BudgetMax)
+	}
+	if req.Quantity != nil {
+		msg += fmt.Sprintf("\nQuantity: %d", *req.Quantity)
+	}
+	if req.Location != nil {
+		msg += fmt.Sprintf("\n%s", *req.Location)
+	}
+	msg += "\n\nCan you supply this? (Available / Can Source / Unavailable)"
+	return msg
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return "unspecified item"
+	}
+	return *s
+}

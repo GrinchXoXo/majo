@@ -1,0 +1,228 @@
+package httpserver
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/middleman/backend/internal/event"
+	"github.com/middleman/backend/internal/supply"
+	"github.com/middleman/backend/internal/vendor"
+)
+
+// VendorHandlers implements the operator-facing vendor management API
+// from PRD 2 §6, §51-53.
+type VendorHandlers struct {
+	vendors  vendor.Repository
+	supplies supply.Repository
+	events   event.Writer
+}
+
+func NewVendorHandlers(vendors vendor.Repository, supplies supply.Repository, events event.Writer) *VendorHandlers {
+	return &VendorHandlers{vendors: vendors, supplies: supplies, events: events}
+}
+
+type vendorDTO struct {
+	ID                string   `json:"id"`
+	BusinessName      string   `json:"business_name"`
+	WhatsAppExternalID string  `json:"whatsapp_external_id"`
+	Phone             string   `json:"phone"`
+	Status            string   `json:"status"`
+	PrimaryLocation   string   `json:"primary_location"`
+	Notes             string   `json:"notes"`
+	Categories        []string `json:"categories"`
+	ServiceAreas      []string `json:"service_areas"`
+	RequestsReceived  int      `json:"requests_received"`
+	ResponsesReceived int      `json:"responses_received"`
+	CreatedAt         string   `json:"created_at"`
+}
+
+func toVendorDTO(v *vendor.Vendor) vendorDTO {
+	return vendorDTO{
+		ID: v.ID.String(), BusinessName: v.BusinessName, WhatsAppExternalID: v.WhatsAppExternalID,
+		Phone: v.Phone, Status: string(v.Status), PrimaryLocation: v.PrimaryLocation, Notes: v.Notes,
+		Categories: v.Categories, ServiceAreas: v.ServiceAreas,
+		RequestsReceived: v.RequestsReceived, ResponsesReceived: v.ResponsesReceived,
+		CreatedAt: v.CreatedAt.Format(timeFormat),
+	}
+}
+
+type createVendorBody struct {
+	BusinessName       string   `json:"business_name"`
+	WhatsAppExternalID string   `json:"whatsapp_external_id"`
+	Phone              string   `json:"phone"`
+	PrimaryLocation    string   `json:"primary_location"`
+	Notes              string   `json:"notes"`
+	Categories         []string `json:"categories"`
+	ServiceAreas       []string `json:"service_areas"`
+}
+
+// Create handles POST /api/vendors. New vendors start PENDING per PRD 2
+// §6; the operator activates them explicitly once vetted.
+func (h *VendorHandlers) Create(w http.ResponseWriter, r *http.Request) {
+	var body createVendorBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.BusinessName == "" || body.WhatsAppExternalID == "" {
+		writeError(w, http.StatusBadRequest, "business_name and whatsapp_external_id are required")
+		return
+	}
+
+	v := &vendor.Vendor{
+		BusinessName:       body.BusinessName,
+		WhatsAppExternalID: body.WhatsAppExternalID,
+		Phone:              body.Phone,
+		PrimaryLocation:    body.PrimaryLocation,
+		Notes:              body.Notes,
+		Status:             vendor.StatusPending,
+		Categories:         body.Categories,
+		ServiceAreas:       body.ServiceAreas,
+	}
+
+	created, err := h.vendors.Create(r.Context(), v)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create vendor")
+		return
+	}
+
+	if err := h.events.Write(r.Context(), &event.Event{
+		EventType: event.VendorCreated, EntityType: "vendor", EntityID: &created.ID, ActorType: event.ActorOperator,
+	}); err != nil {
+		// Non-fatal — vendor was created successfully.
+	}
+
+	writeJSON(w, http.StatusCreated, toVendorDTO(created))
+}
+
+// List handles GET /api/vendors?status=ACTIVE&category=electronics
+func (h *VendorHandlers) List(w http.ResponseWriter, r *http.Request) {
+	var statusFilter *vendor.Status
+	if s := r.URL.Query().Get("status"); s != "" {
+		st := vendor.Status(s)
+		statusFilter = &st
+	}
+	var categoryFilter *string
+	if c := r.URL.Query().Get("category"); c != "" {
+		categoryFilter = &c
+	}
+
+	vendors, err := h.vendors.List(r.Context(), statusFilter, categoryFilter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list vendors")
+		return
+	}
+
+	dtos := make([]vendorDTO, 0, len(vendors))
+	for _, v := range vendors {
+		dtos = append(dtos, toVendorDTO(v))
+	}
+	writeJSON(w, http.StatusOK, dtos)
+}
+
+// Get handles GET /api/vendors/:id
+func (h *VendorHandlers) Get(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+	v, err := h.vendors.FindByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "vendor not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, toVendorDTO(v))
+}
+
+type patchVendorBody struct {
+	BusinessName    *string  `json:"business_name"`
+	Phone           *string  `json:"phone"`
+	Status          *string  `json:"status"`
+	PrimaryLocation *string  `json:"primary_location"`
+	Notes           *string  `json:"notes"`
+	Categories      []string `json:"categories"`
+	ServiceAreas    []string `json:"service_areas"`
+}
+
+// Patch handles PATCH /api/vendors/:id — edit, activate, deactivate, block
+// (PRD 2 §6).
+func (h *VendorHandlers) Patch(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	var body patchVendorBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	fields := vendor.Fields{
+		BusinessName: body.BusinessName, Phone: body.Phone, PrimaryLocation: body.PrimaryLocation,
+		Notes: body.Notes, Categories: body.Categories, ServiceAreas: body.ServiceAreas,
+	}
+	if body.Status != nil {
+		st := vendor.Status(*body.Status)
+		fields.Status = &st
+	}
+
+	updated, err := h.vendors.Update(r.Context(), id, fields)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update vendor")
+		return
+	}
+
+	if body.Status != nil {
+		evtType := event.VendorUpdated
+		if *body.Status == string(vendor.StatusActive) {
+			evtType = event.VendorActivated
+		} else if *body.Status == string(vendor.StatusInactive) || *body.Status == string(vendor.StatusBlocked) {
+			evtType = event.VendorDeactivated
+		}
+		_ = h.events.Write(r.Context(), &event.Event{EventType: evtType, EntityType: "vendor", EntityID: &id, ActorType: event.ActorOperator})
+	}
+
+	writeJSON(w, http.StatusOK, toVendorDTO(updated))
+}
+
+type supplySignalDTO struct {
+	ID                 string  `json:"id"`
+	Category           *string `json:"category"`
+	Product            *string `json:"product"`
+	Variant            *string `json:"variant"`
+	Condition          *string `json:"condition"`
+	Price              *int64  `json:"price"`
+	Quantity           *int    `json:"quantity"`
+	Location           *string `json:"location"`
+	AvailabilityStatus string  `json:"availability_status"`
+	RawMessage         string  `json:"raw_message"`
+	Confidence         float64 `json:"confidence"`
+	CreatedAt          string  `json:"created_at"`
+	ExpiresAt          string  `json:"expires_at"`
+}
+
+// Supply handles GET /api/vendors/:id/supply
+func (h *VendorHandlers) Supply(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	signals, err := h.supplies.ListByVendor(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list supply")
+		return
+	}
+
+	dtos := make([]supplySignalDTO, 0, len(signals))
+	for _, s := range signals {
+		dtos = append(dtos, supplySignalDTO{
+			ID: s.ID.String(), Category: s.Category, Product: s.Product, Variant: s.Variant, Condition: s.Condition,
+			Price: s.Price, Quantity: s.Quantity, Location: s.Location, AvailabilityStatus: string(s.AvailabilityStatus),
+			RawMessage: s.RawMessage, Confidence: s.Confidence,
+			CreatedAt: s.CreatedAt.Format(timeFormat), ExpiresAt: s.ExpiresAt.Format(timeFormat),
+		})
+	}
+	writeJSON(w, http.StatusOK, dtos)
+}
