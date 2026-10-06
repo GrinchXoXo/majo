@@ -135,15 +135,15 @@ func TestIntegration_Matching_ExpiredOrUnpublishedListingsIgnored(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ev.ListingsByVendor[v]) != 0 || !ev.SupersededSignals[sig] {
-		t.Fatalf("an expired listing is not evidence, and its signal stays superseded: %+v", ev)
+	if len(ev.ListingsByVendor[v]) != 0 || ev.SupersededSignals[sig] {
+		t.Fatalf("an expired listing is not evidence and no longer supersedes its signal: %+v", ev)
 	}
 	req := e.confirmedRequest("electronics", "PS5", "", "Benin City", 500000)
 	cs, _, err := e.routing.SuggestVendors(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := byVendor(cs)[v]; c.RelevantListing != nil || c.Breakdown["product"] != 0 {
-		t.Fatalf("expired listing must not be evidence: %+v", c)
+	if c := byVendor(cs)[v]; c.RelevantListing != nil || c.RelevantSupply == nil || c.RelevantSupply.ID != sig {
+		t.Fatalf("expired listing is not evidence; the (still fresh) signal counts again: %+v", c)
 	}
 }

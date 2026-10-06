@@ -147,3 +147,29 @@ func TestMatch_CorrectedListingWithoutSourceIsFamilyMatch(t *testing.T) {
 		t.Fatalf("display product alone is a family match: %v", cs[0].Breakdown)
 	}
 }
+
+// Publication curates a CAN_SOURCE submission; it does not upgrade it.
+func TestMatch_CanSourceListingStaysCanSource(t *testing.T) {
+	v := phoneVendor("V")
+	l := activeListing(v, "iPhone 13", "128GB", 600000)
+	cs := Match(iphoneRequest(), []*vendor.Vendor{v}, nil,
+		map[string][]supply.MatchableListing{v.ID.String(): {{Listing: l, SourceAvailability: supply.AvailabilityCanSource}}},
+		DefaultWeights(), 0, DefaultMaxCandidates)
+	c := cs[0]
+	if c.MatchType != MatchCanSource || c.Breakdown["product"] != 20 || c.Breakdown["availability"] != 6 ||
+		!contains(c.Reasons, "can_source_listing") || c.RelevantListing != l {
+		t.Fatalf("a published can-source listing scores as can-source: %s %v %v", c.MatchType, c.Breakdown, c.Reasons)
+	}
+}
+
+// A correction to a different product drops the old (source) name.
+func TestMatch_CorrectionToAnotherProductDropsSourceName(t *testing.T) {
+	v := phoneVendor("V")
+	l := activeListing(v, "iPhone 14", "128GB", 600000) // operator: "iphone 13" was wrong
+	cs := Match(iphoneRequest(), []*vendor.Vendor{v}, nil,
+		map[string][]supply.MatchableListing{v.ID.String(): {{Listing: l, SourceProduct: "iphone13"}}},
+		DefaultWeights(), 0, DefaultMaxCandidates)
+	if cs[0].RelevantListing != nil || cs[0].Breakdown["product"] != 0 {
+		t.Fatalf("an iPhone 14 listing must not match an iPhone 13 request through its old name: %v", cs[0].Breakdown)
+	}
+}

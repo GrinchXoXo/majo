@@ -48,12 +48,12 @@ func (h *FunnelHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	report := funnel.Report{Since: since, Until: until, Stages: stages}
 	// Supply-side rows (Lock V2 §K.2) when the reader provides them.
 	if sr, ok := h.reader.(funnel.SupplyReader); ok {
-		supply, err := sr.Supply(r.Context(), since, until, h.freshness)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to compute supply metrics")
-			return
+		// Independent of the stages: a supply failure never blanks them.
+		if supply, err := sr.Supply(r.Context(), since, until, h.freshness); err != nil {
+			report.SupplyError = "failed to compute supply metrics"
+		} else {
+			report.Supply = supply
 		}
-		report.Supply = supply
 	}
 	writeJSON(w, http.StatusOK, report)
 }

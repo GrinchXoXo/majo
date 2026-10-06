@@ -107,16 +107,16 @@ var supplyQueries = []supplyQuery{
 	{"listings_withdrawn", "Published listings withdrawn", "count", "window", "supply_listings.rejected_at (after publication)", "",
 		`SELECT count(*), NULL::bigint FROM supply_listings WHERE rejected_at >= $1 AND rejected_at < $2 AND published_at IS NOT NULL`},
 	{"stale_listing_rate", "Stale ACTIVE listings", "rate", "now", "ACTIVE listings not verified within the freshness window / ACTIVE",
-		"freshness window is LISTING_FRESHNESS_WINDOW [PARAM]; verification = supply evidence time",
+		"freshness window is LISTING_FRESHNESS_WINDOW [PARAM]; verification = supply evidence time; includes ACTIVE listings past expiry (no expiry worker)",
 		`SELECT count(*) FILTER (WHERE last_verified_at IS NULL OR last_verified_at < now() - $3::interval), count(*)
 		 FROM supply_listings WHERE status = 'ACTIVE' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`},
 	{"usable_listings_per_active_vendor", "Usable listings per active vendor", "per", "now", "ACTIVE unexpired listings of ACTIVE vendors / ACTIVE vendors", "",
 		`SELECT (SELECT count(*) FROM supply_listings l JOIN vendors v ON v.id = l.vendor_id
 		         WHERE l.status = 'ACTIVE' AND l.expires_at > now() AND v.status = 'ACTIVE' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL),
 		        (SELECT count(*) FROM vendors WHERE status = 'ACTIVE')`},
-	{"vendor_response_rate", "Vendor response rate", "rate", "window", "vendor responses matched to a request / vendor requests sent", "activity in the period, not a cohort",
-		`SELECT (SELECT count(*) FROM vendor_responses WHERE vendor_request_id IS NOT NULL AND created_at >= $1 AND created_at < $2),
-		        (SELECT count(*) FROM vendor_requests WHERE sent_at >= $1 AND sent_at < $2)`},
+	{"vendor_response_rate", "Vendor response rate", "rate", "window", "vendor requests sent in the period with at least one matched response / vendor requests sent in the period", "responses may arrive after the period ends",
+		`SELECT count(*) FILTER (WHERE EXISTS (SELECT 1 FROM vendor_responses r WHERE r.vendor_request_id = vr.id)), count(*)
+		 FROM vendor_requests vr WHERE vr.sent_at >= $1 AND vr.sent_at < $2`},
 }
 
 // Supply implements funnel.SupplyReader (Architecture Lock V2 §K.2, the

@@ -140,6 +140,8 @@ The same endpoint (`GET /api/metrics/funnel?days=N`) also returns `supply`: one 
 
 `scope` is `window` (activity inside the period) or `now` (a snapshot of the current state).
 
+If the supply rows cannot be computed, the report still returns the stages, with `supply_error` set.
+
 | Key | Meaning | Source |
 |---|---|---|
 | `vendor_submissions` | supply signals created | `supply_signals.created_at` |
@@ -154,7 +156,7 @@ The same endpoint (`GET /api/metrics/funnel?days=N`) also returns `supply`: one 
 | `listings_withdrawn` | published listings later rejected | `rejected_at` with `published_at` set |
 | `stale_listing_rate` (now) | ACTIVE listings whose evidence is older than `LISTING_FRESHNESS_WINDOW` [PARAM, default 72h] / ACTIVE | `last_verified_at` |
 | `usable_listings_per_active_vendor` (now) | ACTIVE unexpired listings of ACTIVE vendors / ACTIVE vendors | `supply_listings`, `vendors` |
-| `vendor_response_rate` | matched vendor responses / vendor requests sent, activity in the period (not a cohort) | `vendor_responses`, `vendor_requests` |
+| `vendor_response_rate` | vendor requests sent in the period that got ≥ 1 matched response / vendor requests sent in the period | `vendor_requests`, `vendor_responses` |
 
 Rejection reasons are in `supply_listings.rejection_reason`. Two §K.2 rows wait for Phase 4B: vendor re-confirmation rate,
 and discovery-eligible supply volume.

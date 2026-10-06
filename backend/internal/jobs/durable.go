@@ -273,7 +273,14 @@ func (w *Worker) process(ctx context.Context, j *Job, workerID string) {
 		if fn := w.failEvent[j.Type]; fn != nil {
 			ev = fn(j, herr)
 		}
-		if err := w.store.Fail(bk, j.ID, workerID, reason, ev); err != nil {
+		err := w.store.Fail(bk, j.ID, workerID, reason, ev)
+		if err != nil && ev != nil && !errors.Is(err, ErrLeaseLost) {
+			// The event itself could not be stored (both rolled back). Fail
+			// without it rather than leaving the job to be reclaimed forever.
+			log.Error("storing failure event; failing job without it", "error", err, "event_type", ev.EventType)
+			err = w.store.Fail(bk, j.ID, workerID, reason, nil)
+		}
+		if err != nil {
 			log.Error("failing durable job", "error", err, "job_error", reason)
 			return
 		}

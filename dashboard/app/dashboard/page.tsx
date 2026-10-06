@@ -55,6 +55,10 @@ export default async function DashboardPage() {
         </section>
       )}
 
+      {funnel?.supply_error && (
+        <p style={{ color: "crimson", marginTop: 16 }}>Supply metrics unavailable: {funnel.supply_error}</p>
+      )}
+
       {funnel?.supply && funnel.supply.length > 0 && (
         <section style={{ marginTop: 16 }}>
           <h2>Supply — last 30 days</h2>

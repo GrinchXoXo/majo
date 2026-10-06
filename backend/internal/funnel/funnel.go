@@ -28,6 +28,9 @@ type Report struct {
 	// Supply holds the supply-side rows (Architecture Lock V2 §K.2, Phase
 	// 4A). Additive: absent when the reader does not provide them.
 	Supply []SupplyMetric `json:"supply,omitempty"`
+	// SupplyError is set (and Supply omitted) when the supply rows could not
+	// be computed; the stages are still returned.
+	SupplyError string `json:"supply_error,omitempty"`
 }
 
 // SupplyMetric is one supply-side row: a count, or a numerator over a

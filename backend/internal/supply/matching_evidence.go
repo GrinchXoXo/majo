@@ -23,6 +23,10 @@ type MatchingEvidence struct {
 type MatchableListing struct {
 	Listing       *Listing
 	SourceProduct string // NormalizeSearch(signal.product); "" if unknown
+	// SourceAvailability is the source signal's availability. A listing
+	// built from a CAN_SOURCE signal is still "can source" supply when
+	// published; publication curates it, it does not upgrade it.
+	SourceAvailability Availability
 }
 
 // MatchingEvidenceReader loads MatchingEvidence for a set of vendors.

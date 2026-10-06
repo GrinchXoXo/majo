@@ -128,13 +128,16 @@ func Match(
 		// Signals and ACTIVE listings are both evidence; the strongest wins
 		// and a listing wins a tie (it is operator-curated).
 		productScore, matchType, relevantSignal := scoreProduct(reqProduct, deref(req.Variant), signals, weights.ProductMax)
-		listingScore, listingType, relevantListing := scoreListings(deref(req.Product), deref(req.Variant), listingsByVendor[v.ID.String()], weights.ProductMax)
+		listingScore, listingType, relevantListing, listingCanSource := scoreListings(deref(req.Product), deref(req.Variant), listingsByVendor[v.ID.String()], weights.ProductMax)
 		var ev *evidence
 		switch {
 		case relevantListing != nil && listingScore >= productScore:
 			productScore, matchType, relevantSignal = listingScore, listingType, nil
 			ev = &evidence{listing: relevantListing, condition: relevantListing.Condition, price: relevantListing.Price,
 				availability: 1.0, reason: "active_listing"}
+			if listingCanSource {
+				ev.availability, ev.reason = 0.6, "can_source_listing"
+			}
 		case relevantSignal != nil:
 			ev = &evidence{signal: relevantSignal, condition: relevantSignal.Condition, price: relevantSignal.Price}
 			switch relevantSignal.AvailabilityStatus {
@@ -296,14 +299,20 @@ func evListing(ev *evidence) *supply.Listing {
 // signals. A published listing is curated, available supply, so it scores
 // like a fresh AVAILABLE signal. Products are compared in the listing's
 // compact search form (lowercase letters and digits only).
-func scoreListings(reqProduct, reqVariant string, listings []supply.MatchableListing, maxPoints int) (int, MatchType, *supply.Listing) {
+//
+// The source signal's product counts only when the listing's product is a
+// refinement of it ("bag" -> "Imported ladies bags"); a correction to a
+// different product ("iphone 13" -> "iphone 14") drops the old name. A
+// listing from a CAN_SOURCE signal scores as can-source supply.
+func scoreListings(reqProduct, reqVariant string, listings []supply.MatchableListing, maxPoints int) (int, MatchType, *supply.Listing, bool) {
 	rp := supply.NormalizeSearch(reqProduct)
 	if rp == "" {
-		return 0, "", nil
+		return 0, "", nil, false
 	}
 	var best *supply.Listing
 	var bestScore int
 	var bestType MatchType
+	bestCanSource := false
 	for _, ml := range listings {
 		l := ml.Listing
 		if l == nil || l.Status != supply.ListingActive {
@@ -311,11 +320,15 @@ func scoreListings(reqProduct, reqVariant string, listings []supply.MatchableLis
 		}
 		// The listing's (curated) product or its source signal's product.
 		var names []string
-		if l.NormalizedProduct != nil && *l.NormalizedProduct != "" {
-			names = append(names, *l.NormalizedProduct)
+		lp := ""
+		if l.NormalizedProduct != nil {
+			lp = *l.NormalizedProduct
 		}
-		if ml.SourceProduct != "" {
-			names = append(names, ml.SourceProduct)
+		if lp != "" {
+			names = append(names, lp)
+		}
+		if sp := ml.SourceProduct; sp != "" && sp != lp && (lp == "" || strings.Contains(lp, sp) || strings.Contains(sp, lp)) {
+			names = append(names, sp)
 		}
 		exact, family := false, false
 		for _, lp := range names {
@@ -328,7 +341,10 @@ func scoreListings(reqProduct, reqVariant string, listings []supply.MatchableLis
 		variantMatch := reqVariant != "" && l.Variant != nil && strings.EqualFold(*l.Variant, reqVariant)
 		var score int
 		var mt MatchType
+		canSource := ml.SourceAvailability == supply.AvailabilityCanSource
 		switch {
+		case exact && canSource:
+			score, mt = pct(maxPoints, 0.67), MatchCanSource
 		case exact && variantMatch:
 			score, mt = pct(maxPoints, 1.0), MatchSupplyConfirmed
 		case exact:
@@ -339,10 +355,10 @@ func scoreListings(reqProduct, reqVariant string, listings []supply.MatchableLis
 			continue
 		}
 		if score > bestScore {
-			best, bestScore, bestType = l, score, mt
+			best, bestScore, bestType, bestCanSource = l, score, mt, canSource
 		}
 	}
-	return bestScore, bestType, best
+	return bestScore, bestType, best, bestCanSource
 }
 
 func matchTypeOrCategoryOnly(mt MatchType, categoryScore int) MatchType {

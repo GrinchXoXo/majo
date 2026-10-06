@@ -24,6 +24,8 @@ type memStore struct {
 	now  time.Time
 	// failEvents are the events stored together with a FAILED transition.
 	failEvents []*event.Event
+	// rejectEvents makes Fail refuse any call that carries an event.
+	rejectEvents bool
 }
 
 func (m *memStore) Enqueue(ctx context.Context, j *Job) (bool, error) {
@@ -88,6 +90,9 @@ func (m *memStore) Retry(ctx context.Context, id uuid.UUID, w string, runAt time
 func (m *memStore) Fail(ctx context.Context, id uuid.UUID, w string, e string, ev *event.Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if ev != nil && m.rejectEvents {
+		return errors.New("event write failed")
+	}
 	j, err := m.find(id, w)
 	if err == nil {
 		j.Status, j.LastError, j.LockedBy = StatusFailed, e, ""
@@ -295,5 +300,16 @@ func TestWorker_FailureEventIsStoredWithTheFailedTransition(t *testing.T) {
 	}
 	if seen.Status != StatusFailed || s.failEvents[0].Payload["error"] != "attempts exhausted (2/2): timeout" {
 		t.Fatalf("the event sees the terminal state: %+v", s.failEvents[0].Payload)
+	}
+}
+
+func TestWorker_UnstorableFailureEventStillFailsTheJob(t *testing.T) {
+	s := &memStore{now: time.Now(), rejectEvents: true}
+	_, _ = s.Enqueue(context.Background(), &Job{Type: "T", IdempotencyKey: "k", MaxAttempts: 1})
+	w := newTestWorker(s, func(ctx context.Context, j *Job) error { return Permanent(errors.New("404")) }, nil)
+	w.RegisterFailureEvent("T", func(j *Job, err error) *event.Event { return &event.Event{EventType: "X_FAILED"} })
+	_, _ = w.RunOnce(context.Background(), "t/0")
+	if s.jobs[0].Status != StatusFailed || len(s.failEvents) != 0 {
+		t.Fatalf("the job must still reach FAILED (without the event), got %s", s.jobs[0].Status)
 	}
 }

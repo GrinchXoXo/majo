@@ -187,11 +187,14 @@ E2E: `scripts/e2e/listing_curation.py` drives the real dashboard with headless C
 
 **Scoring:**
 - A listing is scored like a fresh AVAILABLE signal: exact product + variant = full product points; exact = 0.9; family = 0.5; full availability points.
-- The product comparison uses the compact form of the listing's product **or** of its source signal's product. An operator's display correction ("bag" → "Imported ladies bags") therefore still matches a request for "bag" exactly.
+- A listing built from a CAN_SOURCE signal stays can-source supply when published: 0.67 product and 0.6 availability, with the reason `can_source_listing`.
+- The product comparison uses the compact form of the listing's product, and also of its source signal's product when the listing's product is a refinement of it.
+  - "bag" → "Imported ladies bags" still matches a request for "bag" exactly.
+  - A correction to a different product ("iphone 13" → "iphone 14") drops the old name.
 - The strongest evidence wins, and a listing wins a tie. Condition and budget are then judged on that evidence, so a corrected listing price is used.
 
 **Which signals still count:**
-- A signal whose listing is published (ACTIVE) is represented by that listing.
+- A signal whose listing is published (ACTIVE and unexpired) is represented by that listing. When that listing's evidence has expired, the signal counts again on its own.
 - A signal whose listing was rejected is no longer evidence.
 - Signals with only a DRAFT listing (not yet curated) count as before.
 

@@ -28,7 +28,7 @@ export type SupplyMetric = {
   source: string;
   note?: string;
 };
-export type FunnelReport = { since: string; until: string; stages: FunnelStage[]; supply?: SupplyMetric[] };
+export type FunnelReport = { since: string; until: string; stages: FunnelStage[]; supply?: SupplyMetric[]; supply_error?: string };
 
 // Core marketplace funnel (Phase 3.1 §23A), read-only, counted from the
 // system-of-record tables.

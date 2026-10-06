@@ -343,18 +343,22 @@ func (r *SupplyListingRepository) MatchingEvidence(ctx context.Context, vendorID
 		return nil, err
 	}
 	if len(signalIDs) > 0 {
-		sources := map[uuid.UUID]string{}
-		prow, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(product, '') FROM supply_signals WHERE id = ANY($1::uuid[])`, pq.Array(signalIDs))
+		type source struct {
+			product      string
+			availability supply.Availability
+		}
+		sources := map[uuid.UUID]source{}
+		prow, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(product, ''), availability_status FROM supply_signals WHERE id = ANY($1::uuid[])`, pq.Array(signalIDs))
 		if err != nil {
 			return nil, err
 		}
 		for prow.Next() {
-			var id, product string
-			if err := prow.Scan(&id, &product); err != nil {
+			var id, product, availability string
+			if err := prow.Scan(&id, &product, &availability); err != nil {
 				prow.Close()
 				return nil, err
 			}
-			sources[uuid.MustParse(id)] = supply.NormalizeSearch(product)
+			sources[uuid.MustParse(id)] = source{supply.NormalizeSearch(product), supply.Availability(availability)}
 		}
 		prow.Close()
 		if err := prow.Err(); err != nil {
@@ -363,7 +367,8 @@ func (r *SupplyListingRepository) MatchingEvidence(ctx context.Context, vendorID
 		for vid, ls := range out.ListingsByVendor {
 			for i := range ls {
 				if sid := ls[i].Listing.SupplySignalID; sid != nil {
-					ls[i].SourceProduct = sources[*sid]
+					ls[i].SourceProduct = sources[*sid].product
+					ls[i].SourceAvailability = sources[*sid].availability
 				}
 			}
 			out.ListingsByVendor[vid] = ls
@@ -374,7 +379,7 @@ func (r *SupplyListingRepository) MatchingEvidence(ctx context.Context, vendorID
 	}
 	srows, err := r.db.QueryContext(ctx, `SELECT supply_signal_id FROM supply_listings
 		WHERE vendor_id = ANY($1::uuid[]) AND supply_signal_id IS NOT NULL
-		  AND (status = 'ACTIVE' OR rejected_at IS NOT NULL)`, pq.Array(ids))
+		  AND ((status = 'ACTIVE' AND expires_at > now()) OR rejected_at IS NOT NULL)`, pq.Array(ids))
 	if err != nil {
 		return nil, err
 	}
