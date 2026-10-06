@@ -150,7 +150,7 @@ The operator is the publication gate. A listing becomes ACTIVE only through `POS
 
 **Dashboard:** *Supply Listings* (`/offers`) opens on the DRAFT queue (newest first; expired drafts are not shown). A listing page (`/offers/{id}`) shows the editable marketplace fields next to the source signal's values, the media previews, the source messages, and why the listing cannot be published yet.
 
-**Operator token:** set `OPERATOR_API_TOKEN` (16+ characters; required unless `APP_ENV=development`). Editing, publishing, rejecting and media previews need `Authorization: Bearer <token>`. In the dashboard, the operator types it once per browser tab. There are no per-operator identities, so audit rows say OPERATOR without a name. Reads (queue, detail) and the other operator pages are not protected, as before.
+**Operator token:** set `OPERATOR_API_TOKEN` (16+ characters; required unless `APP_ENV=development`, and `APP_ENV` defaults to development, so set it explicitly in every deployment). The listing detail (it shows the vendor's raw messages), editing, publishing, rejecting and media previews need `Authorization: Bearer <token>`. In the dashboard, the operator types it once per browser tab. There are no per-operator identities, so audit rows say OPERATOR without a name. Listing search and the per-vendor list, like the other operator pages, are still unprotected, as before.
 
 | Operation | Allowed from | Result | Event / audit |
 |---|---|---|---|

@@ -348,6 +348,22 @@ func changedKeys(m map[string]any) []string {
 // status, published_at and source evidence are untouched; an edit never
 // publishes. A no-op edit writes nothing.
 func (s *ListingService) Edit(ctx context.Context, listingID uuid.UUID, e ListingEdit, operatorID *uuid.UUID) (*Listing, error) {
+	// A new primary image must be previewable. Checked before the row lock
+	// (no database access while it is held); membership in the listing's
+	// own media is checked under the lock by validateEdit.
+	if e.PrimaryAssetID != nil {
+		id, err := uuid.Parse(*e.PrimaryAssetID)
+		if err != nil {
+			return nil, ValidationError{Problems: []FieldError{{"primary_media_asset_id", "is not one of this listing's media"}}}
+		}
+		states, err := s.media.MediaAssetStates(ctx, []uuid.UUID{id})
+		if err != nil {
+			return nil, fmt.Errorf("loading media asset: %w", err)
+		}
+		if st, ok := states[id]; ok && st.Status != "AVAILABLE" {
+			return nil, ValidationError{Problems: []FieldError{{"primary_media_asset_id", "the image is " + st.Status + "; choose an available one"}}}
+		}
+	}
 	return s.listings.Curate(ctx, listingID, func(cur *Listing) (*CurationChange, error) {
 		if err := checkStale(cur, e.ExpectedUpdatedAt); err != nil {
 			return nil, err
@@ -384,9 +400,70 @@ func (s *ListingService) Edit(ctx context.Context, listingID uuid.UUID, e Listin
 	})
 }
 
+// publishFacts are the rows outside the listing that publication depends
+// on (vendor, source signal, media assets). They are read BEFORE the
+// listing row is locked: reading them through the pool while Curate holds
+// its transaction would need a second connection per publish, which can
+// exhaust the pool under concurrent publishes.
+type publishFacts struct {
+	vendorID uuid.UUID
+	vendor   *vendor.Vendor
+	signalID *uuid.UUID
+	signal   *Signal
+	queried  map[string]bool
+	states   map[uuid.UUID]MediaAssetState
+}
+
+func (s *ListingService) loadPublishFacts(ctx context.Context, l *Listing) (*publishFacts, error) {
+	f := &publishFacts{vendorID: l.VendorID, signalID: l.SupplySignalID, queried: map[string]bool{}}
+	var err error
+	if f.vendor, err = s.vendors.FindByID(ctx, l.VendorID); err != nil {
+		return nil, fmt.Errorf("loading vendor: %w", err)
+	}
+	if l.SupplySignalID != nil {
+		if f.signal, err = s.signals.FindByID(ctx, *l.SupplySignalID); err != nil {
+			return nil, fmt.Errorf("loading source signal: %w", err)
+		}
+	}
+	ids := []uuid.UUID{}
+	for _, m := range l.MediaReferences {
+		f.queried[m.AssetID] = true
+		if id, err := uuid.Parse(m.AssetID); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	if f.states, err = s.media.MediaAssetStates(ctx, ids); err != nil {
+		return nil, fmt.Errorf("loading media assets: %w", err)
+	}
+	return f, nil
+}
+
+// covers reports whether the facts were loaded for this version of the
+// listing (same vendor, same signal, every referenced asset looked up).
+func (f *publishFacts) covers(l *Listing) bool {
+	if l.VendorID != f.vendorID || (l.SupplySignalID == nil) != (f.signalID == nil) ||
+		(l.SupplySignalID != nil && *l.SupplySignalID != *f.signalID) {
+		return false
+	}
+	for _, m := range l.MediaReferences {
+		if !f.queried[m.AssetID] {
+			return false
+		}
+	}
+	return true
+}
+
 // PublishCheck returns why the listing cannot cross the publication gate
 // (empty = publishable). It is the single definition of "publishable".
 func (s *ListingService) PublishCheck(ctx context.Context, l *Listing, now time.Time) ([]FieldError, error) {
+	f, err := s.loadPublishFacts(ctx, l)
+	if err != nil {
+		return nil, err
+	}
+	return checkPublishable(l, f, now), nil
+}
+
+func checkPublishable(l *Listing, f *publishFacts, now time.Time) []FieldError {
 	var r []FieldError
 	if l.Product == nil || strings.TrimSpace(*l.Product) == "" {
 		r = append(r, FieldError{"product", "is required"})
@@ -408,61 +485,34 @@ func (s *ListingService) PublishCheck(ctx context.Context, l *Listing, now time.
 	if !l.ExpiresAt.After(now) {
 		r = append(r, FieldError{"expires_at", "the supply evidence has expired"})
 	}
-
-	v, err := s.vendors.FindByID(ctx, l.VendorID)
-	if err != nil {
-		return nil, fmt.Errorf("loading vendor: %w", err)
+	switch {
+	case f.vendor == nil:
+		r = append(r, FieldError{"vendor", "does not exist"})
+	case f.vendor.Status != vendor.StatusActive:
+		r = append(r, FieldError{"vendor", "is " + string(f.vendor.Status) + ", not ACTIVE"})
 	}
 	switch {
-	case v == nil:
-		r = append(r, FieldError{"vendor", "does not exist"})
-	case v.Status != vendor.StatusActive:
-		r = append(r, FieldError{"vendor", "is " + string(v.Status) + ", not ACTIVE"})
-	}
-
-	if l.SupplySignalID == nil {
+	case l.SupplySignalID == nil:
 		r = append(r, FieldError{"supply_signal_id", "listing has no source signal"})
-	} else {
-		sig, err := s.signals.FindByID(ctx, *l.SupplySignalID)
-		if err != nil {
-			return nil, fmt.Errorf("loading source signal: %w", err)
-		}
-		if sig == nil {
-			r = append(r, FieldError{"supply_signal_id", "source signal does not exist"})
-		} else if sig.VendorID != l.VendorID {
-			r = append(r, FieldError{"supply_signal_id", "source signal belongs to another vendor"})
-		}
+	case f.signal == nil:
+		r = append(r, FieldError{"supply_signal_id", "source signal does not exist"})
+	case f.signal.VendorID != l.VendorID:
+		r = append(r, FieldError{"supply_signal_id", "source signal belongs to another vendor"})
 	}
-
-	mr, err := s.mediaProblems(ctx, l)
-	if err != nil {
-		return nil, err
-	}
-	return append(r, mr...), nil
+	return append(r, mediaProblems(l, f.states)...)
 }
 
 // mediaProblems: every reference must point at an existing MediaAsset owned
 // by the listing's vendor, and the primary image must be AVAILABLE. Media
 // itself is optional (Architecture Lock V2 does not require it).
-func (s *ListingService) mediaProblems(ctx context.Context, l *Listing) ([]FieldError, error) {
-	if len(l.MediaReferences) == 0 {
-		return nil, nil
-	}
+func mediaProblems(l *Listing, states map[uuid.UUID]MediaAssetState) []FieldError {
 	var r []FieldError
-	ids := make([]uuid.UUID, 0, len(l.MediaReferences))
 	for _, m := range l.MediaReferences {
 		id, err := uuid.Parse(m.AssetID)
 		if err != nil {
 			r = append(r, FieldError{"media", "a media reference has no valid asset"})
 			continue
 		}
-		ids = append(ids, id)
-	}
-	states, err := s.media.MediaAssetStates(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("loading media assets: %w", err)
-	}
-	for _, id := range ids {
 		st, ok := states[id]
 		switch {
 		case !ok:
@@ -478,8 +528,12 @@ func (s *ListingService) mediaProblems(ctx context.Context, l *Listing) ([]Field
 			}
 		}
 	}
-	return r, nil
+	return r
 }
+
+// errFactsOutdated: the listing changed between reading the publication
+// facts and locking it; Publish reloads and retries.
+var errFactsOutdated = errors.New("publication facts outdated")
 
 // Publish is the publication gate: the only way a listing becomes ACTIVE.
 // DRAFT -> ACTIVE once every PublishCheck passes; already ACTIVE -> no-op.
@@ -487,6 +541,28 @@ func (s *ListingService) mediaProblems(ctx context.Context, l *Listing) ([]Field
 // transaction as the transition, so concurrent publishes yield one event.
 // Publishing sends nothing to anyone and creates no offer or request.
 func (s *ListingService) Publish(ctx context.Context, listingID uuid.UUID, expectedUpdatedAt *time.Time, operatorID *uuid.UUID) (*Listing, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		pre, err := s.listings.FindByID(ctx, listingID)
+		if err != nil {
+			return nil, err
+		}
+		if pre == nil {
+			return nil, ErrListingNotFound
+		}
+		facts, err := s.loadPublishFacts(ctx, pre)
+		if err != nil {
+			return nil, err
+		}
+		l, err := s.publishLocked(ctx, listingID, facts, expectedUpdatedAt, operatorID)
+		if errors.Is(err, errFactsOutdated) {
+			continue
+		}
+		return l, err
+	}
+	return nil, ErrStale
+}
+
+func (s *ListingService) publishLocked(ctx context.Context, listingID uuid.UUID, facts *publishFacts, expectedUpdatedAt *time.Time, operatorID *uuid.UUID) (*Listing, error) {
 	return s.listings.Curate(ctx, listingID, func(cur *Listing) (*CurationChange, error) {
 		if cur.Status == ListingActive {
 			return nil, nil // already published: idempotent, nothing re-emitted
@@ -497,10 +573,11 @@ func (s *ListingService) Publish(ctx context.Context, listingID uuid.UUID, expec
 		if cur.Status != ListingDraft {
 			return nil, ErrInvalidTransition{Op: "publish", From: cur.Status}
 		}
-		reasons, err := s.PublishCheck(ctx, cur, time.Now())
-		if err != nil {
-			return nil, err
+		if !facts.covers(cur) {
+			return nil, errFactsOutdated
 		}
+		// No database access here: the row lock is held.
+		reasons := checkPublishable(cur, facts, time.Now())
 		if len(reasons) > 0 {
 			return nil, ErrNotPublishable{Reasons: reasons}
 		}

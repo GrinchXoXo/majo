@@ -15,6 +15,11 @@ func (f *fakeListingRepo) Curate(ctx context.Context, id uuid.UUID, decide Curat
 	if !ok {
 		return nil, ErrListingNotFound
 	}
+	if f.beforeDecide != nil {
+		hook := f.beforeDecide
+		f.beforeDecide = nil
+		hook(stored)
+	}
 	snapshot := *stored
 	ch, err := decide(&snapshot)
 	if err != nil {

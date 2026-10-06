@@ -494,3 +494,59 @@ func TestCuration_DraftCreationDoesNotPublish(t *testing.T) {
 		}
 	}
 }
+
+func TestCuration_EditCannotChooseUnavailablePrimary(t *testing.T) {
+	f := newCurationFixture(t)
+	id := uuid.MustParse(f.img2)
+	st := f.media.states[id]
+	st.Status = "REMOVED"
+	f.media.states[id] = st
+	f.rebuild()
+	if _, err := f.svc.Publish(context.Background(), f.id, nil, nil); err != nil {
+		t.Fatal(err) // img1 is primary and available: publishable
+	}
+	_, err := f.svc.Edit(context.Background(), f.id, ListingEdit{PrimaryAssetID: &f.img2}, nil)
+	var verr ValidationError
+	if !errors.As(err, &verr) || verr.Problems[0].Field != "primary_media_asset_id" {
+		t.Fatalf("a REMOVED image cannot become primary of a live listing: %v", err)
+	}
+	if PrimaryMedia(f.get().MediaReferences).AssetID != f.img1 {
+		t.Fatal("primary changed")
+	}
+}
+
+// Publication facts are read before the row lock; if the listing gains
+// media in between (late photos synced into the draft), Publish re-reads
+// the facts and re-checks against the locked row rather than judging it on
+// facts that do not cover it.
+func TestCuration_PublishRechecksWhenListingChangedBeforeLock(t *testing.T) {
+	f := newCurationFixture(t)
+	late := uuid.New() // a new photo of the same vendor
+	f.media.states[late] = MediaAssetState{OwnerVendorID: f.vendorID, Kind: "image", Status: "AVAILABLE"}
+	f.rebuild()
+	f.repo.beforeDecide = func(stored *Listing) {
+		stored.MediaReferences = append(stored.MediaReferences, MediaReference{Type: "image", AssetID: late.String()})
+	}
+	got, err := f.svc.Publish(context.Background(), f.id, nil, nil)
+	if err != nil || got.Status != ListingActive || len(got.MediaReferences) != 4 {
+		t.Fatalf("after re-reading facts the listing (with its late photo) publishes: %v", err)
+	}
+	if f.eventsOf(event.SupplyListingPublished) != 1 {
+		t.Fatal("one publication event")
+	}
+
+	// A foreign asset slipping in is caught by the re-check.
+	g := newCurationFixture(t)
+	foreign := uuid.New()
+	g.media.states[foreign] = MediaAssetState{OwnerVendorID: uuid.New(), Kind: "image", Status: "AVAILABLE"}
+	g.rebuild()
+	g.repo.beforeDecide = func(stored *Listing) {
+		stored.MediaReferences = append(stored.MediaReferences, MediaReference{Type: "image", AssetID: foreign.String()})
+	}
+	if _, err := g.svc.Publish(context.Background(), g.id, nil, nil); !errors.As(err, new(ErrNotPublishable)) {
+		t.Fatalf("foreign asset must block: %v", err)
+	}
+	if g.get().Status != ListingDraft {
+		t.Fatal("must stay DRAFT")
+	}
+}

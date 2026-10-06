@@ -17,7 +17,7 @@ import (
 // Phase 4A Step 4: operator curation endpoints.
 //
 //	POST  /api/supply-listings                    signal -> DRAFT (unchanged behaviour)
-//	GET   /api/supply-listings/{id}               listing + provenance + media + publish blockers
+//	GET   /api/supply-listings/{id}               listing + provenance + media + publish blockers (operator-only)
 //	PATCH /api/supply-listings/{id}               explicit marketplace fields only (never status)
 //	POST  /api/supply-listings/{id}/publish       DRAFT -> ACTIVE (the publication gate)
 //	POST  /api/supply-listings/{id}/activate      legacy alias of /publish (same operation)
@@ -294,8 +294,8 @@ func (h *SupplyListingHandlers) Reject(w http.ResponseWriter, r *http.Request) {
 
 // Media handles GET /api/supply-listings/{id}/media/{asset}: the bytes of
 // one AVAILABLE MediaAsset referenced by this listing, read through the
-// storage.Provider boundary. Only the listing's own media can be fetched;
-// storage keys and credentials never reach the browser.
+// storage.Provider boundary. Only the listing's own media can be fetched,
+// and no storage credentials or provider URLs reach the browser.
 func (h *SupplyListingHandlers) Media(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUIDParam(w, r)
 	if !ok {

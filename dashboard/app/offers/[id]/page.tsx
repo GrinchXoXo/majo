@@ -99,6 +99,18 @@ export default function ListingCurationPage() {
     load();
   }, [load]);
 
+  // Re-read after an action. Never turns a completed action into an error:
+  // if the reload fails the action's own result still stands.
+  const refresh = async (): Promise<boolean> => {
+    try {
+      reset(await getListingDetail(id));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const staleNote = (fresh: boolean) => (fresh ? "" : " (The page could not be reloaded; refresh it to see the latest state.)");
+
   // The edit body: only fields that actually changed.
   const changes = useMemo<ListingEditBody>(() => {
     if (!detail || !form) return {};
@@ -127,6 +139,7 @@ export default function ListingCurationPage() {
         <p style={{ color: "crimson" }} data-testid="load-error">
           {loadError}
         </p>
+        <OperatorToken onChange={load} />
       </div>
     );
   }
@@ -148,8 +161,7 @@ export default function ListingCurationPage() {
     setNotice(null);
     try {
       await patchListing(id, { ...changes, expected_updated_at: detail.updated_at });
-      reset(await getListingDetail(id));
-      setNotice({ kind: "ok", text: "Changes saved." });
+      setNotice({ kind: "ok", text: "Changes saved." + staleNote(await refresh()) });
     } catch (e) {
       setNotice(describeError(e));
     } finally {
@@ -162,11 +174,15 @@ export default function ListingCurationPage() {
     setNotice(null);
     try {
       const l = await publishListing(id, detail.updated_at);
-      reset(await getListingDetail(id));
-      setNotice(l.status === "ACTIVE" ? { kind: "ok", text: `Published ${l.public_reference}.` } : { kind: "error", text: `Unexpected status ${l.status}.` });
+      const fresh = await refresh();
+      setNotice(
+        l.status === "ACTIVE"
+          ? { kind: "ok", text: `Published ${l.public_reference}.` + staleNote(fresh) }
+          : { kind: "error", text: `Unexpected status ${l.status}.` },
+      );
     } catch (e) {
       setNotice(describeError(e));
-      load();
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -177,9 +193,11 @@ export default function ListingCurationPage() {
     setNotice(null);
     try {
       const l = await rejectListing(id, reason, detail.updated_at);
-      reset(await getListingDetail(id));
+      const fresh = await refresh();
       setReason("");
-      setNotice(l.status === "ARCHIVED" ? { kind: "ok", text: "Listing rejected." } : { kind: "error", text: `Unexpected status ${l.status}.` });
+      setNotice(
+        l.status === "ARCHIVED" ? { kind: "ok", text: "Listing rejected." + staleNote(fresh) } : { kind: "error", text: `Unexpected status ${l.status}.` },
+      );
     } catch (e) {
       setNotice(describeError(e));
     } finally {

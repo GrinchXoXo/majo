@@ -461,7 +461,7 @@ export type ListingDetailDTO = SupplyListingDTO & {
 };
 
 export async function getListingDetail(id: string): Promise<ListingDetailDTO> {
-  return curationCall<ListingDetailDTO>(`/api/supply-listings/${id}`, { method: "GET" });
+  return curationCall<ListingDetailDTO>(`/api/supply-listings/${id}`, { method: "GET", headers: operatorHeaders(false) });
 }
 
 export type ListingEditBody = {

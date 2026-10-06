@@ -40,6 +40,9 @@ type fakeListingRepo struct {
 	// curation transaction.
 	curationAudits []*audit.Entry
 	curationEvents []*event.Event
+	// beforeDecide, if set, runs once on the stored row just before the next
+	// Curate decision (simulates a concurrent change).
+	beforeDecide func(stored *Listing)
 }
 
 func newFakeListingRepo() *fakeListingRepo {

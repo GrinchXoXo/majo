@@ -219,7 +219,8 @@ func main() {
 	supplyListingHandlers := httpserver.NewSupplyListingHandlers(listingRepo, listingService, listingRepo, mediaStore, operatorAuth, logger)
 	mux.HandleFunc("POST /api/supply-listings", operatorAuth.Require(supplyListingHandlers.CreateFromSignal))
 	mux.HandleFunc("GET /api/supply-listings", supplyListingHandlers.Search)
-	mux.HandleFunc("GET /api/supply-listings/{id}", supplyListingHandlers.Get)
+	// The detail carries the vendor's raw messages (evidence): operator-only.
+	mux.HandleFunc("GET /api/supply-listings/{id}", operatorAuth.Require(supplyListingHandlers.Get))
 	mux.HandleFunc("PATCH /api/supply-listings/{id}", operatorAuth.Require(supplyListingHandlers.Patch))
 	mux.HandleFunc("POST /api/supply-listings/{id}/publish", operatorAuth.Require(supplyListingHandlers.PublishListing))
 	// Legacy alias kept for existing callers: the same publication gate.

@@ -228,9 +228,13 @@ with sync_playwright() as pw:
     # Stale tab.
     stale = browser.new_page()
     stale.goto(f"{DASH}/offers/{LID}")
-    stale.wait_for_selector("[data-testid=public-ref]")
-    stale.get_by_label("Operator token").fill(TOKEN)  # the token is per browser tab (sessionStorage)
+    # The token is per browser tab (sessionStorage); the detail itself is operator-only.
+    stale.wait_for_selector("[data-testid=load-error]")
+    ok("authorization" in stale.locator("[data-testid=load-error]").inner_text().lower(),
+       "a new tab without the token cannot open the listing detail")
+    stale.get_by_label("Operator token").fill(TOKEN)
     stale.get_by_role("button", name="Use token").click()
+    stale.wait_for_selector("[data-testid=public-ref]")
     page.fill("#f-condition", "Brand new, sealed")
     page.click("[data-testid=save]")
     page.wait_for_function("document.querySelector('[data-testid=notice-ok]')?.innerText.includes('saved')")
@@ -244,8 +248,6 @@ with sync_playwright() as pw:
 
     # Publish without authorization: error shown, still DRAFT.
     page.get_by_role("button", name="Clear").click()
-    page.reload()
-    page.wait_for_selector("[data-testid=publish]")
     page.click("[data-testid=publish]")
     page.wait_for_selector("[data-testid=notice-error]")
     ok("authorization" in page.locator("[data-testid=notice-error]").inner_text().lower(), "unauthorized publish -> error shown")

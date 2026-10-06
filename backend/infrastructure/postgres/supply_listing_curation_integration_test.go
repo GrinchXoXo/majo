@@ -513,7 +513,7 @@ func (e *listingEnv) server(token string) httpClient {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/supply-listings", auth.Require(h.CreateFromSignal))
 	mux.HandleFunc("GET /api/supply-listings", h.Search)
-	mux.HandleFunc("GET /api/supply-listings/{id}", h.Get)
+	mux.HandleFunc("GET /api/supply-listings/{id}", auth.Require(h.Get))
 	mux.HandleFunc("PATCH /api/supply-listings/{id}", auth.Require(h.Patch))
 	mux.HandleFunc("POST /api/supply-listings/{id}/publish", auth.Require(h.PublishListing))
 	mux.HandleFunc("POST /api/supply-listings/{id}/activate", auth.Require(h.PublishListing))
@@ -535,6 +535,7 @@ func TestIntegration_Curation_HTTP(t *testing.T) {
 		{"POST", base + "/publish", ""}, {"POST", base + "/publish", "wrong-token-wrong-token"},
 		{"POST", base + "/activate", ""}, {"POST", base + "/reject", ""}, {"PATCH", base, ""},
 		{"GET", base + "/media/" + l.MediaReferences[0].AssetID, ""}, {"POST", "/api/supply-listings", ""},
+		{"GET", base, ""},
 	} {
 		code, body, _ := c.do(tc.method, tc.path, tc.token, map[string]any{})
 		if code != http.StatusUnauthorized || body["code"] != "UNAUTHORIZED" {
@@ -558,7 +559,7 @@ func TestIntegration_Curation_HTTP(t *testing.T) {
 	}
 
 	// Detail.
-	code, detail, _ := c.do("GET", base, "", nil)
+	code, detail, _ := c.do("GET", base, testOperatorToken, nil)
 	if code != 200 || detail["source_signal"] == nil || len(detail["source_messages"].([]any)) != 4 ||
 		len(detail["media"].([]any)) != 3 || len(detail["publish_blockers"].([]any)) != 0 || detail["vendor"] == nil {
 		t.Fatalf("detail: %d %v", code, detail)
@@ -658,3 +659,44 @@ func TestIntegration_Curation_DevelopmentWithoutTokenIsOpen(t *testing.T) {
 }
 
 func i64(v int64) *int64 { return &v }
+
+// Publication must not need a second pool connection while it holds the
+// listing row lock: with a tiny pool, concurrent publishes of different
+// listings must all complete (no connection-pool deadlock).
+func TestIntegration_Curation_ConcurrentPublishesWithSmallPool(t *testing.T) {
+	e := newListingEnv(t)
+	ctx := context.Background()
+	v := e.vendorAt("Pool", "2348051120013", "Benin City")
+	var ids []uuid.UUID
+	for i := 0; i < 8; i++ {
+		l, _, err := e.svc.CreateFromSignal(ctx, e.signal(v, fmt.Sprint("Pool item ", i), 1000+int64(i), "", nil), event.ActorSystem, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, l.ID)
+	}
+	e.db.SetMaxOpenConns(2)
+	defer e.db.SetMaxOpenConns(0)
+	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	errs := make(chan error, len(ids))
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id uuid.UUID) {
+			defer wg.Done()
+			_, err := e.svc.Publish(tctx, id, nil, nil)
+			errs <- err
+		}(id)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("publish under a small pool: %v", err)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM supply_listings WHERE vendor_id = $1 AND status = 'ACTIVE'`, v); n != len(ids) {
+		t.Fatalf("want %d ACTIVE, got %d", len(ids), n)
+	}
+}
