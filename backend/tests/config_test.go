@@ -21,6 +21,10 @@ func TestConfigLoadRequiresDatabaseURL(t *testing.T) {
 func TestConfigLoadSucceedsWithDatabaseURL(t *testing.T) {
 	os.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/middleman")
 	defer os.Unsetenv("DATABASE_URL")
+	// Phase 4A Step 4 follow-up: without an explicit APP_ENV=development the
+	// operator token is required.
+	os.Setenv("OPERATOR_API_TOKEN", "a-long-enough-operator-token")
+	defer os.Unsetenv("OPERATOR_API_TOKEN")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -64,6 +68,8 @@ func TestConfigDevelopmentWithoutSecretAllowsUnsignedExplicitly(t *testing.T) {
 	os.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/middleman")
 	os.Unsetenv("APP_ENV")
 	os.Unsetenv("WHATSAPP_APP_SECRET")
+	os.Setenv("OPERATOR_API_TOKEN", "a-long-enough-operator-token") // isolates the webhook rule
+	defer os.Unsetenv("OPERATOR_API_TOKEN")
 	defer os.Unsetenv("DATABASE_URL")
 
 	cfg, err := config.Load()

@@ -121,6 +121,7 @@ func (s *supplyEnv) fullWorker(id string, types ...string) *jobs.Worker {
 	}
 	if all || contains(types, media.JobTypeDownload) {
 		w.Register(media.JobTypeDownload, ing.Handle, ing.OnFailure)
+		w.RegisterFailureEvent(media.JobTypeDownload, ing.FailureEvent)
 	}
 	if all || contains(types, supply.JobTypeGroup) {
 		w.Register(supply.JobTypeGroup, s.intake.Handle, nil)

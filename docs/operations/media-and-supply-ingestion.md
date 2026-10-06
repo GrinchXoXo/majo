@@ -11,7 +11,7 @@ There is one Go process. The in-process worker polls the Postgres `jobs` table a
 | `MEDIA_DOWNLOAD` | the webhook, for vendor image/video; also the startup backfill | Graph download → validate → SHA-256 → `storage.Provider` → `media_assets` + `MEDIA_ASSET_STORED` |
 | `SUPPLY_GROUPING` | supply intake (window timer, closing text, media finished) | evaluates the submission a message belongs to → `supply_signals` + `supply_signal_sources` + `SUPPLY_SIGNAL_CREATED` / `SUPPLY_SIGNAL_UPDATED` |
 
-Execution is **at-least-once with idempotent effects**:
+Execution is **at-least-once with idempotent effects**. A terminal failure and its failure event (`MEDIA_INGESTION_FAILED`) are stored in one transaction:
 - Claims use `FOR UPDATE SKIP LOCKED`.
 - A `RUNNING` job older than `JOBS_LEASE` is reclaimed.
 - Every state change is fenced on `locked_by`.
@@ -150,7 +150,7 @@ The operator is the publication gate. A listing becomes ACTIVE only through `POS
 
 **Dashboard:** *Supply Listings* (`/offers`) opens on the DRAFT queue (newest first; expired drafts are not shown). A listing page (`/offers/{id}`) shows the editable marketplace fields next to the source signal's values, the media previews, the source messages, and why the listing cannot be published yet.
 
-**Operator token:** set `OPERATOR_API_TOKEN` (16+ characters; required unless `APP_ENV=development`, and `APP_ENV` defaults to development, so set it explicitly in every deployment). The listing detail (it shows the vendor's raw messages), editing, publishing, rejecting and media previews need `Authorization: Bearer <token>`. In the dashboard, the operator types it once per browser tab. There are no per-operator identities, so audit rows say OPERATOR without a name. Listing search and the per-vendor list, like the other operator pages, are still unprotected, as before.
+**Operator token:** set `OPERATOR_API_TOKEN` (16+ characters). The backend refuses to start without it unless `APP_ENV=development` is set *explicitly* (the APP_ENV default does not count). Every listing endpoint needs `Authorization: Bearer <token>`: search, the per-vendor list, the detail (it shows the vendor's raw messages), editing, publishing, rejecting and media previews. In the dashboard, the operator types it once per browser tab. There are no per-operator identities, so audit rows say OPERATOR without a name. Other operator pages (requests, vendors, responses) are still unprotected, as before.
 
 | Operation | Allowed from | Result | Event / audit |
 |---|---|---|---|

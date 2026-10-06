@@ -149,7 +149,7 @@ func (j *memJobs) Claim(context.Context, []string, string, time.Duration) (*jobs
 }
 func (j *memJobs) Complete(context.Context, uuid.UUID, string) error                 { return nil }
 func (j *memJobs) Retry(context.Context, uuid.UUID, string, time.Time, string) error { return nil }
-func (j *memJobs) Fail(context.Context, uuid.UUID, string, string) error             { return nil }
+func (j *memJobs) Fail(context.Context, uuid.UUID, string, string, *event.Event) error { return nil }
 
 type recEvents struct{ all []*event.Event }
 
@@ -378,16 +378,21 @@ func TestIngest_MalformedPayloadIsPermanent(t *testing.T) {
 	}
 }
 
-func TestIngest_OnFailureWritesEvent(t *testing.T) {
+func TestIngest_FailureEventDescribesTheFailure(t *testing.T) {
 	h := newHarness(t)
 	msg := uuid.New()
 	j := h.enqueue(t, uuid.New(), msg, "m", "image")
 	j.LastError = "whatsapp media metadata: status 404"
-	h.ing.OnFailure(context.Background(), j, jobs.Permanent(errors.New("404")))
-	if len(h.events.all) != 1 || h.events.all[0].EventType != event.MediaIngestionFailed || *h.events.all[0].EntityID != msg {
-		t.Fatalf("expected MEDIA_INGESTION_FAILED on the message, got %+v", h.events.all)
+	ev := h.ing.FailureEvent(j, jobs.Permanent(errors.New("404")))
+	if ev == nil || ev.EventType != event.MediaIngestionFailed || *ev.EntityID != msg {
+		t.Fatalf("expected MEDIA_INGESTION_FAILED on the message, got %+v", ev)
 	}
-	if h.events.all[0].Payload["error"] != j.LastError || h.events.all[0].Payload["permanent"] != true {
-		t.Fatalf("payload: %v", h.events.all[0].Payload)
+	if ev.Payload["error"] != j.LastError || ev.Payload["permanent"] != true {
+		t.Fatalf("payload: %v", ev.Payload)
+	}
+	// The event is no longer written separately after the fact.
+	h.ing.OnFailure(context.Background(), j, jobs.Permanent(errors.New("404")))
+	if len(h.events.all) != 0 {
+		t.Fatalf("OnFailure must not write the failure event (it is stored with the FAILED transition): %+v", h.events.all)
 	}
 }

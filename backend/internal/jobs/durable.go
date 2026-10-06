@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/middleman/backend/internal/event"
 )
 
 // Status of a durable job.
@@ -66,7 +68,9 @@ type Store interface {
 	// Retry returns the job to PENDING with a new run_at and the error.
 	Retry(ctx context.Context, id uuid.UUID, workerID string, runAt time.Time, lastErr string) error
 	// Fail marks the job FAILED (terminal) with the error. The row is kept.
-	Fail(ctx context.Context, id uuid.UUID, workerID string, lastErr string) error
+	// If ev is non-nil it is written in the SAME transaction, so a crash can
+	// never leave a FAILED job without its failure event (or the reverse).
+	Fail(ctx context.Context, id uuid.UUID, workerID string, lastErr string, ev *event.Event) error
 }
 
 // Handler executes one job. Returning nil completes the job. Returning an
@@ -76,8 +80,13 @@ type Store interface {
 type Handler func(ctx context.Context, j *Job) error
 
 // FailureListener is told when a job fails terminally, after the failure is
-// persisted (e.g. to record a domain event). Optional.
+// persisted, for follow-up work that may be lost on a crash. Optional.
 type FailureListener func(ctx context.Context, j *Job, err error)
+
+// FailureEvent builds the domain event recording a terminal failure. It is
+// persisted atomically with the FAILED transition. j.LastError and
+// j.Status are already set to their terminal values. Optional; nil = none.
+type FailureEvent func(j *Job, err error) *event.Event
 
 type permanentError struct{ err error }
 
@@ -141,6 +150,7 @@ type Worker struct {
 	cfg       WorkerConfig
 	handlers  map[string]Handler
 	onFailure map[string]FailureListener
+	failEvent map[string]FailureEvent
 	logger    *slog.Logger
 
 	mu  sync.Mutex
@@ -162,9 +172,15 @@ func NewWorker(store Store, cfg WorkerConfig, logger *slog.Logger) *Worker {
 		cfg.Lease = 5 * time.Minute
 	}
 	return &Worker{
-		store: store, cfg: cfg, handlers: map[string]Handler{}, onFailure: map[string]FailureListener{},
+		store: store, cfg: cfg, handlers: map[string]Handler{}, onFailure: map[string]FailureListener{}, failEvent: map[string]FailureEvent{},
 		logger: logger, rnd: rand.New(rand.NewSource(time.Now().UnixNano())), now: time.Now,
 	}
+}
+
+// RegisterFailureEvent sets the event written atomically with a terminal
+// failure of jobType (Phase 4A Step 4 follow-up).
+func (w *Worker) RegisterFailureEvent(jobType string, fn FailureEvent) {
+	w.failEvent[jobType] = fn
 }
 
 // Register binds a handler (and optional terminal-failure listener) to a job type.
@@ -252,11 +268,15 @@ func (w *Worker) process(ctx context.Context, j *Job, workerID string) {
 		if !IsPermanent(herr) {
 			reason = fmt.Sprintf("attempts exhausted (%d/%d): %s", j.Attempts, j.MaxAttempts, reason)
 		}
-		if err := w.store.Fail(bk, j.ID, workerID, reason); err != nil {
+		j.LastError, j.Status = reason, StatusFailed
+		var ev *event.Event
+		if fn := w.failEvent[j.Type]; fn != nil {
+			ev = fn(j, herr)
+		}
+		if err := w.store.Fail(bk, j.ID, workerID, reason, ev); err != nil {
 			log.Error("failing durable job", "error", err, "job_error", reason)
 			return
 		}
-		j.LastError, j.Status = reason, StatusFailed
 		log.Error("durable job failed terminally", "error", reason)
 		if l := w.onFailure[j.Type]; l != nil {
 			l(bk, j, herr)

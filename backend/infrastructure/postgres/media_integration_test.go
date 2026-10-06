@@ -135,6 +135,7 @@ func (e *mediaEnv) worker(id string, lease time.Duration) *jobs.Worker {
 	w := jobs.NewWorker(e.jobs, jobs.WorkerConfig{ID: id, PollInterval: 5 * time.Millisecond, Lease: lease,
 		Retry: jobs.RetryPolicy{BaseDelay: e.backoff, MaxDelay: 4 * e.backoff}}, discard())
 	w.Register(media.JobTypeDownload, ing.Handle, ing.OnFailure)
+	w.RegisterFailureEvent(media.JobTypeDownload, ing.FailureEvent)
 	return w
 }
 

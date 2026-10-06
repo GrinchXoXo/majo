@@ -353,12 +353,6 @@ export type SupplyListingDTO = {
   primary_media_asset_id: string | null;
 };
 
-export async function searchSupplyListings(params?: Record<string, string>): Promise<SupplyListingDTO[]> {
-  const query = params ? "?" + new URLSearchParams(params).toString() : "";
-  const res = await fetch(`${API_URL}/api/supply-listings${query}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`failed to search listings: ${res.status}`);
-  return (await res.json()) ?? [];
-}
 
 // --- Phase 4A Step 4: listing curation (operator-only actions) ---
 
@@ -414,6 +408,12 @@ async function curationCall<T>(path: string, init: RequestInit): Promise<T> {
     throw new ApiError(res.status, body.code ?? "ERROR", body.error ?? `request failed: ${res.status}`, body.problems ?? []);
   }
   return body as T;
+}
+
+// Listing search is operator-only (it can list drafts and rejected listings).
+export async function searchSupplyListings(params?: Record<string, string>): Promise<SupplyListingDTO[]> {
+  const query = params ? "?" + new URLSearchParams(params).toString() : "";
+  return (await curationCall<SupplyListingDTO[] | null>(`/api/supply-listings${query}`, { method: "GET", headers: operatorHeaders(false) })) ?? [];
 }
 
 export type ListingDetailDTO = SupplyListingDTO & {

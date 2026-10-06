@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { searchSupplyListings, listVendors, type SupplyListingDTO } from "@/lib/api";
+import { ApiError, searchSupplyListings, listVendors, type SupplyListingDTO } from "@/lib/api";
 import ListingMedia from "@/components/ListingMedia";
 import OperatorToken from "@/components/OperatorToken";
 import { STATUS_COLORS, formatDate, formatPrice } from "@/lib/listing";
@@ -37,9 +37,16 @@ export default function SupplyListingsPage() {
       setListings(await searchSupplyListings({ status: statusFilter }));
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load listings");
+      setListings(null);
+      setError(
+        e instanceof ApiError && e.code === "UNAUTHORIZED"
+          ? "Enter the operator token (top right) to see listings."
+          : e instanceof Error
+            ? e.message
+            : "Failed to load listings",
+      );
     }
-  }, [statusFilter]);
+  }, [statusFilter, tokenTick]);
 
   useEffect(() => {
     load();

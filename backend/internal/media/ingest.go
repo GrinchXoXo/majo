@@ -244,16 +244,18 @@ func (s *Ingestor) Handle(ctx context.Context, j *jobs.Job) (err error) {
 	return s.notifySettled(ctx, p.MessageID)
 }
 
-// OnFailure records MEDIA_INGESTION_FAILED after a job fails terminally,
-// so operators can see "failed after N attempts" alongside the message.
-func (s *Ingestor) OnFailure(ctx context.Context, j *jobs.Job, cause error) {
+// FailureEvent builds MEDIA_INGESTION_FAILED for a terminally failed job,
+// so operators can see "failed after N attempts" alongside the message. The
+// worker stores it in the same transaction as the FAILED transition
+// (register with Worker.RegisterFailureEvent).
+func (s *Ingestor) FailureEvent(j *jobs.Job, cause error) *event.Event {
 	p, _ := parsePayload(j.Payload)
 	var entityID *uuid.UUID
 	if p.MessageID != uuid.Nil {
 		m := p.MessageID
 		entityID = &m
 	}
-	if err := s.events.Write(ctx, &event.Event{
+	return &event.Event{
 		EventType: event.MediaIngestionFailed, EntityType: "message", EntityID: entityID,
 		ActorType: event.ActorSystem,
 		Payload: event.Merge(map[string]any{
@@ -262,9 +264,14 @@ func (s *Ingestor) OnFailure(ctx context.Context, j *jobs.Job, cause error) {
 			"attempts": j.Attempts, "max_attempts": j.MaxAttempts, "permanent": jobs.IsPermanent(cause),
 			"error": j.LastError, "channel": p.Provider,
 		}),
-	}); err != nil {
-		s.logger.Error("writing MEDIA_INGESTION_FAILED event", "job_id", j.ID, "error", err)
 	}
+}
+
+// OnFailure runs after the failure (and its event) is stored: it tells the
+// supply intake the message's media has settled. If this is lost in a
+// crash, the supply window job still evaluates the submission later.
+func (s *Ingestor) OnFailure(ctx context.Context, j *jobs.Job, cause error) {
+	p, _ := parsePayload(j.Payload)
 	if p.MessageID != uuid.Nil {
 		if err := s.notifySettled(ctx, p.MessageID); err != nil {
 			// The supply window job still evaluates the submission later.

@@ -512,7 +512,8 @@ func (e *listingEnv) server(token string) httpClient {
 	h := httpserver.NewSupplyListingHandlers(e.listings, e.svc, e.listings, e.store, auth, discard())
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/supply-listings", auth.Require(h.CreateFromSignal))
-	mux.HandleFunc("GET /api/supply-listings", h.Search)
+	mux.HandleFunc("GET /api/supply-listings", auth.Require(h.Search))
+	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", auth.Require(h.ListByVendor))
 	mux.HandleFunc("GET /api/supply-listings/{id}", auth.Require(h.Get))
 	mux.HandleFunc("PATCH /api/supply-listings/{id}", auth.Require(h.Patch))
 	mux.HandleFunc("POST /api/supply-listings/{id}/publish", auth.Require(h.PublishListing))
@@ -535,7 +536,8 @@ func TestIntegration_Curation_HTTP(t *testing.T) {
 		{"POST", base + "/publish", ""}, {"POST", base + "/publish", "wrong-token-wrong-token"},
 		{"POST", base + "/activate", ""}, {"POST", base + "/reject", ""}, {"PATCH", base, ""},
 		{"GET", base + "/media/" + l.MediaReferences[0].AssetID, ""}, {"POST", "/api/supply-listings", ""},
-		{"GET", base, ""},
+		{"GET", base, ""}, {"GET", "/api/supply-listings?status=DRAFT", ""},
+		{"GET", "/api/vendors/" + l.VendorID.String() + "/supply-listings", ""},
 	} {
 		code, body, _ := c.do(tc.method, tc.path, tc.token, map[string]any{})
 		if code != http.StatusUnauthorized || body["code"] != "UNAUTHORIZED" {

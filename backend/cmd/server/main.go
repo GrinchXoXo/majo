@@ -143,6 +143,7 @@ func main() {
 		Retry: jobs.RetryPolicy{BaseDelay: cfg.JobsBackoffBase, MaxDelay: cfg.JobsBackoffMax},
 	}, logger)
 	durableWorker.Register(media.JobTypeDownload, mediaIngestor.Handle, mediaIngestor.OnFailure)
+	durableWorker.RegisterFailureEvent(media.JobTypeDownload, mediaIngestor.FailureEvent)
 
 	// --- Phase 4A.2: vendor media + captions -> grouped SupplySignal ---
 	// routing classifies vendor content; the intake groups it (durable
@@ -218,7 +219,8 @@ func main() {
 	}
 	supplyListingHandlers := httpserver.NewSupplyListingHandlers(listingRepo, listingService, listingRepo, mediaStore, operatorAuth, logger)
 	mux.HandleFunc("POST /api/supply-listings", operatorAuth.Require(supplyListingHandlers.CreateFromSignal))
-	mux.HandleFunc("GET /api/supply-listings", supplyListingHandlers.Search)
+	// Search can list drafts and rejected listings: operator-only.
+	mux.HandleFunc("GET /api/supply-listings", operatorAuth.Require(supplyListingHandlers.Search))
 	// The detail carries the vendor's raw messages (evidence): operator-only.
 	mux.HandleFunc("GET /api/supply-listings/{id}", operatorAuth.Require(supplyListingHandlers.Get))
 	mux.HandleFunc("PATCH /api/supply-listings/{id}", operatorAuth.Require(supplyListingHandlers.Patch))
@@ -227,7 +229,7 @@ func main() {
 	mux.HandleFunc("POST /api/supply-listings/{id}/activate", operatorAuth.Require(supplyListingHandlers.PublishListing))
 	mux.HandleFunc("POST /api/supply-listings/{id}/reject", operatorAuth.Require(supplyListingHandlers.Reject))
 	mux.HandleFunc("GET /api/supply-listings/{id}/media/{asset}", operatorAuth.Require(supplyListingHandlers.Media))
-	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", supplyListingHandlers.ListByVendor)
+	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", operatorAuth.Require(supplyListingHandlers.ListByVendor))
 
 	offerHandlers := httpserver.NewOfferHandlers(offerRepo, requestRepo, txService, txRepo, offerDelivery)
 	mux.HandleFunc("GET /api/requests/{id}/offers", offerHandlers.List) // read-only since Phase 3.1

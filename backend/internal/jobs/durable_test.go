@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/middleman/backend/internal/event"
 )
 
 // memStore is an in-memory jobs.Store for worker unit tests. The Postgres
@@ -20,6 +22,8 @@ type memStore struct {
 	mu   sync.Mutex
 	jobs []*Job
 	now  time.Time
+	// failEvents are the events stored together with a FAILED transition.
+	failEvents []*event.Event
 }
 
 func (m *memStore) Enqueue(ctx context.Context, j *Job) (bool, error) {
@@ -81,12 +85,15 @@ func (m *memStore) Retry(ctx context.Context, id uuid.UUID, w string, runAt time
 	return err
 }
 
-func (m *memStore) Fail(ctx context.Context, id uuid.UUID, w string, e string) error {
+func (m *memStore) Fail(ctx context.Context, id uuid.UUID, w string, e string, ev *event.Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j, err := m.find(id, w)
 	if err == nil {
 		j.Status, j.LastError, j.LockedBy = StatusFailed, e, ""
+		if ev != nil {
+			m.failEvents = append(m.failEvents, ev)
+		}
 	}
 	return err
 }
@@ -265,5 +272,28 @@ func TestWorker_GracefulShutdownFinishesInFlightJob(t *testing.T) {
 	_, _ = s.Enqueue(context.Background(), &Job{Type: "T", IdempotencyKey: "k2", MaxAttempts: 3})
 	if ran, _ := w.RunOnce(ctx, "t/0"); ran {
 		t.Fatal("a stopped worker must not claim new jobs")
+	}
+}
+
+func TestWorker_FailureEventIsStoredWithTheFailedTransition(t *testing.T) {
+	s := &memStore{now: time.Now()}
+	_, _ = s.Enqueue(context.Background(), &Job{Type: "T", IdempotencyKey: "k", MaxAttempts: 2})
+	w := newTestWorker(s, func(ctx context.Context, j *Job) error { return errors.New("timeout") }, nil)
+	var seen *Job
+	w.RegisterFailureEvent("T", func(j *Job, err error) *event.Event {
+		seen = j
+		return &event.Event{EventType: "X_FAILED", Payload: map[string]any{"error": j.LastError}}
+	})
+	_, _ = w.RunOnce(context.Background(), "t/0") // attempt 1 -> retry: no event
+	if len(s.failEvents) != 0 {
+		t.Fatal("a retry must not produce the failure event")
+	}
+	s.now = s.jobs[0].RunAt
+	_, _ = w.RunOnce(context.Background(), "t/0") // attempt 2 -> terminal
+	if s.jobs[0].Status != StatusFailed || len(s.failEvents) != 1 {
+		t.Fatalf("want FAILED + exactly one event passed to Store.Fail, got %s / %d", s.jobs[0].Status, len(s.failEvents))
+	}
+	if seen.Status != StatusFailed || s.failEvents[0].Payload["error"] != "attempts exhausted (2/2): timeout" {
+		t.Fatalf("the event sees the terminal state: %+v", s.failEvents[0].Payload)
 	}
 }

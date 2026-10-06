@@ -139,8 +139,11 @@ func Load() (*Config, error) {
 	}
 
 	if cfg.OperatorAPIToken == "" {
-		if cfg.AppEnv != "development" {
-			return nil, fmt.Errorf("OPERATOR_API_TOKEN is required when APP_ENV=%s (listing publication must not be publicly callable)", cfg.AppEnv)
+		// Fail closed: running curation without a token needs APP_ENV to be
+		// SET to development explicitly; the APP_ENV default does not count,
+		// so a deployment that forgets both settings refuses to start.
+		if env, set := os.LookupEnv("APP_ENV"); !set || env != "development" {
+			return nil, fmt.Errorf("OPERATOR_API_TOKEN is required unless APP_ENV=development is set explicitly (APP_ENV=%q); listing publication must not be publicly callable", env)
 		}
 		cfg.AllowUnauthenticatedOperator = true
 	} else if len(cfg.OperatorAPIToken) < 16 {

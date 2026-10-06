@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/jobs"
 )
 
@@ -126,11 +128,32 @@ func (r *JobRepository) Retry(ctx context.Context, id uuid.UUID, workerID string
 		WHERE id = $1 AND status = 'RUNNING' AND locked_by = $2`, id.String(), workerID, runAt, truncate(lastErr))
 }
 
-func (r *JobRepository) Fail(ctx context.Context, id uuid.UUID, workerID string, lastErr string) error {
-	return r.transition(ctx, `
+// Fail marks the job FAILED and, when ev is set, writes it in the same
+// transaction: either both are stored or neither (lease lost -> neither).
+func (r *JobRepository) Fail(ctx context.Context, id uuid.UUID, workerID string, lastErr string, ev *event.Event) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
 		UPDATE jobs SET status = 'FAILED', last_error = $3, completed_at = now(), updated_at = now(),
 		       locked_at = NULL, locked_by = NULL
 		WHERE id = $1 AND status = 'RUNNING' AND locked_by = $2`, id.String(), workerID, truncate(lastErr))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return jobs.ErrLeaseLost
+	}
+	if ev != nil {
+		if err := insertEventTx(ctx, tx, ev); err != nil {
+			return fmt.Errorf("writing %s: %w", ev.EventType, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // FindByKey returns the job for (type, idempotency key), or nil. Used by
