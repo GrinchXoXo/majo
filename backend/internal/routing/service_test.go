@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -106,6 +107,9 @@ func (f *fakeRoutingRepo) CreateVendorResponse(ctx context.Context, resp *Vendor
 	}
 	if resp.ExtractedData == nil {
 		resp.ExtractedData = map[string]any{}
+	}
+	if resp.CreatedAt.IsZero() {
+		resp.CreatedAt = time.Now()
 	}
 	cp := *resp
 	f.responses[resp.ID] = &cp

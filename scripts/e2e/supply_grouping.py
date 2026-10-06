@@ -13,7 +13,9 @@ Scenarios (Phase 4A.2 prompt §70-§74):
        photo + "Yes"                                  -> not supply (ambiguous)
        photo + "Imported ladies bags ₦18,500"         -> supply signal
        "Yes boss, I get am for 620k"                  -> VendorResponse, not supply
-  D. two photos, no text                              -> no signal, media kept
+       then a photo with no caption right after the reply -> stays with the reply
+                                                         (VENDOR_MESSAGE_UNRESOLVED), not supply
+  D. two photos, no text (proactive)                  -> ONE incomplete signal, nothing inferred
 
 Env: BASE, APP_SECRET, DATABASE_URL (psql for read-only checks), MEDIA_DIR.
 Stdlib + psql only. Exits non-zero on the first failed check.
@@ -197,12 +199,17 @@ resp = wait(lambda: sql(f"""SELECT r.status || ' ' || vr.public_reference FROM v
                             JOIN vendor_requests vr ON vr.id = r.vendor_request_id
                             WHERE r.raw_message = 'Yes boss, I get am for 620k' AND vr.vendor_id = '{vc}'"""))
 ok(bool(resp), "the reply is a VendorResponse on the active request", resp)
+photo(f"c{RUN}after", "after-" + RUN)
+ok(webhook(C, f"wamid.{RUN}.c4", "image", media_id=f"c{RUN}after") == 200, "vendor: photo (no caption) right after the reply")
+unres = wait(lambda: sql(f"""SELECT e.payload->>'reason' FROM events e JOIN messages m ON m.id = e.entity_id
+                             WHERE e.event_type = 'VENDOR_MESSAGE_UNRESOLVED' AND m.external_message_id = 'wamid.{RUN}.c4'"""))
+ok(unres == "uncaptioned_media_right_after_a_vendor_reply", "the photo stays with the reply (unresolved, for review)", unres)
 time.sleep(1)
-ok(len(signals(vc)) == 1, "the reply did not create a SupplySignal")
+ok(len(signals(vc)) == 1, "neither the reply nor its photo created a SupplySignal")
 ok(bool(wait(lambda: asset_of(f"wamid.{RUN}.c1"))), "the ambiguous 'Yes' photo is still stored (4A.1)")
 
 # --- D ---------------------------------------------------------------------
-print("\nD. Photos without any text -> no invented supply (§11-12)")
+print("\nD. Proactive photos without any text -> one incomplete signal, nothing invented")
 D = "23470" + RUN + "44"
 vd = vendor("Dami " + RUN, D)
 photo(f"d{RUN}1", "d1-" + RUN)
@@ -215,7 +222,10 @@ done = wait(lambda: sql(f"""SELECT count(*) FROM jobs j JOIN messages m ON j.ide
                             WHERE m.external_message_id IN ('wamid.{RUN}.d1','wamid.{RUN}.d2') AND j.status = 'SUCCEEDED'""") == "2",
             timeout=float(os.environ.get("WINDOW_WAIT", "200")))
 ok(bool(done), "window evaluation ran for both photos")
-ok(signals(vd) == [], "no SupplySignal: media is evidence, not product/price")
+sd = signals(vd)
+ok(len(sd) == 1 and sd[0]["product"] == "" and sd[0]["price"] == "" and sd[0]["confidence"] == "0" and sd[0]["raw"] == "",
+   "one incomplete signal: no product, price or confidence invented", sd[0]["grouping"] if sd else "none")
+ok(evidence(sd[0]["id"])[1] == [asset_of(f"wamid.{RUN}.d1"), asset_of(f"wamid.{RUN}.d2")], "it references both stored photos, in order")
 
 print("\nScope")
 ok(sql(f"SELECT count(*) FROM supply_listings WHERE vendor_id IN ('{va}','{vb}','{vc}','{vd}')") == "0", "no SupplyListing created")

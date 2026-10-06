@@ -170,7 +170,8 @@ func (s *supplyEnv) send(from, wamid string, at time.Time, kind, body string) {
 			if s.count(`SELECT count(*) FROM messages m WHERE m.external_message_id = $1 AND (
 				EXISTS (SELECT 1 FROM supply_signal_sources ss WHERE ss.message_id = m.id) OR
 				EXISTS (SELECT 1 FROM jobs j WHERE j.job_type = 'SUPPLY_GROUPING' AND j.idempotency_key = m.id::text || ':text') OR
-				EXISTS (SELECT 1 FROM vendor_responses r WHERE r.raw_message = $2))`, wamid, body) > 0 {
+				EXISTS (SELECT 1 FROM vendor_responses r WHERE r.raw_message = $2) OR
+				EXISTS (SELECT 1 FROM events e WHERE e.event_type = 'VENDOR_MESSAGE_UNRESOLVED' AND e.entity_id = m.id))`, wamid, body) > 0 {
 				return
 			}
 			time.Sleep(5 * time.Millisecond)
@@ -380,11 +381,18 @@ func TestIntegration_Grouping_WindowBoundary(t *testing.T) {
 		t.Fatalf("119s: expected one grouped signal (2 photos share bytes -> 1 asset), got %+v", sig)
 	}
 	sig := s.signals(vOut)
-	if len(sig) != 1 || len(sig[0].Evidence.SourceMessageIDs) != 1 || len(sig[0].Evidence.MediaAssetIDs) != 0 || sig[0].Grouping != "text_only" {
-		t.Fatalf("121s: the text must not absorb the photo, got %+v", sig)
+	if len(sig) != 2 {
+		t.Fatalf("121s: expected the photo and the text to be separate signals, got %+v", sig)
 	}
-	if s.linkedAsset("wamid.BO1") == nil {
-		t.Fatal("the ungrouped photo is still stored")
+	media, text := sig[0], sig[1]
+	if text.Grouping != "text_only" {
+		media, text = text, media
+	}
+	if media.Product != nil || len(media.Evidence.MediaAssetIDs) != 1 || !strings.HasPrefix(media.Grouping, "grouped_media_only") {
+		t.Fatalf("121s: the photo alone is an incomplete media-only signal, got %+v", media)
+	}
+	if len(text.Evidence.MediaAssetIDs) != 0 || text.Grouping != "text_only" {
+		t.Fatalf("121s: the text must not absorb the photo, got %+v", text)
 	}
 }
 
@@ -456,26 +464,181 @@ func TestIntegration_Grouping_VendorRequestSafety(t *testing.T) {
 	}
 }
 
-// --- Test 10: media only -> no invented fields, no signal -----------------------
+// --- Test 10 / step-2 Example C: proactive media only -> INCOMPLETE signal ----
 
-func TestIntegration_Grouping_MediaOnlyCreatesNoSignal(t *testing.T) {
+func TestIntegration_Grouping_MediaOnlyIsAnIncompleteSignal(t *testing.T) {
 	s := newSupplyEnv(t)
 	wa := "2348041110009"
 	v := s.vendor("V", wa)
 	s.graph.AddMedia("mo-1", photo1, "image/jpeg")
 	s.graph.AddMedia("mo-2", photo2, "image/jpeg")
+	s.graph.AddMedia("mo-3", photo3, "image/jpeg")
 	t0 := ago(10 * time.Minute)
 	s.send(wa, "wamid.MO1", t0, "image:mo-1", "")
 	s.send(wa, "wamid.MO2", t0.Add(5*time.Second), "image:mo-2", "")
+	s.send(wa, "wamid.MO3", t0.Add(9*time.Second), "image:mo-3", "")
 	s.drain(s.fullWorker("w"))
-	if len(s.signals(v)) != 0 {
-		t.Fatal("photos without any text must not produce a signal (no invented product/price)")
+	sig := s.signals(v)
+	if len(sig) != 1 {
+		t.Fatalf("three proactive photos must be one signal, got %d", len(sig))
 	}
-	if s.linkedAsset("wamid.MO1") == nil || s.linkedAsset("wamid.MO2") == nil {
-		t.Fatal("the media is preserved")
+	g := sig[0]
+	if g.Product != nil || g.Category != nil || g.Price != nil || g.Confidence != 0 || g.Raw != "" ||
+		g.Grouping != "grouped_media_only:first_message" {
+		t.Fatalf("nothing may be inferred from media: %+v", g)
 	}
-	if s.count(`SELECT count(*) FROM supply_candidate_messages WHERE vendor_id = $1`, v) != 2 {
-		t.Fatal("the candidates (evidence index) are preserved")
+	want := []uuid.UUID{s.assetOf("wamid.MO1"), s.assetOf("wamid.MO2"), s.assetOf("wamid.MO3")}
+	if fmt.Sprint(g.Evidence.MediaAssetIDs) != fmt.Sprint(want) || len(g.Evidence.SourceMessageIDs) != 3 {
+		t.Fatalf("expected the three assets in order, got %+v", g.Evidence)
+	}
+	if s.count(`SELECT count(*) FROM supply_signals WHERE id = $1 AND (extracted_data->>'incomplete')::boolean
+		AND condition IS NULL AND location IS NULL AND variant IS NULL AND normalized_product IS NULL`, g.ID) != 1 {
+		t.Fatal("the signal must be marked incomplete with no invented fields")
+	}
+}
+
+// --- step-2 Example B: photo, then "₦620k" -> one signal ------------------------
+
+func TestIntegration_Grouping_PhotoThenPriceText(t *testing.T) {
+	s := newSupplyEnv(t)
+	wa := "2348041110016"
+	v := s.vendor("V", wa)
+	s.graph.AddMedia("pp-1", photo1, "image/jpeg")
+	t0 := ago(10 * time.Minute)
+	s.send(wa, "wamid.PP1", t0, "image:pp-1", "")
+	s.send(wa, "wamid.PP2", t0.Add(15*time.Second), "text", "₦620k")
+	s.drain(s.fullWorker("w"))
+	sig := s.signals(v)
+	if len(sig) != 1 || sig[0].Price == nil || *sig[0].Price != 620000 || sig[0].Product != nil ||
+		len(sig[0].Evidence.SourceMessageIDs) != 2 || len(sig[0].Evidence.MediaAssetIDs) != 1 {
+		t.Fatalf("expected one signal with the photo and a price (no invented product), got %+v", sig)
+	}
+}
+
+// --- step-2: video + caption, several videos --------------------------------
+
+func TestIntegration_Grouping_Videos(t *testing.T) {
+	s := newSupplyEnv(t)
+	waA, waB := "2348041110017", "2348041110018"
+	vA, vB := s.vendor("A", waA), s.vendor("B", waB)
+	clip2 := append(append([]byte(nil), clip...), []byte("-second-angle")...)
+	s.graph.AddMedia("vid-1", clip, "video/mp4")
+	s.graph.AddMedia("vid-2", clip, "video/mp4")
+	s.graph.AddMedia("vid-3", clip2, "video/mp4")
+	t0 := ago(10 * time.Minute)
+	s.send(waA, "wamid.VA", t0, "video:vid-1", "Imported ladies bags ₦18,500")
+	s.send(waB, "wamid.VB1", t0, "video:vid-2", "")
+	s.send(waB, "wamid.VB2", t0.Add(20*time.Second), "video:vid-3", "")
+	s.drain(s.fullWorker("w"))
+	a := s.signals(vA)
+	if len(a) != 1 || sp(a[0].Product) != "bag" || len(a[0].Evidence.MediaAssetIDs) != 1 {
+		t.Fatalf("video + caption: expected one signal with the video, got %+v", a)
+	}
+	if s.count(`SELECT count(*) FROM media_assets WHERE id = $1 AND kind = 'video' AND mime_type = 'video/mp4'`, a[0].Evidence.MediaAssetIDs[0]) != 1 {
+		t.Fatal("the referenced asset is the stored video")
+	}
+	b := s.signals(vB)
+	if len(b) != 1 || len(b[0].Evidence.MediaAssetIDs) != 2 || b[0].Product != nil {
+		t.Fatalf("two videos, no text: expected one incomplete signal with both videos, got %+v", b)
+	}
+}
+
+// --- step-2 §8-§9: follow-ups right after a reply stay with the reply ------------
+
+func TestIntegration_Grouping_FollowUpsAfterAReply(t *testing.T) {
+	s := newSupplyEnv(t)
+	wa := "2348041110019"
+	v := s.vendor("V", wa)
+	s.seedActiveRequest(v, "iphone 13", "MM-410019")
+	s.graph.AddMedia("fr-1", photo1, "image/jpeg")
+	s.graph.AddMedia("fr-2", photo2, "image/jpeg")
+	t0 := ago(10 * time.Minute)
+	s.send(wa, "wamid.FR1", t0, "text", "Yes boss, I get am")
+	s.send(wa, "wamid.FR2", t0.Add(5*time.Second), "image:fr-1", "")                              // photo of what they have
+	s.send(wa, "wamid.FR3", t0.Add(8*time.Second), "text", "₦620k")                               // the price for the reply
+	s.send(wa, "wamid.FR4", t0.Add(12*time.Second), "image:fr-2", "Imported ladies bags ₦18,500") // unrelated supply
+	s.drain(s.fullWorker("w"))
+
+	if s.count(`SELECT count(*) FROM vendor_responses r JOIN vendor_requests vr ON vr.id = r.vendor_request_id
+		WHERE vr.public_reference = 'MM-410019'`) != 1 {
+		t.Fatal("the reply must be a VendorResponse on the request")
+	}
+	for _, w := range []string{"wamid.FR2", "wamid.FR3"} {
+		if s.count(`SELECT count(*) FROM events e JOIN messages m ON m.id = e.entity_id
+			WHERE e.event_type = 'VENDOR_MESSAGE_UNRESOLVED' AND m.external_message_id = $1`, w) != 1 {
+			t.Fatalf("%s must be recorded as unresolved (left with the reply), not supply", w)
+		}
+	}
+	if s.linkedAsset("wamid.FR2") == nil {
+		t.Fatal("the reply photo is still stored")
+	}
+	sig := s.signals(v)
+	if len(sig) != 1 || sp(sig[0].Product) != "bag" || fmt.Sprint(sig[0].Evidence.SourceMessageIDs) != fmt.Sprint([]uuid.UUID{s.messageID("wamid.FR4")}) {
+		t.Fatalf("only the clearly unrelated bags photo may become supply, got %+v", sig)
+	}
+}
+
+// --- step-2: same vendor AND same conversation required ------------------------
+
+func TestIntegration_Grouping_ConversationBoundary(t *testing.T) {
+	s := newSupplyEnv(t)
+	wa := "2348041110020"
+	v := s.vendor("V", wa)
+	s.send(wa, "wamid.CV1", ago(time.Minute), "text", "bags 18,500")
+	conv1 := uuid.MustParse(func() string {
+		var id string
+		_ = s.db.QueryRow(`SELECT conversation_id FROM messages WHERE external_message_id = 'wamid.CV1'`).Scan(&id)
+		return id
+	}())
+	// A second conversation for the same vendor (another channel) and another vendor.
+	conv2, other := uuid.New(), s.vendor("Other", "2348041110021")
+	mustExec(t, s.db, `INSERT INTO conversations (id, channel, external_id) VALUES ($1, 'sms', $2)`, conv2, wa)
+	m2 := uuid.New()
+	mustExec(t, s.db, `INSERT INTO messages (id, conversation_id, direction, external_message_id, message_type, content)
+		VALUES ($1, $2, 'INBOUND', 'sms-1', 'text', '{"text":"shoes 9,000"}')`, m2, conv2)
+	mustExec(t, s.db, `INSERT INTO supply_candidate_messages (message_id, vendor_id, conversation_id, kind, message_at, reason)
+		VALUES ($1, $2, $3, 'text', now(), 'test')`, m2, v, conv2)
+	m3 := uuid.New()
+	mustExec(t, s.db, `INSERT INTO messages (id, conversation_id, direction, external_message_id, message_type, content)
+		VALUES ($1, $2, 'INBOUND', 'other-1', 'text', '{"text":"ps5 650k"}')`, m3, conv1)
+	mustExec(t, s.db, `INSERT INTO supply_candidate_messages (message_id, vendor_id, conversation_id, kind, message_at, reason)
+		VALUES ($1, $2, $3, 'text', now(), 'test')`, m3, other, conv1)
+
+	cands, _, err := s.repo.Timeline(context.Background(), v, conv1, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].MessageID != s.messageID("wamid.CV1") {
+		t.Fatalf("grouping input must be this vendor's messages in this conversation only, got %d", len(cands))
+	}
+}
+
+// --- step-2 §47: extraction fails -> evidence kept, media kept ------------------
+
+type failingExtractor struct{ testExtractor }
+
+func (failingExtractor) ExtractSupply(ctx context.Context, text string) (*ai.SupplyExtractionResult, error) {
+	return nil, fmt.Errorf("extraction service unavailable")
+}
+
+func TestIntegration_Grouping_ExtractionFailureKeepsEvidence(t *testing.T) {
+	s := newSupplyEnv(t)
+	wa := "2348041110022"
+	v := s.vendor("V", wa)
+	s.graph.AddMedia("ef-1", photo1, "image/jpeg")
+	t0 := ago(10 * time.Minute)
+	s.send(wa, "wamid.EF1", t0, "image:ef-1", "")
+	s.send(wa, "wamid.EF2", t0.Add(10*time.Second), "text", "Imported ladies bags ₦18,500")
+	failing := supply.NewIntake(s.repo, failingExtractor{}, s.jobs, NewVendorRepository(s.db), s.window, 5, discard())
+	w := s.fullWorker("w", media.JobTypeDownload)
+	w.Register(supply.JobTypeGroup, failing.Handle, nil)
+	s.drain(w)
+	sig := s.signals(v)
+	if len(sig) != 1 || sig[0].Product != nil || sig[0].Raw != "Imported ladies bags ₦18,500" || len(sig[0].Evidence.MediaAssetIDs) != 1 {
+		t.Fatalf("extraction failure must keep the raw evidence and media, got %+v", sig)
+	}
+	if s.count(`SELECT count(*) FROM supply_signals WHERE id = $1 AND extracted_data->>'error' LIKE '%unavailable%'`, sig[0].ID) != 1 {
+		t.Fatal("the extraction error is recorded for review")
 	}
 }
 

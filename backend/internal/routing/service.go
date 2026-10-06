@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -60,6 +61,8 @@ type Service struct {
 type SupplyIntake interface {
 	SubmitText(ctx context.Context, vendorID uuid.UUID, ref supply.Inbound, text string) error
 	SubmitMedia(ctx context.Context, vendorID uuid.UUID, ref supply.Inbound, caption, reason string, ext *ai.SupplyExtractionResult) error
+	// Window is the grouping window; it also bounds "right after a reply".
+	Window() time.Duration
 }
 
 // SetSupplyIntake wires Phase 4A.2 supply grouping (composition root).
@@ -342,9 +345,7 @@ func (s *Service) ProcessVendorMessageFrom(ctx context.Context, v *vendor.Vendor
 	case 0:
 		// No active request at all -> supply submission (PRD 2 §39-40).
 		if s.intake != nil && ref.MessageID != uuid.Nil {
-			if err := s.intake.SubmitText(ctx, v.ID, ref, rawText); err != nil {
-				s.logger.Error("supply intake failed for vendor text", "vendor_id", v.ID, "message_id", ref.MessageID, "error", err)
-			}
+			s.submitTextSupply(ctx, v, ref, rawText)
 			return nil
 		}
 		s.processAsSupplySubmission(ctx, v, rawText)
@@ -363,13 +364,15 @@ func (s *Service) ProcessVendorMessageFrom(ctx context.Context, v *vendor.Vendor
 	}
 }
 
-// Media supply classification reasons (Phase 4A.2). Stable strings: they
-// are recorded on the candidate and logged.
+// Vendor content classification reasons (Phase 4A.2). Stable strings: they
+// are recorded on the supply candidate or the unresolved event, and logged.
 const (
 	MediaSupplyNoActiveRequest  = "no_active_vendor_request"
 	MediaSupplyUnrelatedCaption = "caption_has_product_and_price_unrelated_to_active_request"
+	SupplyUnrelatedAfterReply   = "text_has_product_and_price_unrelated_to_recent_reply"
 	mediaNotSupplyReference     = "caption_cites_vendor_request_reference"
 	mediaNotSupplyNoCaption     = "uncaptioned_media_during_active_vendor_request"
+	mediaNotSupplyAfterReply    = "uncaptioned_media_right_after_a_vendor_reply"
 	mediaNotSupplyReply         = "caption_reads_as_a_reply"
 	mediaNotSupplyIncomplete    = "caption_lacks_product_or_price"
 	mediaNotSupplySameProduct   = "caption_matches_an_active_request_product"
@@ -381,56 +384,123 @@ const (
 // question, not as new supply. Deliberately small and explicit.
 var replyOpeners = regexp.MustCompile(`(?i)^\s*(yes|yeah|yea|yep|yup|no|nope|ok|okay|sure|sorry|available|not available|i get|i have|we get|we have|e dey|dey|sold|na this|this one)\b`)
 
-// ClassifyVendorMedia decides deterministically whether a vendor photo/video
-// (with its caption) is supply content. Phase 4A.2 rule (Architecture Lock
-// V2 §M 4A step 3, implemented conservatively):
-//
-//   - caption cites an MM- reference -> not supply (it is about a request);
-//   - no active VendorRequest -> supply;
-//   - active VendorRequest(s) -> supply ONLY if the caption names a product
-//     AND a price (existing heuristic extractor), does not open like a reply
-//     ("yes", "available", "I get" ...), and its product does not overlap
-//     any active request's product. Anything else keeps the existing
-//     behaviour: the media is stored but the message is not processed.
-//
-// ext is the caption's extraction when one was made (reused by intake).
-func (s *Service) ClassifyVendorMedia(ctx context.Context, v *vendor.Vendor, caption string) (bool, string, *ai.SupplyExtractionResult) {
-	if mmReferencePattern.MatchString(caption) {
-		return false, mediaNotSupplyReference, nil
+// replyContextWindow: how long after a vendor's reply to a VendorRequest a
+// follow-up message is still treated as part of that reply. It is the
+// supply grouping window when grouping is wired (one parameter, one meaning:
+// "messages this close together belong together").
+func (s *Service) replyContextWindow() time.Duration {
+	if s.intake != nil {
+		return s.intake.Window()
 	}
+	return 0
+}
+
+// replyContext returns the VendorRequests a vendor's message may be
+// answering, deterministically:
+//   - active (SENT) requests, or else
+//   - the requests the vendor answered just before this message (their
+//     VendorResponse is within the reply-context window of `at`), so
+//     "Yes boss" followed by a photo, or by "₦620k", stays with the reply.
+//
+// inReply reports the second case.
+func (s *Service) replyContext(ctx context.Context, v *vendor.Vendor, at time.Time) (reqs []*VendorRequest, inReply bool, err error) {
 	active, err := s.routing.ListActiveByVendor(ctx, v.ID)
+	if err != nil || len(active) > 0 {
+		return active, false, err
+	}
+	w := s.replyContextWindow()
+	if w <= 0 {
+		return nil, false, nil
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	// The reply itself is the evidence: a VendorResponse recorded within the
+	// window before this message. (The response row is written before its
+	// request turns RESPONDED, so there is no gap in which neither shows.)
+	all, err := s.routing.ListByVendor(ctx, v.ID)
 	if err != nil {
-		s.logger.Error("listing active vendor requests", "vendor_id", v.ID, "error", err)
-		return false, mediaNotSupplyLookupFailed, nil
+		return nil, false, err
 	}
-	if len(active) == 0 {
-		return true, MediaSupplyNoActiveRequest, nil
+	for _, vr := range all {
+		if vr.Status != VendorRequestResponded || vr.SentAt == nil || vr.SentAt.Before(at.Add(-24*time.Hour)) {
+			continue
+		}
+		resp, err := s.routing.FindResponseByVendorRequest(ctx, vr.ID)
+		if err != nil {
+			return nil, false, err
+		}
+		if resp != nil && !resp.CreatedAt.Before(at.Add(-w)) {
+			reqs = append(reqs, vr)
+		}
 	}
-	if strings.TrimSpace(caption) == "" {
-		return false, mediaNotSupplyNoCaption, nil
-	}
-	if replyOpeners.MatchString(caption) {
+	return reqs, len(reqs) > 0, nil
+}
+
+// clearlyUnrelatedSupply applies the strict test used whenever the vendor
+// may be answering Majo: the text names a product AND a price (existing
+// heuristic extractor), does not open like a reply, and its product does
+// not overlap any of the requests in context.
+func (s *Service) clearlyUnrelatedSupply(ctx context.Context, text string, reqs []*VendorRequest) (bool, string, *ai.SupplyExtractionResult) {
+	if replyOpeners.MatchString(text) {
 		return false, mediaNotSupplyReply, nil
 	}
-	ext, err := s.aiProvider.ExtractSupply(ctx, caption)
+	ext, err := s.aiProvider.ExtractSupply(ctx, text)
 	if err != nil {
 		return false, mediaNotSupplyNoExtraction, nil
 	}
 	if ext.Product == nil || *ext.Product == "" || ext.Price == nil || *ext.Price <= 0 {
 		return false, mediaNotSupplyIncomplete, ext
 	}
-	captionProduct := normalizeForCompare(*ext.Product)
-	for _, vr := range active {
+	product := normalizeForCompare(*ext.Product)
+	for _, vr := range reqs {
 		req, err := s.requests.FindByID(ctx, vr.BuyerRequestID)
 		if err != nil || req == nil {
 			return false, mediaNotSupplyLookupFailed, ext
 		}
 		if req.Product != nil {
 			rp := normalizeForCompare(*req.Product)
-			if rp != "" && (strings.Contains(rp, captionProduct) || strings.Contains(captionProduct, rp)) {
+			if rp != "" && (strings.Contains(rp, product) || strings.Contains(product, rp)) {
 				return false, mediaNotSupplySameProduct, ext
 			}
 		}
+	}
+	return true, "", ext
+}
+
+// ClassifyVendorMedia decides deterministically whether a vendor photo/video
+// (with its caption) is supply content. Phase 4A.2 rule (Architecture Lock
+// V2 §M 4A step 3, implemented conservatively). Structured context wins:
+//
+//   - caption cites an MM- reference -> not supply (it is about a request);
+//   - no active VendorRequest and no reply just before it -> supply;
+//   - otherwise (the vendor may be answering Majo) -> supply ONLY if the
+//     caption names a product AND a price, does not open like a reply, and
+//     its product does not overlap the requests in context. Anything else is
+//     not supply: the media is stored and recorded as unresolved.
+//
+// ext is the caption's extraction when one was made (reused by intake).
+func (s *Service) ClassifyVendorMedia(ctx context.Context, v *vendor.Vendor, at time.Time, caption string) (bool, string, *ai.SupplyExtractionResult) {
+	if mmReferencePattern.MatchString(caption) {
+		return false, mediaNotSupplyReference, nil
+	}
+	reqs, inReply, err := s.replyContext(ctx, v, at)
+	if err != nil {
+		s.logger.Error("loading vendor request context", "vendor_id", v.ID, "error", err)
+		return false, mediaNotSupplyLookupFailed, nil
+	}
+	if !inReply && len(reqs) == 0 {
+		return true, MediaSupplyNoActiveRequest, nil
+	}
+	if strings.TrimSpace(caption) == "" {
+		if inReply {
+			return false, mediaNotSupplyAfterReply, nil
+		}
+		return false, mediaNotSupplyNoCaption, nil
+	}
+	ok, reason, ext := s.clearlyUnrelatedSupply(ctx, caption, reqs)
+	if !ok {
+		return false, reason, ext
 	}
 	return true, MediaSupplyUnrelatedCaption, ext
 }
@@ -439,17 +509,36 @@ func normalizeForCompare(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), ""))
 }
 
+// recordUnresolved writes VENDOR_MESSAGE_UNRESOLVED: a vendor message that is
+// neither supply nor an attached VendorResponse. No state changes; the
+// message (and any stored media) stays for operator review.
+func (s *Service) recordUnresolved(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, kind, reason string) {
+	s.logger.Info("vendor message not treated as supply; left for review", "vendor_id", v.ID, "message_id", ref.MessageID,
+		"kind", kind, "reason", reason)
+	if ref.MessageID == uuid.Nil {
+		return
+	}
+	id := ref.MessageID
+	if err := s.events.Write(ctx, &event.Event{
+		EventType: event.VendorMessageUnresolved, EntityType: "message", EntityID: &id, ActorType: event.ActorVendor, ActorID: &v.ID,
+		Payload: event.Merge(map[string]any{"message_id": id.String(), "vendor_id": v.ID.String(), "kind": kind,
+			"reason": reason, "channel": "whatsapp"}),
+	}); err != nil {
+		s.logger.Error("writing VENDOR_MESSAGE_UNRESOLVED", "error", err)
+	}
+}
+
 // ProcessVendorMedia handles an inbound photo/video from an active vendor
 // (Phase 4A.2): classify it, and hand supply content to grouping. Media that
-// is not supply keeps the pre-4A.2 behaviour (stored, not processed).
+// is not supply is stored (4A.1) and recorded as unresolved.
 func (s *Service) ProcessVendorMedia(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, kind, caption string) {
 	_ = s.vendors.RecordMessageActivity(ctx, v.ID)
 	if s.intake == nil || !supply.IsSupplyMediaKind(kind) {
 		return
 	}
-	ok, reason, ext := s.ClassifyVendorMedia(ctx, v, caption)
+	ok, reason, ext := s.ClassifyVendorMedia(ctx, v, ref.At, caption)
 	if !ok {
-		s.logger.Info("vendor media not treated as supply", "vendor_id", v.ID, "message_id", ref.MessageID, "reason", reason)
+		s.recordUnresolved(ctx, v, ref, "media", reason)
 		return
 	}
 	if err := s.intake.SubmitMedia(ctx, v.ID, ref, caption, reason, ext); err != nil {
@@ -457,6 +546,27 @@ func (s *Service) ProcessVendorMedia(ctx context.Context, v *vendor.Vendor, ref 
 		return
 	}
 	s.logger.Info("vendor media accepted as supply content", "vendor_id", v.ID, "message_id", ref.MessageID, "reason", reason)
+}
+
+// submitTextSupply is the Phase 4A.2 text branch for "no active request":
+// a text right after the vendor's reply is part of that reply unless it is
+// clearly unrelated supply.
+func (s *Service) submitTextSupply(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, rawText string) {
+	reqs, inReply, err := s.replyContext(ctx, v, ref.At)
+	if err != nil {
+		s.logger.Error("loading vendor request context", "vendor_id", v.ID, "error", err)
+		s.recordUnresolved(ctx, v, ref, "text", mediaNotSupplyLookupFailed)
+		return
+	}
+	if inReply {
+		if ok, reason, _ := s.clearlyUnrelatedSupply(ctx, rawText, reqs); !ok {
+			s.recordUnresolved(ctx, v, ref, "text", "text_right_after_a_vendor_reply:"+reason)
+			return
+		}
+	}
+	if err := s.intake.SubmitText(ctx, v.ID, ref, rawText); err != nil {
+		s.logger.Error("supply intake failed for vendor text", "vendor_id", v.ID, "message_id", ref.MessageID, "error", err)
+	}
 }
 
 func (s *Service) processAsSupplySubmission(ctx context.Context, v *vendor.Vendor, rawText string) {

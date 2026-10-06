@@ -113,6 +113,14 @@ const (
 	// MediaIngestionFailed: a MEDIA_DOWNLOAD job failed terminally
 	// (permanent error, or retries exhausted). No asset exists.
 	MediaIngestionFailed Type = "MEDIA_INGESTION_FAILED"
+
+	// --- Phase 4A.2: supply grouping ---
+	// VendorMessageUnresolved: a vendor message (photo, video or text) that
+	// is neither supply content nor an attached VendorResponse, e.g. a photo
+	// sent right after the vendor answered a request. No state changed; the
+	// message and any stored media remain for operator review. Mirrors
+	// BUYER_REPLY_UNRESOLVED.
+	VendorMessageUnresolved Type = "VENDOR_MESSAGE_UNRESOLVED"
 )
 
 // ActorType identifies who/what caused an event.

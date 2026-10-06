@@ -47,17 +47,21 @@ A new submission starts when any of the following is true:
 4. the submission already ended with a standalone text (captions come last);
 5. its text names a product **and** a price, and the submission already has both.
 
-A submission without any text creates no signal. The exception: photos sent within the window right after a text signal are added to that signal, as `SUPPLY_SIGNAL_UPDATED`.
+A submission with no text from a vendor with no request in context (proactive) becomes an **incomplete** signal: it references its media, and its product, price and the rest are empty, with confidence 0 and `extracted_data.incomplete = true`. Nothing is inferred from the media, and matching ignores signals that have no product. The exception: photos sent within the window right after a text signal are added to that signal, as `SUPPLY_SIGNAL_UPDATED`.
 
 A signal is created only when the submission is final and every one of its photos/videos has finished downloading (stored or failed). A failed photo is kept as a source with no asset.
 
-**Vendor photo/video while a VendorRequest is active** counts as supply only if the caption:
+**Reply context comes first.** A vendor's message is judged against a request in context when that request is either:
+- still active (SENT); or
+- one the vendor answered within the grouping window before the message (a VendorResponse exists).
+
+In that case the message is supply only if its text or caption:
 - names a product and a price;
 - does not open like a reply ("yes", "available", "I get" …);
 - has no `MM-` reference;
 - does not mention the requested product.
 
-Otherwise the media is stored but the message is not processed, which was the behaviour before 4A.2.
+Anything else is **not** supply: the media is still stored, and `VENDOR_MESSAGE_UNRESOLVED` (no state change) records it for operator review. For example, "Yes boss" followed by a photo, or followed by "₦620k", stays with the reply.
 
 ## Inspecting
 
@@ -80,6 +84,7 @@ WHERE ss.supply_signal_id = '<signal id>' ORDER BY ss.position;
 
 -- Why a vendor message was (or was not) treated as supply
 SELECT * FROM supply_candidate_messages WHERE message_id = '<message id>';  -- no row = not supply
+SELECT payload FROM events WHERE event_type = 'VENDOR_MESSAGE_UNRESOLVED' AND entity_id = '<message id>';
 ```
 
 Logs carry `job_id`, `message_id`, `vendor_id`, `provider_media_id`, `media_asset_id`, `supply_signal_id`, the attempt number, and the grouping or classification reason. Tokens and signed media URLs are never logged.

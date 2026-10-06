@@ -278,9 +278,20 @@ func (in *Intake) Handle(ctx context.Context, j *jobs.Job) error {
 			prev := groups[gi-1]
 			return in.appendLate(ctx, *prev.SignalID, c.VendorID, len(prev.Members), g, log)
 		}
-		log.Info("media-only submission has no text evidence; media kept, no supply signal created",
-			"source_message_ids", ids, "media_asset_ids", assetIDs(g))
-		return nil
+		// Proactive photos/videos without any text: record what the vendor
+		// actually sent as an INCOMPLETE signal (media evidence only). No
+		// extraction runs and nothing is inferred from the media: product,
+		// price, condition, location stay empty and confidence is 0. Matching
+		// ignores signals without a product.
+		for _, m := range g.Members {
+			if m.Reason != "no_active_vendor_request" {
+				log.Info("media-only submission is not proactive supply; media kept, no supply signal",
+					"source_message_ids", ids, "reason", m.Reason)
+				return nil
+			}
+		}
+		_, err := in.createIncomplete(ctx, c.VendorID, sources, &g, log)
+		return err
 	}
 
 	texts := make([]string, 0, len(g.Members))
@@ -349,6 +360,14 @@ func (in *Intake) create(ctx context.Context, vendorID uuid.UUID, raw string, re
 			"location": res.Location, "availability_status": res.AvailabilityStatus,
 		}
 	}
+	// Interpretation metadata only; the evidence itself is the source rows.
+	s.ExtractedData["extraction_source"] = "ai-service /extract-supply"
+	return in.persist(ctx, s, sources, g, grouping, log)
+}
+
+func (in *Intake) persist(ctx context.Context, s *Signal, sources []Source, g *Group, grouping string, log *slog.Logger) (*Signal, error) {
+	vendorID := s.VendorID
+	raw := s.RawMessage
 	srcIDs := make([]string, len(sources))
 	var media []string
 	seen := map[uuid.UUID]bool{}
@@ -359,8 +378,6 @@ func (in *Intake) create(ctx context.Context, vendorID uuid.UUID, raw string, re
 			media = append(media, src.MediaAssetID.String())
 		}
 	}
-	// Interpretation metadata only; the evidence itself is the source rows.
-	s.ExtractedData["extraction_source"] = "ai-service /extract-supply"
 	s.ExtractedData["grouping"] = grouping
 
 	ev := &event.Event{
@@ -390,8 +407,18 @@ func (in *Intake) create(ctx context.Context, vendorID uuid.UUID, raw string, re
 		_ = in.vendors.RecordSupplySubmission(ctx, vendorID)
 	}
 	log.Info("supply signal created", "supply_signal_id", created.ID, "grouping", grouping,
-		"source_message_ids", srcIDs, "media_asset_ids", media, "product", strOr(created.Product))
+		"source_message_ids", srcIDs, "media_asset_ids", media, "product", strOr(created.Product),
+		"confidence", created.Confidence, "extraction_source", s.ExtractedData["extraction_source"])
 	return created, nil
+}
+
+// createIncomplete persists a media-only submission: the evidence is the
+// source rows; no structured field is filled.
+func (in *Intake) createIncomplete(ctx context.Context, vendorID uuid.UUID, sources []Source, g *Group, log *slog.Logger) (*Signal, error) {
+	s := &Signal{VendorID: vendorID, RawMessage: "", AvailabilityStatus: AvailabilityAvailable, Confidence: 0,
+		ExtractedData: map[string]any{"incomplete": true, "missing": []string{"product", "price"},
+			"note": "media without any caption or text; nothing inferred from the media"}}
+	return in.persist(ctx, s, sources, g, "grouped_media_only:"+g.StartReason, log)
 }
 
 func (in *Intake) appendLate(ctx context.Context, signalID, vendorID uuid.UUID, offset int, g Group, log *slog.Logger) error {

@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -32,6 +33,7 @@ func (r *recIntake) SubmitText(ctx context.Context, vendorID uuid.UUID, ref supp
 	r.texts = append(r.texts, ref)
 	return nil
 }
+func (r *recIntake) Window() time.Duration { return 120 * time.Second }
 func (r *recIntake) SubmitMedia(ctx context.Context, vendorID uuid.UUID, ref supply.Inbound, caption, reason string, ext *ai.SupplyExtractionResult) error {
 	r.media = append(r.media, ref)
 	r.reasons = append(r.reasons, reason)
@@ -67,8 +69,9 @@ func classifier(t *testing.T, active int, requestedProduct string) (*Service, *v
 	v := &vendor.Vendor{ID: uuid.New(), WhatsAppExternalID: "234801", Status: vendor.StatusActive}
 	vendorRepo.vendors[v.ID] = v
 	for i := 0; i < active; i++ {
+		sent := time.Now().Add(-time.Hour)
 		_, _ = routingRepo.CreateVendorRequest(context.Background(), &VendorRequest{VendorID: v.ID, BuyerRequestID: uuid.New(),
-			PublicReference: "MM-10000" + string(rune('0'+i)), Status: VendorRequestSent})
+			PublicReference: "MM-10000" + string(rune('0'+i)), Status: VendorRequestSent, SentAt: &sent})
 	}
 	return svc, v, in
 }
@@ -95,7 +98,7 @@ func TestClassifyVendorMedia_Rules(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			svc, v, _ := classifier(t, c.active, "iphone 13")
-			ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, c.caption)
+			ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, time.Now(), c.caption)
 			if ok != c.supply || reason != c.reason {
 				t.Fatalf("got (%v, %s), want (%v, %s)", ok, reason, c.supply, c.reason)
 			}
@@ -131,5 +134,42 @@ func TestProcessVendorMessageFrom_TextSupplyGoesToIntakeAndRepliesDoNot(t *testi
 	resp := svc2.ProcessVendorMessageFrom(context.Background(), v2, supply.Inbound{MessageID: uuid.New()}, "Yes boss, I get am for 620k")
 	if resp == nil || resp.VendorRequestID == nil || len(in2.texts) != 0 {
 		t.Fatalf("a reply to an active request must stay a VendorResponse, got resp=%v intake=%d", resp, len(in2.texts))
+	}
+}
+
+// §8-§9 of the step-2 prompt: right after the vendor answered a request,
+// follow-up photos/texts stay with the reply unless clearly unrelated.
+func TestReplyContext_FollowUpsAfterAReplyAreNotSupply(t *testing.T) {
+	svc, v, in := classifier(t, 1, "iphone 13")
+	svc.aiProvider = &heuristicAI{fakeAI{vendorResponseResult: &ai.VendorResponseExtractionResult{Status: "AVAILABLE", ReviewState: "REVIEWED"}}}
+	events := svc.events.(*fakeEvents)
+	// The vendor answers the request; it is no longer SENT.
+	if resp := svc.ProcessVendorMessageFrom(context.Background(), v, supply.Inbound{MessageID: uuid.New(), At: time.Now()}, "Yes boss, I get am"); resp == nil || resp.VendorRequestID == nil {
+		t.Fatal("expected the reply to attach to the request")
+	}
+	now := time.Now()
+	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, now, ""); ok || reason != mediaNotSupplyAfterReply {
+		t.Fatalf("uncaptioned photo after a reply must stay with the reply, got %v %s", ok, reason)
+	}
+	svc.ProcessVendorMessageFrom(context.Background(), v, supply.Inbound{MessageID: uuid.New(), At: now}, "nice one 620k")
+	if len(in.texts) != 0 {
+		t.Fatal("'₦620k' right after a reply must not become supply")
+	}
+	unresolved := 0
+	for _, e := range events.events {
+		if e.EventType == "VENDOR_MESSAGE_UNRESOLVED" {
+			unresolved++
+		}
+	}
+	if unresolved != 1 {
+		t.Fatalf("expected one VENDOR_MESSAGE_UNRESOLVED, got %d", unresolved)
+	}
+	// Clearly unrelated supply is still supply.
+	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, now, "Imported ladies bags ₦18,500"); !ok || reason != MediaSupplyUnrelatedCaption {
+		t.Fatalf("unrelated supply after a reply should be supply, got %v %s", ok, reason)
+	}
+	// Outside the window the reply no longer frames the message.
+	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, now.Add(10*time.Minute), ""); !ok || reason != MediaSupplyNoActiveRequest {
+		t.Fatalf("10 minutes later a photo is proactive supply, got %v %s", ok, reason)
 	}
 }
