@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { ApiError, searchSupplyListings, listVendors, type SupplyListingDTO } from "@/lib/api";
 import ListingMedia from "@/components/ListingMedia";
 import OperatorToken from "@/components/OperatorToken";
-import { STATUS_COLORS, formatDate, formatPrice } from "@/lib/listing";
+import { FRESHNESS_COLORS, STATUS_COLORS, formatDate, formatPrice, geoLabel } from "@/lib/listing";
 
 // Supply listing curation queue (Phase 4A Step 4). By default it shows the
 // work: DRAFT listings, newest first. Other statuses are separate filters,
@@ -16,13 +16,16 @@ function thumbOf(l: SupplyListingDTO) {
   return primary ?? refs.find((m) => m.type === "image" && m.asset_id) ?? null;
 }
 
-const FILTERS: { value: string; label: string }[] = [
-  { value: "DRAFT", label: "Needs review (DRAFT)" },
-  { value: "ACTIVE", label: "Published (ACTIVE)" },
-  { value: "ARCHIVED", label: "Rejected / archived" },
-  { value: "PAUSED", label: "PAUSED" },
-  { value: "SOLD", label: "SOLD" },
-  { value: "UNAVAILABLE", label: "UNAVAILABLE" },
+// Each filter is a status plus a lifecycle scope (Phase 4A.5): by default
+// only listings inside their lifecycle; "expired" shows past ones (history).
+const FILTERS: { value: string; label: string; params: Record<string, string> }[] = [
+  { value: "DRAFT", label: "Needs review (DRAFT)", params: { status: "DRAFT" } },
+  { value: "ACTIVE", label: "Published (ACTIVE, live)", params: { status: "ACTIVE" } },
+  { value: "ACTIVE_EXPIRED", label: "Published but past lifecycle (history)", params: { status: "ACTIVE", lifecycle: "expired" } },
+  { value: "ARCHIVED", label: "Rejected / archived", params: { status: "ARCHIVED", lifecycle: "all" } },
+  { value: "PAUSED", label: "PAUSED", params: { status: "PAUSED" } },
+  { value: "SOLD", label: "SOLD", params: { status: "SOLD", lifecycle: "all" } },
+  { value: "UNAVAILABLE", label: "UNAVAILABLE", params: { status: "UNAVAILABLE", lifecycle: "all" } },
 ];
 
 export default function SupplyListingsPage() {
@@ -34,7 +37,7 @@ export default function SupplyListingsPage() {
 
   const load = useCallback(async () => {
     try {
-      setListings(await searchSupplyListings({ status: statusFilter }));
+      setListings(await searchSupplyListings(FILTERS.find((f) => f.value === statusFilter)?.params ?? { status: statusFilter }));
       setError(null);
     } catch (e) {
       setListings(null);
@@ -108,6 +111,8 @@ export default function SupplyListingsPage() {
               <th style={th}>Media</th>
               <th style={th}>Created</th>
               <th style={th}>Verified</th>
+              <th style={th}>Freshness</th>
+              <th style={th}>Lifecycle</th>
               <th style={th}>Status</th>
             </tr>
           </thead>
@@ -145,6 +150,26 @@ export default function SupplyListingsPage() {
                   <td style={td}>{mediaCount === 0 ? "none" : mediaCount}</td>
                   <td style={{ ...td, color: "#666", fontSize: "0.85em" }}>{formatDate(l.created_at)}</td>
                   <td style={{ ...td, color: "#666", fontSize: "0.85em" }}>{formatDate(l.last_verified_at)}</td>
+                  <td style={td} data-testid="row-freshness">
+                    {l.eligibility ? (
+                      <span style={{ color: FRESHNESS_COLORS[l.eligibility.freshness.state], fontWeight: 600, fontSize: "0.85em" }}>
+                        {l.eligibility.freshness.state}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td style={{ ...td, fontSize: "0.85em" }} data-testid="row-lifecycle">
+                    {!l.eligibility
+                      ? "—"
+                      : l.eligibility.lifecycle.state === "LIVE"
+                        ? `Day ${l.eligibility.lifecycle.day} / ${l.eligibility.lifecycle.max_days} · ${geoLabel(l.eligibility.geography.stage)}`
+                        : l.eligibility.lifecycle.state === "EXPIRED"
+                          ? "Expired"
+                          : l.eligibility.lifecycle.state === "NOT_PUBLISHED"
+                            ? "Not started"
+                            : "Closed"}
+                  </td>
                   <td style={td}>
                     <span style={{ color: STATUS_COLORS[l.status], fontWeight: 600, fontSize: "0.85em" }}>
                       {l.status === "ARCHIVED" && l.rejected_at ? "REJECTED" : l.status}
@@ -155,7 +180,7 @@ export default function SupplyListingsPage() {
             })}
             {listings !== null && listings.length === 0 && (
               <tr>
-                <td colSpan={12} style={{ color: "#666", padding: 16 }} data-testid="queue-empty">
+                <td colSpan={14} style={{ color: "#666", padding: 16 }} data-testid="queue-empty">
                   {statusFilter === "DRAFT" ? "No drafts waiting for review." : "No listings with this status."}
                 </td>
               </tr>

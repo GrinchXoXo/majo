@@ -133,9 +133,11 @@ ok(sql(f"SELECT count(*) FROM media_assets WHERE owner_vendor_id = '{vm}'") == "
 ok(l["location"] == "Benin City", "8. location: vendor's primary location (none in the message)", l["location"])
 ok(re.match(r"^L-[0-9A-HJKMNP-TV-Z]{6}$", l["public_reference"] or "") is not None, "9. public L-reference", l["public_reference"])
 ok(l["last_verified_at"] is not None, "10. last_verified_at set", l["last_verified_at"])
-same = sql(f"""SELECT (l.last_verified_at = s.created_at AND l.expires_at = s.created_at + interval '7 days')::text
+same = sql(f"""SELECT (l.last_verified_at = s.created_at AND l.expires_at = s.created_at + interval '60 days')::text
                FROM supply_listings l JOIN supply_signals s ON s.id = l.supply_signal_id WHERE l.id = '{l['id']}'""")
-ok(same == "true", "    = when the supply evidence arrived (signal time); expires 7 days later")
+# Phase 4A.5: a draft's provisional lifecycle ceiling is evidence time + the
+# 60-day max lifecycle (was 7 days); publication restarts it from published_at.
+ok(same == "true", "    = when the supply evidence arrived (signal time); provisional ceiling 60 days later")
 
 print("\n11. Deterministic search (operator search, status=DRAFT; nothing is published)")
 for q in ("iphone 13", "iPhone13", "IPHONE 13"):

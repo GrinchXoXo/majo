@@ -58,11 +58,21 @@ type Service struct {
 	// listingEvidence supplies ACTIVE SupplyListings as matching evidence
 	// (Phase 4A). nil = signals only (pre-4A behaviour).
 	listingEvidence supply.MatchingEvidenceReader
+	// eligibility is the canonical supply-eligibility policy (Phase 4A.5):
+	// matching only uses listings it says are eligible right now.
+	eligibility *supply.EligibilityPolicy
 }
 
 // SetListingEvidence makes matching use operator-published listings as
 // supply evidence alongside fresh signals (Architecture Lock V2 §M-4A.6).
-func (s *Service) SetListingEvidence(r supply.MatchingEvidenceReader) { s.listingEvidence = r }
+// policy may be nil (the default policy is used).
+func (s *Service) SetListingEvidence(r supply.MatchingEvidenceReader, policy *supply.EligibilityPolicy) {
+	s.listingEvidence = r
+	if policy == nil {
+		policy = supply.MustDefaultPolicy()
+	}
+	s.eligibility = policy
+}
 
 // SupplyIntake receives vendor messages classified as supply content
 // (Phase 4A.2). Implemented by supply.Intake.
@@ -169,9 +179,20 @@ func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) 
 			// Degrade to signal-only matching rather than failing the operator.
 			s.logger.Error("loading listing evidence for matching", "buyer_request_id", buyerRequestID, "error", err)
 		} else {
+			// The eligibility policy is authoritative (Phase 4A.5): the SQL
+			// pre-filter (ACTIVE, expires_at > now) is only an optimisation.
+			// Candidate vendors are all ACTIVE here.
+			now := time.Now().UTC()
+			active := true
 			listingsByVendor = map[string][]supply.MatchableListing{}
 			for vid, ls := range ev.ListingsByVendor {
-				listingsByVendor[vid.String()] = ls
+				kept := make([]supply.MatchableListing, 0, len(ls))
+				for _, ml := range ls {
+					if s.eligibility.EvaluateListing(ml.Listing, &active, now).Eligible {
+						kept = append(kept, ml)
+					}
+				}
+				listingsByVendor[vid.String()] = kept
 			}
 			for vid, signals := range supplyByVendor {
 				kept := signals[:0:0]
@@ -189,6 +210,16 @@ func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) 
 		req, candidateVendors, supplyByVendor, listingsByVendor,
 		matching.DefaultWeights(), matching.DefaultMinRelevanceScore, matching.DefaultMaxCandidates,
 	)
+	if s.eligibility != nil {
+		now := time.Now().UTC()
+		active := true
+		for i := range candidates {
+			if l := candidates[i].RelevantListing; l != nil {
+				el := s.eligibility.EvaluateListing(l, &active, now)
+				candidates[i].ListingEligibility = &el
+			}
+		}
+	}
 
 	if err := s.events.Write(ctx, &event.Event{
 		EventType:  event.VendorsSuggested,

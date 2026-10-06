@@ -123,18 +123,19 @@ Every new signal, and every signal that gains late photos, gets a durable `SUPPL
 - **Location:** the signal's own location, else the vendor's `primary_location`, else NULL. Service areas are not used.
 - **Media:** `media_references` hold the signal's AVAILABLE MediaAssets in evidence order (`asset_id`, kind, `storage_key`); there is no copy and no re-download.
 - **Reference:** `public_reference` is `L-` plus 6 Crockford base32 characters, random, unique in the database, retried on collision.
-- **Freshness:** `last_verified_at` is when the supply evidence arrived (`supply_signals.created_at`), and `expires_at` is 7 days after that. Nothing expires listings automatically.
+- **Freshness and lifecycle (changed in 4A.5):** `last_verified_at` is when the supply evidence arrived (`supply_signals.created_at`). A draft's `expires_at` is a provisional ceiling, evidence time + the max lifecycle (60 days). Publication starts the real lifecycle: `expires_at` = `published_at` + 60 days. See [docs/architecture/supply-lifecycle.md](../architecture/supply-lifecycle.md).
 
 **Repeat signals:**
 - **Same signal again:** returns the same listing. A DRAFT also gains any of that signal's media it lacks.
-- **Phase 3 duplicate** (same vendor + normalized product + variant + price, not expired or archived): only `last_verified_at` and `expires_at` move forward. Fields, media and operator corrections are left alone.
+- **Phase 3 duplicate** (same vendor + normalized product + variant + price; a DRAFT, ACTIVE or PAUSED listing inside its lifecycle): only `last_verified_at` moves forward. This is a verification; the lifecycle ceiling never moves. Fields, media and operator corrections are left alone. An expired, sold, unavailable or archived listing is never refreshed: the new post becomes a new DRAFT.
 
 **Concurrency:** creation, duplicate refresh and the event run in one transaction with a per-vendor advisory lock. A partial unique index allows one live listing per signal.
 
 **Search** (`GET /api/supply-listings`):
 - product and location queries are compared in compact form: lowercase, letters and digits only, so "iPhone 13", "iphone13" and "IPHONE-13" match, as do "BENIN CITY" and "Benin City";
 - category and condition are case-insensitive;
-- by default only ACTIVE listings are returned; pass `status=DRAFT` for operator review.
+- by default only ACTIVE listings inside their lifecycle are returned; pass `status=DRAFT` for operator review. Pass `lifecycle=expired` for listings past their lifecycle (history), or `lifecycle=all` for both.
+- each listing in the response carries `eligibility`: lifecycle, freshness and geographic scope, from the canonical policy.
 
 ```sql
 -- Why does listing L-XXXXXX exist?
@@ -204,3 +205,18 @@ E2E: `scripts/e2e/listing_curation.py` drives the real dashboard with headless C
 - `VENDORS_SUGGESTED` carries `listing_evidence_count`.
 
 Matching still only suggests vendors to ask; nothing is sent or created by it.
+
+## Lifecycle, freshness and geographic scope (Phase 4A.5)
+
+The full model is in [docs/architecture/supply-lifecycle.md](../architecture/supply-lifecycle.md). Operationally:
+- **Operator verification:** `POST /api/supply-listings/{id}/verify` `{"note"}` (operator token) records "I confirmed with the vendor that it is still available". It moves `last_verified_at` only and writes `SUPPLY_LISTING_VERIFIED` plus an audit row. An expired listing answers 409 `LIFECYCLE_EXPIRED`.
+- **Dashboard:** the listing page shows "Lifecycle & eligibility": eligible or not and why, day N of 60, freshness, search scope, origin, next change and lifecycle end. The queue shows freshness and lifecycle columns, and a filter for published listings past their lifecycle.
+- **No expiry job:** a listing past `expires_at` keeps status ACTIVE in the table, but the eligibility policy treats it as expired. Matching never uses it. The supply metrics count these rows as "ACTIVE listings past their lifecycle".
+
+```sql
+-- Where is each published listing in its lifecycle?
+SELECT public_reference, status, published_at, last_verified_at, expires_at,
+       floor(extract(epoch FROM now() - published_at) / 86400) AS day,
+       now() >= expires_at AS lifecycle_expired
+FROM supply_listings WHERE published_at IS NOT NULL ORDER BY published_at DESC;
+```

@@ -178,8 +178,8 @@ func TestIntegration_Listing_FromWhatsAppSubmissionToDraft(t *testing.T) {
 	}
 	var sigCreated time.Time
 	_ = e.db.QueryRow(`SELECT created_at FROM supply_signals WHERE id = $1`, sigs[0].ID).Scan(&sigCreated)
-	if l.LastVerifiedAt == nil || !l.LastVerifiedAt.Equal(sigCreated) || !l.ExpiresAt.Equal(sigCreated.Add(supply.ListingLifetime)) {
-		t.Fatalf("verified = evidence time, expires = +7d; got %v / %v (signal %v)", l.LastVerifiedAt, l.ExpiresAt, sigCreated)
+	if l.LastVerifiedAt == nil || !l.LastVerifiedAt.Equal(sigCreated) || !l.ExpiresAt.Equal(sigCreated.Add(supply.DefaultPolicyConfig().MaxLifecycle)) {
+		t.Fatalf("verified = evidence time, provisional ceiling = +60d (4A.5); got %v / %v (signal %v)", l.LastVerifiedAt, l.ExpiresAt, sigCreated)
 	}
 	if l.SourceMessageID == nil || *l.SourceMessageID != e.messageID("wamid.LS1") {
 		t.Fatal("source_message_id must be the first evidence message")
@@ -383,8 +383,11 @@ func TestIntegration_Listing_DuplicateRefreshAdvancesFreshnessOnly(t *testing.T)
 	}
 	var newerCreated time.Time
 	_ = e.db.QueryRow(`SELECT created_at FROM supply_signals WHERE id = $1`, newer).Scan(&newerCreated)
-	if !refreshed.LastVerifiedAt.Equal(newerCreated) || !refreshed.ExpiresAt.Equal(newerCreated.Add(supply.ListingLifetime)) {
-		t.Fatalf("freshness must advance to the newer evidence: %v / %v", refreshed.LastVerifiedAt, refreshed.ExpiresAt)
+	// Phase 4A.5: a refresh is a verification. It advances freshness only;
+	// the lifecycle ceiling (expires_at) is NOT moved by new evidence.
+	if !refreshed.LastVerifiedAt.Equal(newerCreated) || !refreshed.ExpiresAt.Equal(l.ExpiresAt) {
+		t.Fatalf("freshness must advance to the newer evidence, the ceiling must not move: %v / %v (was %v)",
+			refreshed.LastVerifiedAt, refreshed.ExpiresAt, l.ExpiresAt)
 	}
 	if *refreshed.Description != desc || *refreshed.Condition != cond || *refreshed.Location != loc ||
 		*refreshed.SupplySignalID != older || refreshed.PublicReference != l.PublicReference {

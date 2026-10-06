@@ -191,7 +191,7 @@ ok(sql(f"SELECT payload->>'listing_evidence_count' FROM events WHERE event_type 
 
 print("\n5. Supply metrics (funnel, last day)")
 m = supply_rows()
-ok(len(m) == 14, "14 supply rows in the funnel report", str(len(m)))
+ok(len(m) == 15, "15 supply rows in the funnel report", str(len(m)))
 ok(m["vendor_submissions"]["value"] >= 1, "submission counted", str(m["vendor_submissions"]["value"]))
 ok(m["media_complete_rate"]["value"] >= 1, "media-complete listing counted",
    f"{m['media_complete_rate']['value']}/{m['media_complete_rate'].get('of')}")

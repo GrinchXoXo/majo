@@ -13,8 +13,10 @@ package supply
 //     primary location, else none;
 //   - references the signal's stored MediaAssets in evidence order (no copy,
 //     no re-download);
-//   - stamps last_verified_at with the time the evidence arrived and
-//     expires_at = that + ListingLifetime;
+//   - stamps last_verified_at with the time the evidence arrived and a
+//     provisional expires_at = that + the lifecycle ceiling (Phase 4A.5:
+//     a draft's lifecycle has not started; publication restarts the
+//     ceiling from published_at — see eligibility.go);
 //   - always creates a DRAFT (publishing stays an operator action);
 //   - is idempotent and race-safe (see ListingRepository.CreateFromSignal).
 
@@ -34,12 +36,6 @@ import (
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/vendor"
 )
-
-// ListingLifetime is how long a listing stays current after its supply
-// evidence was verified. Same 7-day default the Phase 3 schema uses
-// (supply_listings.expires_at DEFAULT now() + 7 days). Nothing expires
-// listings automatically yet; this only sets expires_at.
-const ListingLifetime = 7 * 24 * time.Hour
 
 // JobTypeListingDraft is the durable job that builds a DRAFT listing for a
 // new (or newly media-complete) SupplySignal.
@@ -146,7 +142,7 @@ func resolveLocation(sig *Signal, v *vendor.Vendor) (*string, string) {
 }
 
 // buildListing maps an eligible signal onto a DRAFT listing (pure).
-func buildListing(sig *Signal, v *vendor.Vendor, media []MediaReference, firstMessage *uuid.UUID) (*Listing, string) {
+func buildListing(sig *Signal, v *vendor.Vendor, media []MediaReference, firstMessage *uuid.UUID, policy *EligibilityPolicy) (*Listing, string) {
 	loc, locSource := resolveLocation(sig, v)
 	norm := NormalizeSearch(*sig.Product)
 	verified := sig.CreatedAt
@@ -164,7 +160,7 @@ func buildListing(sig *Signal, v *vendor.Vendor, media []MediaReference, firstMe
 		Condition: sig.Condition, Price: sig.Price, Currency: currency, Quantity: sig.Quantity, Location: loc,
 		MediaReferences: media, Status: ListingDraft, SourceChannel: "whatsapp", SourceMessageID: firstMessage,
 		ExtractionMethod: "heuristic", Confidence: sig.Confidence,
-		LastVerifiedAt: &verified, ExpiresAt: verified.Add(ListingLifetime),
+		LastVerifiedAt: &verified, ExpiresAt: policy.CeilingFrom(verified),
 	}, locSource
 }
 
@@ -202,7 +198,7 @@ func (s *ListingService) CreateFromSignal(ctx context.Context, signalID uuid.UUI
 	if err != nil {
 		return nil, "", fmt.Errorf("loading signal media: %w", err)
 	}
-	l, locSource := buildListing(sig, v, refs, firstMsg)
+	l, locSource := buildListing(sig, v, refs, firstMsg, s.policy)
 
 	base := map[string]any{
 		"supply_signal_id": signalID.String(), "vendor_id": sig.VendorID.String(), "channel": "whatsapp",
@@ -227,8 +223,12 @@ func (s *ListingService) CreateFromSignal(ctx context.Context, signalID uuid.UUI
 		},
 		OnRefresh: func(e *Listing) *event.Event {
 			id := e.ID
+			// A duplicate refresh is a verification (new vendor evidence of
+			// the same supply): it moves last_verified_at only. The lifecycle
+			// ceiling (expires_at) is unchanged (Phase 4A.5).
 			p := event.Merge(base, map[string]any{"supply_listing_id": e.ID.String(), "public_reference": e.PublicReference,
-				"last_verified_at": e.LastVerifiedAt.UTC().Format(time.RFC3339), "expires_at": e.ExpiresAt.UTC().Format(time.RFC3339)})
+				"last_verified_at": e.LastVerifiedAt.UTC().Format(time.RFC3339), "expires_at": e.ExpiresAt.UTC().Format(time.RFC3339),
+				"verification": "vendor_resubmission"})
 			// The new signal's media is recorded, not merged (see report).
 			p["signal_media_asset_ids"] = mediaIDs(refs)
 			return &event.Event{EventType: event.SupplyListingDuplicateRefreshed, EntityType: "supply_listing", EntityID: &id,

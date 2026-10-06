@@ -9,6 +9,7 @@ import (
 
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
+	"github.com/middleman/backend/internal/supply"
 )
 
 // RoutingHandlers implements the matching + vendor routing API from
@@ -72,6 +73,16 @@ func (h *RoutingHandlers) Matches(w http.ResponseWriter, r *http.Request) {
 			dto.RelevantListing = map[string]any{
 				"id": l.ID.String(), "public_reference": l.PublicReference, "product": l.Product, "variant": l.Variant,
 				"condition": l.Condition, "price": l.Price, "currency": l.Currency, "location": l.Location,
+			}
+			// Phase 4A.5: a published listing is not proof the item exists
+			// today; a stale one needs vendor reconfirmation before a buyer
+			// is told it is available.
+			if el := c.ListingEligibility; el != nil {
+				dto.RelevantListing["freshness"] = el.Freshness.State
+				dto.RelevantListing["last_verified_at"] = el.Freshness.VerifiedAt
+				dto.RelevantListing["geo_stage"] = el.Geography.Stage
+				dto.RelevantListing["lifecycle_day"] = el.Lifecycle.Day
+				dto.RelevantListing["needs_reconfirmation"] = el.Freshness.State != supply.Fresh
 			}
 		}
 		dtos = append(dtos, dto)

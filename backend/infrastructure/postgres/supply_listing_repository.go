@@ -300,7 +300,15 @@ func (r *SupplyListingRepository) FindRecentDuplicate(ctx context.Context, vendo
 }
 
 func (r *SupplyListingRepository) Search(ctx context.Context, q supply.ListingQuery) ([]*supply.Listing, error) {
-	query := `SELECT ` + listingColumns + ` FROM supply_listings WHERE expires_at > now()`
+	query := `SELECT ` + listingColumns + ` FROM supply_listings WHERE `
+	switch q.Lifecycle {
+	case "expired":
+		query += `expires_at <= now()` // past the lifecycle ceiling: kept as history
+	case "all":
+		query += `TRUE`
+	default:
+		query += `expires_at > now()`
+	}
 	var args []any
 	argN := 1
 
@@ -441,9 +449,13 @@ func (r *SupplyListingRepository) CreateFromSignal(ctx context.Context, w supply
 	//    values (Phase 4A Step 4), so a listing whose product/price an
 	//    operator corrected is still recognised as the same supply and is
 	//    refreshed, not duplicated; the correction itself is never touched.
+	//    Phase 4A.5: only listings inside their lifecycle and still open
+	//    (DRAFT / ACTIVE / PAUSED) are refreshed. An expired, sold,
+	//    unavailable or archived listing is never revived: the new evidence
+	//    becomes a new DRAFT (a new lifecycle), and history is untouched.
 	dup, err := scanListingRow(tx.QueryRowContext(ctx, `
 		SELECT `+listingColumns+` FROM supply_listings l
-		WHERE l.vendor_id = $1 AND l.expires_at > now() AND l.status NOT IN ('EXPIRED', 'ARCHIVED')
+		WHERE l.vendor_id = $1 AND l.expires_at > now() AND l.status IN ('DRAFT', 'ACTIVE', 'PAUSED')
 		  AND (
 		    (l.normalized_product = $2 AND l.variant IS NOT DISTINCT FROM $3 AND l.price IS NOT DISTINCT FROM $4)
 		    OR EXISTS (SELECT 1 FROM supply_signals s WHERE s.id = l.supply_signal_id
@@ -454,9 +466,8 @@ func (r *SupplyListingRepository) CreateFromSignal(ctx context.Context, w supply
 	if err == nil {
 		refreshed, err := scanListingRow(tx.QueryRowContext(ctx, `
 			UPDATE supply_listings
-			SET last_verified_at = GREATEST(COALESCE(last_verified_at, $2), $2),
-			    expires_at = GREATEST(expires_at, $3), updated_at = now()
-			WHERE id = $1 RETURNING `+listingColumns, dup.ID.String(), l.LastVerifiedAt, l.ExpiresAt))
+			SET last_verified_at = GREATEST(COALESCE(last_verified_at, $2), $2), updated_at = now()
+			WHERE id = $1 RETURNING `+listingColumns, dup.ID.String(), l.LastVerifiedAt))
 		if err != nil {
 			return nil, "", err
 		}

@@ -91,8 +91,25 @@ func (r *SupplyListingRepository) Curate(ctx context.Context, id uuid.UUID, deci
 		add("media_references", b)
 	}
 	if ch.Publish {
-		// published_at is the FIRST publication; never reset.
-		set = append(set, "status = 'ACTIVE'", "published_at = COALESCE(published_at, now())")
+		// published_at is the FIRST publication; never reset. The lifecycle
+		// starts here: expires_at becomes the policy's ceiling (4A.5).
+		at := ch.At
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
+		add("published_at", at)
+		set[len(set)-1] = fmt.Sprintf("published_at = COALESCE(published_at, $%d)", len(args))
+		set = append(set, "status = 'ACTIVE'")
+		if !ch.LifecycleCeiling.IsZero() {
+			add("expires_at", ch.LifecycleCeiling)
+		}
+	}
+	if ch.Verify {
+		at := ch.At
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
+		add("last_verified_at", at)
 	}
 	if ch.Reject {
 		set = append(set, "status = 'ARCHIVED'", "rejected_at = now()")

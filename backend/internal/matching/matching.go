@@ -60,7 +60,11 @@ type Candidate struct {
 	// operator-published (ACTIVE) SupplyListing (Phase 4A, Lock V2 §M-4A.6).
 	// At most one of RelevantSupply / RelevantListing is set.
 	RelevantListing *supply.Listing
-	WithinBudget    *bool
+	// ListingEligibility (Phase 4A.5) is the canonical eligibility of
+	// RelevantListing when the candidate was matched (set by the caller that
+	// applied the policy; matching itself never evaluates lifecycle).
+	ListingEligibility *supply.Eligibility
+	WithinBudget       *bool
 }
 
 // evidence is the product evidence chosen for a vendor: a fresh signal or

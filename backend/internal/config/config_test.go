@@ -48,3 +48,28 @@ func TestOperatorTokenRequiredWhenAppEnvUnset(t *testing.T) {
 		t.Fatalf("with a token the defaults still apply: %v", err)
 	}
 }
+
+func TestSupplyLifecycleConfig(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("APP_ENV", "development")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SupplyMaxLifecycleDays != 60 || cfg.SupplyGeoLocalDays != 0 || cfg.SupplyGeoNearbyDays != 20 ||
+		cfg.SupplyGeoStateDays != 30 || cfg.SupplyGeoRegionDays != 45 || cfg.SupplyFreshnessWindow.Hours() != 72 {
+		t.Fatalf("defaults: %+v", cfg)
+	}
+	t.Setenv("SUPPLY_GEO_LOCAL_DAYS", "0") // zero is allowed for day values
+	t.Setenv("SUPPLY_MAX_LIFECYCLE_DAYS", "90")
+	t.Setenv("SUPPLY_FRESHNESS_WINDOW", "48h")
+	if cfg, err = Load(); err != nil || cfg.SupplyMaxLifecycleDays != 90 || cfg.SupplyFreshnessWindow.Hours() != 48 {
+		t.Fatalf("overrides: %v %+v", err, cfg)
+	}
+	for _, bad := range []string{"-1", "x", "3651", "1.5"} {
+		t.Setenv("SUPPLY_GEO_NEARBY_DAYS", bad)
+		if _, err := Load(); err == nil {
+			t.Fatalf("SUPPLY_GEO_NEARBY_DAYS=%q must be rejected", bad)
+		}
+	}
+}

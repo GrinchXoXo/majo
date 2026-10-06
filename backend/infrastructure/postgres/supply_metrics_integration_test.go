@@ -88,8 +88,8 @@ func TestIntegration_SupplyMetrics(t *testing.T) {
 	check("stale_listing_rate", 1, 1) // l1 ACTIVE, verified 100h ago > 72h
 	check("usable_listings_per_active_vendor", 1, 3)
 	check("vendor_response_rate", 0, 0)
-	if len(got) != 14 {
-		t.Fatalf("want 14 supply rows, got %d", len(got))
+	if len(got) != 15 {
+		t.Fatalf("want 15 supply rows, got %d", len(got))
 	}
 
 	// HTTP: the funnel endpoint carries the supply rows next to the stages.
@@ -97,7 +97,7 @@ func TestIntegration_SupplyMetrics(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Get(rec, httptest.NewRequest(http.MethodGet, "/api/metrics/funnel?days=30", nil))
 	var rep funnel.Report
-	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &rep) != nil || len(rep.Stages) != 15 || len(rep.Supply) != 14 {
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &rep) != nil || len(rep.Stages) != 15 || len(rep.Supply) != 15 {
 		t.Fatalf("funnel endpoint: %d stages=%d supply=%d", rec.Code, len(rep.Stages), len(rep.Supply))
 	}
 }

@@ -192,6 +192,9 @@ type ListingQuery struct {
 	Condition        *string
 	Status           *ListingStatus
 	VendorID         *uuid.UUID
+	// Lifecycle (Phase 4A.5): "" or "live" = inside the lifecycle ceiling
+	// (default), "expired" = past it (history), "all" = both.
+	Lifecycle string
 }
 
 // ListingRepository is the persistence boundary for SupplyListing.

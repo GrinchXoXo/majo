@@ -154,7 +154,8 @@ If the supply rows cannot be computed, the report still returns the stages, with
 | `listings_rejected` | drafts rejected (never published) | `supply_listings.rejected_at`, `published_at IS NULL` |
 | `listing_approval_rate` / `listing_rejection_rate` | published (or rejected) / (published + drafts rejected), decisions made in the period | `supply_listings` |
 | `listings_withdrawn` | published listings later rejected | `rejected_at` with `published_at` set |
-| `stale_listing_rate` (now) | ACTIVE listings whose evidence is older than `LISTING_FRESHNESS_WINDOW` [PARAM, default 72h] / ACTIVE | `last_verified_at` |
+| `stale_listing_rate` (now) | ACTIVE listings inside their lifecycle whose last verification is older than `SUPPLY_FRESHNESS_WINDOW` [PARAM, default 72h] / ACTIVE inside their lifecycle. Stale is not expired. | `last_verified_at`, `expires_at` |
+| `lifecycle_expired_listings` (now) | ACTIVE listings past their lifecycle ceiling: logically expired, not eligible, kept as history | `expires_at` |
 | `usable_listings_per_active_vendor` (now) | ACTIVE unexpired listings of ACTIVE vendors / ACTIVE vendors | `supply_listings`, `vendors` |
 | `vendor_response_rate` | vendor requests sent in the period that got ≥ 1 matched response / vendor requests sent in the period | `vendor_requests`, `vendor_responses` |
 

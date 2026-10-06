@@ -43,6 +43,10 @@ const (
 
 var (
 	ErrListingNotFound = errors.New("listing not found")
+	// ErrLifecycleExpired: the listing is past its lifecycle ceiling. It is
+	// kept as history but cannot be edited, verified or revived; new vendor
+	// evidence creates a new listing (Phase 4A.5).
+	ErrLifecycleExpired = errors.New("the listing's marketplace lifecycle has expired; it is kept as history and cannot be revived (a new vendor post creates a new listing)")
 	// ErrStale: the caller's expected_updated_at no longer matches (another
 	// tab or operator changed the listing first).
 	ErrStale = errors.New("listing was changed by someone else; reload and retry")
@@ -89,8 +93,15 @@ func (e ErrNotPublishable) Error() string {
 // CurationChange is what a CurationDecision asks Curate to apply.
 type CurationChange struct {
 	Fields ListingFields
-	// Publish: status = ACTIVE, published_at = COALESCE(published_at, now()).
-	Publish bool
+	// Publish: status = ACTIVE, published_at = COALESCE(published_at, At),
+	// expires_at = LifecycleCeiling (Phase 4A.5: the lifecycle starts at
+	// publication; the ceiling comes from the eligibility policy).
+	Publish          bool
+	LifecycleCeiling time.Time
+	// Verify: last_verified_at = At (an explicit verification).
+	Verify bool
+	// At is the instant of the change (publication / verification time).
+	At time.Time
 	// Reject: status = ARCHIVED, rejected_at = now(), rejection_reason = RejectReason.
 	Reject       bool
 	RejectReason *string
@@ -371,6 +382,9 @@ func (s *ListingService) Edit(ctx context.Context, listingID uuid.UUID, e Listin
 		if cur.Status != ListingDraft && cur.Status != ListingActive {
 			return nil, ErrInvalidTransition{Op: "edit", From: cur.Status}
 		}
+		if cur.Status == ListingActive && !time.Now().Before(cur.ExpiresAt) {
+			return nil, ErrLifecycleExpired
+		}
 		if e.empty() {
 			return nil, nil
 		}
@@ -483,7 +497,7 @@ func checkPublishable(l *Listing, f *publishFacts, now time.Time) []FieldError {
 		r = append(r, FieldError{"location", "must not be blank (leave it unset instead)"})
 	}
 	if !l.ExpiresAt.After(now) {
-		r = append(r, FieldError{"expires_at", "the supply evidence has expired"})
+		r = append(r, FieldError{"expires_at", "the draft's supply evidence is older than the lifecycle ceiling; ask the vendor to post it again"})
 	}
 	switch {
 	case f.vendor == nil:
@@ -590,8 +604,10 @@ func (s *ListingService) publishLocked(ctx context.Context, listingID uuid.UUID,
 		if p := PrimaryMedia(cur.MediaReferences); p != nil {
 			payload["primary_media_asset_id"] = p.AssetID
 		}
+		at := time.Now().UTC().Truncate(time.Microsecond)
+		payload["lifecycle_expires_at"] = s.policy.CeilingFrom(at).Format(time.RFC3339)
 		return &CurationChange{
-			Publish: true,
+			Publish: true, At: at, LifecycleCeiling: s.policy.CeilingFrom(at),
 			Audit: &audit.Entry{
 				ActorType: "OPERATOR", ActorID: operatorID, Action: "SUPPLY_LISTING_PUBLISHED",
 				EntityType: "supply_listing", EntityID: &id,
@@ -662,4 +678,55 @@ func uuidPtrString(id *uuid.UUID) any {
 // the media preview applies exactly the same ownership/availability rules.
 func (s *ListingService) MediaAssetStates(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]MediaAssetState, error) {
 	return s.media.MediaAssetStates(ctx, ids)
+}
+
+// Verify records an explicit operator verification: the operator confirmed
+// with the vendor that the supply is still available. It moves
+// last_verified_at to now (freshness) and nothing else: the lifecycle
+// ceiling is unchanged and an expired listing cannot be verified back to
+// life. Allowed for DRAFT, ACTIVE and PAUSED listings inside their lifecycle.
+func (s *ListingService) Verify(ctx context.Context, listingID uuid.UUID, note *string, expectedUpdatedAt *time.Time, operatorID *uuid.UUID) (*Listing, error) {
+	var clean *string
+	if note != nil {
+		t := strings.TrimSpace(*note)
+		if utf8.RuneCountInString(t) > maxReason {
+			return nil, ValidationError{Problems: []FieldError{{"note", fmt.Sprintf("must be at most %d characters", maxReason)}}}
+		}
+		if t != "" {
+			clean = &t
+		}
+	}
+	return s.listings.Curate(ctx, listingID, func(cur *Listing) (*CurationChange, error) {
+		if err := checkStale(cur, expectedUpdatedAt); err != nil {
+			return nil, err
+		}
+		if cur.Status != ListingDraft && cur.Status != ListingActive && cur.Status != ListingPaused {
+			return nil, ErrInvalidTransition{Op: "verify", From: cur.Status}
+		}
+		at := time.Now().UTC().Truncate(time.Microsecond)
+		if !at.Before(cur.ExpiresAt) {
+			return nil, ErrLifecycleExpired
+		}
+		id := cur.ID
+		prev := map[string]any{"last_verified_at": nil}
+		if cur.LastVerifiedAt != nil {
+			prev["last_verified_at"] = cur.LastVerifiedAt.UTC().Format(time.RFC3339Nano)
+		}
+		next := map[string]any{"last_verified_at": at.Format(time.RFC3339Nano), "source": "operator", "note": derefStrPtr(clean)}
+		return &CurationChange{
+			Verify: true, At: at,
+			Audit: &audit.Entry{
+				ActorType: "OPERATOR", ActorID: operatorID, Action: "SUPPLY_LISTING_VERIFIED",
+				EntityType: "supply_listing", EntityID: &id, PreviousValue: prev, NewValue: next,
+				Metadata: map[string]any{"public_reference": cur.PublicReference, "status": string(cur.Status)},
+			},
+			Event: &event.Event{
+				EventType: event.SupplyListingVerified, EntityType: "supply_listing", EntityID: &id,
+				ActorType: event.ActorOperator, ActorID: operatorID,
+				Payload: map[string]any{"public_reference": cur.PublicReference, "source": "operator",
+					"verified_at": at.Format(time.RFC3339), "note": derefStrPtr(clean),
+					"lifecycle_expires_at": cur.ExpiresAt.UTC().Format(time.RFC3339)},
+			},
+		}, nil
+	})
 }

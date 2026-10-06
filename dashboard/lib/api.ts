@@ -174,6 +174,12 @@ export type MatchCandidateDTO = {
     price: number | null;
     currency: string;
     location: string | null;
+    // Phase 4A.5
+    freshness?: "FRESH" | "STALE" | "UNVERIFIED";
+    last_verified_at?: string | null;
+    geo_stage?: string;
+    lifecycle_day?: number;
+    needs_reconfirmation?: boolean;
   };
 };
 
@@ -374,6 +380,40 @@ export type SupplyListingDTO = {
   rejected_at: string | null;
   rejection_reason: string | null;
   primary_media_asset_id: string | null;
+  // Phase 4A.5: canonical eligibility at response time (derived, not stored).
+  eligibility?: Eligibility;
+};
+
+// Phase 4A.5 supply eligibility (backend supply.Eligibility).
+export type Eligibility = {
+  eligible: boolean;
+  reasons: string[];
+  notes: string[];
+  status: string;
+  lifecycle: {
+    state: "NOT_PUBLISHED" | "LIVE" | "EXPIRED" | "CLOSED";
+    started_at: string | null;
+    day: number;
+    max_days: number;
+    expires_at: string;
+    expired: boolean;
+  };
+  freshness: {
+    state: "FRESH" | "STALE" | "UNVERIFIED";
+    verified_at: string | null;
+    age_hours: number;
+    stale_at: string | null;
+  };
+  geography: {
+    stage: "NONE" | "PENDING" | "LOCAL" | "NEARBY" | "STATE" | "REGION" | "EXPIRED";
+    scope: string;
+    levels: string[];
+    origin: { raw: string; community?: string; lga?: string; city?: string; state?: string; region?: string; country?: string; resolved: boolean };
+    reason: string;
+    next_stage?: string;
+    next_expansion_at?: string;
+  };
+  evaluated_at: string;
 };
 
 
@@ -512,6 +552,15 @@ export async function publishListing(id: string, expectedUpdatedAt?: string): Pr
     headers: operatorHeaders(),
     body: JSON.stringify(expectedUpdatedAt ? { expected_updated_at: expectedUpdatedAt } : {}),
   });
+}
+
+// Operator verification (Phase 4A.5): "I confirmed with the vendor it is
+// still available". Moves last_verified_at only; never revives an expired listing.
+export async function verifyListing(id: string, note: string, expectedUpdatedAt?: string): Promise<SupplyListingDTO> {
+  const body: Record<string, string> = {};
+  if (note.trim()) body.note = note.trim();
+  if (expectedUpdatedAt) body.expected_updated_at = expectedUpdatedAt;
+  return curationCall(`/api/supply-listings/${id}/verify`, { method: "POST", headers: operatorHeaders(), body: JSON.stringify(body) });
 }
 
 export async function rejectListing(id: string, reason: string, expectedUpdatedAt?: string): Promise<SupplyListingDTO> {

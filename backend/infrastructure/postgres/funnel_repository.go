@@ -106,10 +106,13 @@ var supplyQueries = []supplyQuery{
 		      + (SELECT count(*) FROM supply_listings WHERE rejected_at >= $1 AND rejected_at < $2 AND published_at IS NULL)`},
 	{"listings_withdrawn", "Published listings withdrawn", "count", "window", "supply_listings.rejected_at (after publication)", "",
 		`SELECT count(*), NULL::bigint FROM supply_listings WHERE rejected_at >= $1 AND rejected_at < $2 AND published_at IS NOT NULL`},
-	{"stale_listing_rate", "Stale ACTIVE listings", "rate", "now", "ACTIVE listings not verified within the freshness window / ACTIVE",
-		"freshness window is LISTING_FRESHNESS_WINDOW [PARAM]; verification = supply evidence time; includes ACTIVE listings past expiry (no expiry worker)",
+	{"stale_listing_rate", "Stale live listings", "rate", "now", "ACTIVE listings inside their lifecycle not verified within the freshness window / ACTIVE inside their lifecycle",
+		"freshness window is SUPPLY_FRESHNESS_WINDOW [PARAM]; stale is not expired: these stay eligible and need reconfirmation",
 		`SELECT count(*) FILTER (WHERE last_verified_at IS NULL OR last_verified_at < now() - $3::interval), count(*)
-		 FROM supply_listings WHERE status = 'ACTIVE' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`},
+		 FROM supply_listings WHERE status = 'ACTIVE' AND expires_at > now() AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`},
+	{"lifecycle_expired_listings", "ACTIVE listings past their lifecycle", "count", "now", "status ACTIVE and expires_at <= now",
+		"logically expired (not eligible) though the status still says ACTIVE; kept as history, no expiry job rewrites the status",
+		`SELECT count(*), NULL::bigint FROM supply_listings WHERE status = 'ACTIVE' AND expires_at <= now() AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`},
 	{"usable_listings_per_active_vendor", "Usable listings per active vendor", "per", "now", "ACTIVE unexpired listings of ACTIVE vendors / ACTIVE vendors", "",
 		`SELECT (SELECT count(*) FROM supply_listings l JOIN vendors v ON v.id = l.vendor_id
 		         WHERE l.status = 'ACTIVE' AND l.expires_at > now() AND v.status = 'ACTIVE' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL),

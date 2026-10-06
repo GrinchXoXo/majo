@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -101,8 +102,28 @@ func main() {
 		vendorRepo, supplyRepo, routingRepo, requestRepo, aiProvider, eventWriter, auditWriter, outbound, logger,
 	)
 
+	// Phase 4A.5: the ONE canonical supply-eligibility policy (lifecycle,
+	// freshness, geographic expansion). Invalid configuration stops startup.
+	const day = 24 * time.Hour
+	supplyPolicy, err := supply.NewEligibilityPolicy(supply.PolicyConfig{
+		MaxLifecycle:    time.Duration(cfg.SupplyMaxLifecycleDays) * day,
+		FreshnessWindow: cfg.SupplyFreshnessWindow,
+		GeoLocalAfter:   time.Duration(cfg.SupplyGeoLocalDays) * day,
+		GeoNearbyAfter:  time.Duration(cfg.SupplyGeoNearbyDays) * day,
+		GeoStateAfter:   time.Duration(cfg.SupplyGeoStateDays) * day,
+		GeoRegionAfter:  time.Duration(cfg.SupplyGeoRegionDays) * day,
+	}, nil)
+	if err != nil {
+		logger.Error("invalid supply lifecycle configuration", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("supply eligibility policy", "max_lifecycle_days", cfg.SupplyMaxLifecycleDays,
+		"freshness_window", cfg.SupplyFreshnessWindow.String(), "geo_days", fmt.Sprintf("local=%d nearby=%d state=%d region=%d",
+			cfg.SupplyGeoLocalDays, cfg.SupplyGeoNearbyDays, cfg.SupplyGeoStateDays, cfg.SupplyGeoRegionDays))
+
 	listingService := supply.NewListingService(supplyRepo, listingRepo, vendorRepo, listingRepo, eventWriter, auditWriter, logger)
-	routingService.SetListingEvidence(listingRepo) // Phase 4A: matching reads ACTIVE listings
+	listingService.SetEligibilityPolicy(supplyPolicy)
+	routingService.SetListingEvidence(listingRepo, supplyPolicy) // Phase 4A: matching reads eligible listings
 	offerService := offer.NewService(offerRepo, routingRepo, requestRepo, eventWriter, auditWriter, logger)
 	txService := transaction.NewService(txRepo, offerRepo, requestRepo, eventWriter, auditWriter, logger)
 
@@ -229,6 +250,7 @@ func main() {
 	// Legacy alias kept for existing callers: the same publication gate.
 	mux.HandleFunc("POST /api/supply-listings/{id}/activate", operatorAuth.Require(supplyListingHandlers.PublishListing))
 	mux.HandleFunc("POST /api/supply-listings/{id}/reject", operatorAuth.Require(supplyListingHandlers.Reject))
+	mux.HandleFunc("POST /api/supply-listings/{id}/verify", operatorAuth.Require(supplyListingHandlers.Verify))
 	mux.HandleFunc("GET /api/supply-listings/{id}/media/{asset}", operatorAuth.Require(supplyListingHandlers.Media))
 	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", operatorAuth.Require(supplyListingHandlers.ListByVendor))
 
@@ -241,7 +263,7 @@ func main() {
 
 	// §23A: read-only core funnel, counted from system-of-record tables.
 	funnelHandlers := httpserver.NewFunnelHandlers(postgres.NewFunnelRepository(pool))
-	funnelHandlers.SetListingFreshness(cfg.ListingFreshnessWindow) // §K.2 stale-listing rate [PARAM]
+	funnelHandlers.SetListingFreshness(supplyPolicy.Config().FreshnessWindow) // §K.2 stale rate uses the canonical freshness [PARAM]
 	mux.HandleFunc("GET /api/metrics/funnel", funnelHandlers.Get)
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)

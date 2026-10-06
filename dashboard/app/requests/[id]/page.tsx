@@ -397,6 +397,9 @@ export default function RequestDetailPage() {
                             {m.relevant_listing.public_reference}
                           </a>
                           {m.relevant_listing.price != null ? ` · ₦${m.relevant_listing.price.toLocaleString()}` : ""}
+                          {m.relevant_listing.needs_reconfirmation && (
+                            <span style={{ color: "#b45309" }}> · {m.relevant_listing.freshness} — reconfirm with the vendor before telling the buyer</span>
+                          )}
                         </div>
                       )}
                     </td>

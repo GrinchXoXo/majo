@@ -519,6 +519,7 @@ func (e *listingEnv) server(token string) httpClient {
 	mux.HandleFunc("POST /api/supply-listings/{id}/publish", auth.Require(h.PublishListing))
 	mux.HandleFunc("POST /api/supply-listings/{id}/activate", auth.Require(h.PublishListing))
 	mux.HandleFunc("POST /api/supply-listings/{id}/reject", auth.Require(h.Reject))
+	mux.HandleFunc("POST /api/supply-listings/{id}/verify", auth.Require(h.Verify))
 	mux.HandleFunc("GET /api/supply-listings/{id}/media/{asset}", auth.Require(h.Media))
 	srv := httptest.NewServer(mux)
 	e.t.Cleanup(srv.Close)

@@ -24,6 +24,10 @@ type ListingService struct {
 	audits   audit.Writer
 	logger   *slog.Logger
 
+	// policy is the canonical supply eligibility policy (Phase 4A.5): it sets
+	// lifecycle ceilings and answers eligibility. Default: DefaultPolicyConfig.
+	policy *EligibilityPolicy
+
 	// Phase 4A.3 automatic DRAFT creation (optional; see SetDraftJobs).
 	jobs        jobs.Store
 	maxAttempts int
@@ -32,8 +36,18 @@ type ListingService struct {
 func NewListingService(signals Repository, listings ListingRepository, vendors VendorLookup, media SignalMediaReader,
 	events event.Writer, audits audit.Writer, logger *slog.Logger) *ListingService {
 	return &ListingService{signals: signals, listings: listings, vendors: vendors, media: media,
-		events: events, audits: audits, logger: logger, maxAttempts: 1}
+		events: events, audits: audits, logger: logger, maxAttempts: 1, policy: MustDefaultPolicy()}
 }
+
+// SetEligibilityPolicy replaces the default policy (configured values).
+func (s *ListingService) SetEligibilityPolicy(p *EligibilityPolicy) {
+	if p != nil {
+		s.policy = p
+	}
+}
+
+// Policy returns the canonical eligibility policy.
+func (s *ListingService) Policy() *EligibilityPolicy { return s.policy }
 
 // PublishFromSignal is the Phase 3 operator entry point (POST
 // /api/supply-listings). Despite its name it never publishes: it builds a

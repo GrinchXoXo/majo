@@ -66,10 +66,21 @@ type Config struct {
 	// form one SupplySignal.
 	SupplyGroupingWindow time.Duration
 
-	// ListingFreshnessWindow [PARAM] (Lock V2 §D: pilot hypothesis 72h): an
-	// ACTIVE listing whose evidence is older counts as stale in the supply
-	// metrics. Measurement only; nothing is expired or hidden by it.
-	ListingFreshnessWindow time.Duration
+	// --- Phase 4A.5: supply lifecycle, freshness, geographic expansion ---
+	// All [PARAM]; validated together by supply.PolicyConfig.Validate at
+	// startup. Days are whole days counted from publication.
+	//
+	// SupplyFreshnessWindow: verification older than this = STALE (not
+	// expired). SUPPLY_FRESHNESS_WINDOW, default 72h.
+	SupplyFreshnessWindow time.Duration
+	// SupplyMaxLifecycleDays: hard lifecycle ceiling. Default 60.
+	SupplyMaxLifecycleDays int
+	// Geographic expansion stage starts (days since publication):
+	// local 0, nearby 20, state 30, region 45.
+	SupplyGeoLocalDays  int
+	SupplyGeoNearbyDays int
+	SupplyGeoStateDays  int
+	SupplyGeoRegionDays int
 }
 
 // Load reads configuration from environment variables.
@@ -125,10 +136,27 @@ func Load() (*Config, error) {
 		{"JOBS_BACKOFF_MAX", 30 * time.Minute, &cfg.JobsBackoffMax},
 		{"JOBS_LEASE", 5 * time.Minute, &cfg.JobsLease},
 		{"SUPPLY_GROUPING_WINDOW", 120 * time.Second, &cfg.SupplyGroupingWindow},
-		{"LISTING_FRESHNESS_WINDOW", 72 * time.Hour, &cfg.ListingFreshnessWindow},
+		{"SUPPLY_FRESHNESS_WINDOW", 72 * time.Hour, &cfg.SupplyFreshnessWindow},
 	}
 	for _, d := range durs {
 		if *d.dest, err = getDuration(d.key, d.def); err != nil {
+			return nil, err
+		}
+	}
+
+	days := []struct {
+		key  string
+		def  int
+		dest *int
+	}{
+		{"SUPPLY_MAX_LIFECYCLE_DAYS", 60, &cfg.SupplyMaxLifecycleDays},
+		{"SUPPLY_GEO_LOCAL_DAYS", 0, &cfg.SupplyGeoLocalDays},
+		{"SUPPLY_GEO_NEARBY_DAYS", 20, &cfg.SupplyGeoNearbyDays},
+		{"SUPPLY_GEO_STATE_DAYS", 30, &cfg.SupplyGeoStateDays},
+		{"SUPPLY_GEO_REGION_DAYS", 45, &cfg.SupplyGeoRegionDays},
+	}
+	for _, d := range days {
+		if *d.dest, err = getDays(d.key, d.def); err != nil {
 			return nil, err
 		}
 	}
@@ -167,6 +195,19 @@ func getInt(key string, fallback int64) (int64, error) {
 	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("%s must be a positive integer, got %q", key, v)
+	}
+	return n, nil
+}
+
+// getDays parses a whole number of days (0 allowed).
+func getDays(key string, fallback int) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 3650 {
+		return 0, fmt.Errorf("%s must be a whole number of days between 0 and 3650, got %q", key, v)
 	}
 	return n, nil
 }

@@ -22,6 +22,7 @@ import (
 //	POST  /api/supply-listings/{id}/publish       DRAFT -> ACTIVE (the publication gate)
 //	POST  /api/supply-listings/{id}/activate      legacy alias of /publish (same operation)
 //	POST  /api/supply-listings/{id}/reject        DRAFT|ACTIVE -> ARCHIVED (+ reason)
+//	POST  /api/supply-listings/{id}/verify        operator verification: last_verified_at = now (4A.5)
 //	GET   /api/supply-listings/{id}/media/{asset} preview bytes of one of THIS listing's assets
 //
 // Errors keep the existing {"error": "..."} shape and add a stable "code";
@@ -56,7 +57,7 @@ func (h *SupplyListingHandlers) CreateFromSignal(w http.ResponseWriter, r *http.
 	case err != nil:
 		h.internalError(w, r, "creating listing from signal", err)
 	default:
-		writeJSON(w, http.StatusCreated, toListingDTO(listing))
+		writeJSON(w, http.StatusCreated, h.out(listing, nil))
 	}
 }
 
@@ -142,7 +143,7 @@ func (h *SupplyListingHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	l := v.Listing
 	out := listingDetailDTO{
-		listingDTO: toListingDTO(l), SourceMessages: []curationSourceDTO{}, Media: []curationMediaDTO{},
+		listingDTO: h.out(l, vendorActiveOf(v)), SourceMessages: []curationSourceDTO{}, Media: []curationMediaDTO{},
 		Published: l.PublishedAt != nil, Rejected: l.RejectedAt != nil, PublishBlockers: []supply.FieldError{},
 	}
 	if v.Vendor != nil {
@@ -241,7 +242,7 @@ func (h *SupplyListingHandlers) Patch(w http.ResponseWriter, r *http.Request) {
 		h.curationError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toListingDTO(updated))
+	writeJSON(w, http.StatusOK, h.out(updated, nil))
 }
 
 // --- transitions ---
@@ -249,6 +250,7 @@ func (h *SupplyListingHandlers) Patch(w http.ResponseWriter, r *http.Request) {
 type transitionBody struct {
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at"`
 	Reason            *string    `json:"reason"`
+	Note              *string    `json:"note"`
 }
 
 // PublishListing handles POST /api/supply-listings/{id}/publish (and the
@@ -259,7 +261,7 @@ func (h *SupplyListingHandlers) PublishListing(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var body transitionBody
-	if err := decodeStrict(r, &body); err != nil || body.Reason != nil {
+	if err := decodeStrict(r, &body); err != nil || body.Reason != nil || body.Note != nil {
 		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body (allowed: expected_updated_at)")
 		return
 	}
@@ -268,7 +270,7 @@ func (h *SupplyListingHandlers) PublishListing(w http.ResponseWriter, r *http.Re
 		h.curationError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toListingDTO(l))
+	writeJSON(w, http.StatusOK, h.out(l, nil))
 }
 
 // Reject handles POST /api/supply-listings/{id}/reject.
@@ -278,7 +280,7 @@ func (h *SupplyListingHandlers) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body transitionBody
-	if err := decodeStrict(r, &body); err != nil {
+	if err := decodeStrict(r, &body); err != nil || body.Note != nil {
 		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body (allowed: reason, expected_updated_at)")
 		return
 	}
@@ -287,7 +289,28 @@ func (h *SupplyListingHandlers) Reject(w http.ResponseWriter, r *http.Request) {
 		h.curationError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toListingDTO(l))
+	writeJSON(w, http.StatusOK, h.out(l, nil))
+}
+
+// Verify handles POST /api/supply-listings/{id}/verify (Phase 4A.5): the
+// operator confirmed with the vendor that the supply is still available.
+// Moves last_verified_at only; never extends or revives the lifecycle.
+func (h *SupplyListingHandlers) Verify(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+	var body transitionBody
+	if err := decodeStrict(r, &body); err != nil || body.Reason != nil {
+		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body (allowed: note, expected_updated_at)")
+		return
+	}
+	l, err := h.service.Verify(r.Context(), id, body.Note, body.ExpectedUpdatedAt, nil)
+	if err != nil {
+		h.curationError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.out(l, nil))
 }
 
 // --- media preview ---
@@ -362,6 +385,8 @@ func (h *SupplyListingHandlers) curationError(w http.ResponseWriter, r *http.Req
 		writeErrorCode(w, http.StatusNotFound, "NOT_FOUND", "listing not found")
 	case errors.Is(err, supply.ErrStale):
 		writeErrorCode(w, http.StatusConflict, "STALE", err.Error())
+	case errors.Is(err, supply.ErrLifecycleExpired):
+		writeErrorCode(w, http.StatusConflict, "LIFECYCLE_EXPIRED", err.Error())
 	case errors.As(err, &terr):
 		writeErrorCode(w, http.StatusConflict, "INVALID_TRANSITION", err.Error())
 	case errors.As(err, &verr):
@@ -376,4 +401,12 @@ func (h *SupplyListingHandlers) curationError(w http.ResponseWriter, r *http.Req
 func (h *SupplyListingHandlers) internalError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	h.logger.ErrorContext(r.Context(), what+" failed", "path", r.URL.Path, "error", err)
 	writeErrorCode(w, http.StatusInternalServerError, "INTERNAL", what+" failed")
+}
+
+func vendorActiveOf(v *supply.CurationView) *bool {
+	if v == nil || v.Vendor == nil {
+		return nil
+	}
+	a := v.Vendor.Status == "ACTIVE"
+	return &a
 }

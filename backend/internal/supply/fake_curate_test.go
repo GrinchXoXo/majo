@@ -61,11 +61,23 @@ func (f *fakeListingRepo) Curate(ctx context.Context, id uuid.UUID, decide Curat
 		stored.MediaReferences = append([]MediaReference(nil), (*fl.MediaReferences)...)
 	}
 	now := time.Now().UTC()
+	at := now
+	if !ch.At.IsZero() {
+		at = ch.At
+	}
 	if ch.Publish {
 		stored.Status = ListingActive
 		if stored.PublishedAt == nil {
-			stored.PublishedAt = &now
+			p := at
+			stored.PublishedAt = &p
 		}
+		if !ch.LifecycleCeiling.IsZero() {
+			stored.ExpiresAt = ch.LifecycleCeiling
+		}
+	}
+	if ch.Verify {
+		v := at
+		stored.LastVerifiedAt = &v
 	}
 	if ch.Reject {
 		stored.Status = ListingArchived

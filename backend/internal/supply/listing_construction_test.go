@@ -109,7 +109,7 @@ func TestBuildListing_MapsWithoutInventingAndKeepsMediaOrder(t *testing.T) {
 	s.Category, s.Variant, s.Quantity, s.Currency = strp("electronics"), strp("128GB"), func() *int { q := 4; return &q }(), "NGN"
 	media := []MediaReference{{Type: "image", AssetID: "c"}, {Type: "image", AssetID: "a"}, {Type: "video", AssetID: "b"}}
 	first := uuid.New()
-	l, _ := buildListing(s, &vendor.Vendor{PrimaryLocation: "Benin City"}, media, &first)
+	l, _ := buildListing(s, &vendor.Vendor{PrimaryLocation: "Benin City"}, media, &first, MustDefaultPolicy())
 	if l.Status != ListingDraft || *l.Product != "iPhone 13" || *l.NormalizedProduct != "iphone13" || *l.Category != "electronics" ||
 		*l.Variant != "128GB" || *l.Price != 620000 || l.Currency != "NGN" || *l.Quantity != 4 || l.Condition != nil ||
 		*l.Location != "Benin City" || *l.SupplySignalID != s.ID || *l.SourceMessageID != first {
@@ -118,8 +118,10 @@ func TestBuildListing_MapsWithoutInventingAndKeepsMediaOrder(t *testing.T) {
 	if l.MediaReferences[0].AssetID != "c" || l.MediaReferences[1].AssetID != "a" || l.MediaReferences[2].AssetID != "b" {
 		t.Fatal("media order must be the evidence order")
 	}
-	if !l.LastVerifiedAt.Equal(s.CreatedAt) || !l.ExpiresAt.Equal(s.CreatedAt.Add(ListingLifetime)) {
-		t.Fatalf("verified = evidence time, expires = +lifetime; got %v / %v", l.LastVerifiedAt, l.ExpiresAt)
+	// Phase 4A.5: a draft's provisional ceiling is evidence time + the max
+	// lifecycle (60 days by default), not the old 7-day lifetime.
+	if !l.LastVerifiedAt.Equal(s.CreatedAt) || !l.ExpiresAt.Equal(s.CreatedAt.Add(60*24*time.Hour)) {
+		t.Fatalf("verified = evidence time, provisional ceiling = +60d; got %v / %v", l.LastVerifiedAt, l.ExpiresAt)
 	}
 	if *l.Product == *l.NormalizedProduct {
 		t.Fatal("display value must not be replaced by the search form")

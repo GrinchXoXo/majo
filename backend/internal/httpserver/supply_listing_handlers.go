@@ -63,6 +63,21 @@ type listingDTO struct {
 	RejectedAt           *string `json:"rejected_at"`
 	RejectionReason      *string `json:"rejection_reason"`
 	PrimaryMediaAssetID  *string `json:"primary_media_asset_id"`
+	// Eligibility (Phase 4A.5) is the canonical supply-eligibility answer at
+	// response time: lifecycle, freshness, geographic scope. Derived, never
+	// stored.
+	Eligibility *supply.Eligibility `json:"eligibility,omitempty"`
+}
+
+// out is toListingDTO plus the canonical eligibility evaluation.
+// vendorActive is nil when the vendor's status is not loaded.
+func (h *SupplyListingHandlers) out(l *supply.Listing, vendorActive *bool) listingDTO {
+	dto := toListingDTO(l)
+	if h.service != nil {
+		e := h.service.Policy().EvaluateListing(l, vendorActive, time.Now().UTC())
+		dto.Eligibility = &e
+	}
+	return dto
 }
 
 func toListingDTO(l *supply.Listing) listingDTO {
@@ -136,6 +151,13 @@ func (h *SupplyListingHandlers) Search(w http.ResponseWriter, r *http.Request) {
 		st := supply.ListingStatus(v)
 		q.Status = &st
 	}
+	switch v := query.Get("lifecycle"); v {
+	case "", "live", "expired", "all":
+		q.Lifecycle = v
+	default:
+		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "lifecycle must be live, expired or all")
+		return
+	}
 
 	results, err := h.listings.Search(r.Context(), q)
 	if err != nil {
@@ -144,7 +166,7 @@ func (h *SupplyListingHandlers) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	dtos := make([]listingDTO, 0, len(results))
 	for _, l := range results {
-		dtos = append(dtos, toListingDTO(l))
+		dtos = append(dtos, h.out(l, nil))
 	}
 	writeJSON(w, http.StatusOK, dtos)
 }
@@ -162,7 +184,7 @@ func (h *SupplyListingHandlers) ListByVendor(w http.ResponseWriter, r *http.Requ
 	}
 	dtos := make([]listingDTO, 0, len(results))
 	for _, l := range results {
-		dtos = append(dtos, toListingDTO(l))
+		dtos = append(dtos, h.out(l, nil))
 	}
 	writeJSON(w, http.StatusOK, dtos)
 }

@@ -8,13 +8,14 @@ import {
   patchListing,
   publishListing,
   rejectListing,
+  verifyListing,
   type FieldProblem,
   type ListingDetailDTO,
   type ListingEditBody,
 } from "@/lib/api";
 import ListingMedia from "@/components/ListingMedia";
 import OperatorToken from "@/components/OperatorToken";
-import { STATUS_COLORS, formatDate, formatPrice } from "@/lib/listing";
+import { FRESHNESS_COLORS, STATUS_COLORS, formatDate, formatPrice, geoLabel, relativeDays } from "@/lib/listing";
 
 // Listing curation (Phase 4A Step 4): inspect a listing next to the
 // evidence it came from, correct marketplace fields, arrange media and
@@ -77,6 +78,7 @@ export default function ListingCurationPage() {
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
+  const [verifyNote, setVerifyNote] = useState("");
   const [tokenTick, setTokenTick] = useState(0);
 
   const reset = (d: ListingDetailDTO) => {
@@ -198,6 +200,21 @@ export default function ListingCurationPage() {
       setNotice(
         l.status === "ARCHIVED" ? { kind: "ok", text: "Listing rejected." + staleNote(fresh) } : { kind: "error", text: `Unexpected status ${l.status}.` },
       );
+    } catch (e) {
+      setNotice(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verify = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      await verifyListing(id, verifyNote, detail.updated_at);
+      const fresh = await refresh();
+      setVerifyNote("");
+      setNotice({ kind: "ok", text: "Marked as verified: availability confirmed now." + staleNote(fresh) });
     } catch (e) {
       setNotice(describeError(e));
     } finally {
@@ -388,6 +405,30 @@ export default function ListingCurationPage() {
         </section>
       </div>
 
+      {detail.eligibility && <LifecyclePanel el={detail.eligibility} />}
+
+      {detail.eligibility && (detail.status === "DRAFT" || detail.status === "ACTIVE" || detail.status === "PAUSED") &&
+        !detail.eligibility.lifecycle.expired && (
+          <section style={card}>
+            <h3 style={{ marginTop: 0 }}>Verify availability</h3>
+            <p style={{ fontSize: "0.85em", color: "#6b7280", marginTop: 0 }}>
+              Only after you confirmed with the vendor that the item is still available. This refreshes the
+              verification time; it does not extend the lifecycle.
+            </p>
+            <input
+              aria-label="Verification note"
+              placeholder="How you confirmed (optional), e.g. called the vendor"
+              value={verifyNote}
+              onChange={(e) => setVerifyNote(e.target.value)}
+              maxLength={500}
+              style={{ padding: "4px 6px", width: "100%", maxWidth: 420, boxSizing: "border-box" }}
+            />{" "}
+            <button onClick={verify} disabled={busy || dirty} data-testid="verify">
+              Mark verified
+            </button>
+          </section>
+        )}
+
       <section style={card}>
         <h3 style={{ marginTop: 0 }}>Media ({order.length})</h3>
         {order.length === 0 && <p style={{ color: "#6b7280" }}>This listing has no media.</p>}
@@ -467,5 +508,78 @@ export default function ListingCurationPage() {
         )}
       </section>
     </div>
+  );
+}
+
+// Phase 4A.5 operator view of the canonical eligibility policy: age,
+// freshness, lifecycle, geographic scope, next expansion, expiry. All of it
+// is derived by the backend at read time; nothing here is stored.
+function LifecyclePanel({ el }: { el: import("@/lib/api").Eligibility }) {
+  const lc = el.lifecycle;
+  const fr = el.freshness;
+  const geo = el.geography;
+  const origin = geo.origin;
+  const originText = origin.resolved
+    ? [origin.community, origin.city, origin.state, origin.region].filter(Boolean).join(", ")
+    : origin.raw
+      ? `${origin.raw} (not resolved)`
+      : "—";
+  const row = (label: string, value: React.ReactNode, testid?: string) => (
+    <tr>
+      <td style={{ color: "#555", paddingRight: 12, whiteSpace: "nowrap", verticalAlign: "top" }}>{label}</td>
+      <td data-testid={testid}>{value}</td>
+    </tr>
+  );
+  return (
+    <section style={{ border: "1px solid #e5e7eb", borderRadius: 6, padding: 12, marginBottom: 16 }} data-testid="lifecycle-panel">
+      <h3 style={{ marginTop: 0 }}>Lifecycle &amp; eligibility</h3>
+      <table style={{ fontSize: "0.9em" }}>
+        <tbody>
+          {row(
+            "Eligible now",
+            el.eligible ? (
+              <strong style={{ color: "#15803d" }}>yes</strong>
+            ) : (
+              <span>
+                <strong style={{ color: "#b91c1c" }}>no</strong> — {el.reasons.join(", ")}
+              </span>
+            ),
+            "elig-eligible",
+          )}
+          {row(
+            "Lifecycle",
+            lc.state === "LIVE"
+              ? `Day ${lc.day} / ${lc.max_days}`
+              : lc.state === "EXPIRED"
+                ? `Expired (day ${lc.day} / ${lc.max_days}) — kept as history`
+                : lc.state === "NOT_PUBLISHED"
+                  ? "Not started (starts at publication)"
+                  : "Closed",
+            "elig-lifecycle",
+          )}
+          {row(
+            "Freshness",
+            <span>
+              <strong style={{ color: FRESHNESS_COLORS[fr.state] }}>{fr.state}</strong>
+              {fr.verified_at ? ` — verified ${relativeDays(fr.verified_at)}` : ""}
+              {fr.state === "STALE" ? " · needs vendor reconfirmation before telling a buyer it is available" : ""}
+            </span>,
+            "elig-freshness",
+          )}
+          {row("Search scope", `${geoLabel(geo.stage)}${geo.levels.length ? ` (${geo.levels.join(", ")})` : ""}`, "elig-scope")}
+          {row("Origin", originText)}
+          {geo.next_stage &&
+            row(
+              "Next change",
+              geo.next_stage === "EXPIRED"
+                ? `Expires ${relativeDays(geo.next_expansion_at)}`
+                : `${geoLabel(geo.next_stage)} ${relativeDays(geo.next_expansion_at)}`,
+              "elig-next",
+            )}
+          {row("Lifecycle ends", formatDate(lc.expires_at), "elig-expires")}
+          {el.notes.length > 0 && row("Notes", el.notes.join(", "))}
+        </tbody>
+      </table>
+    </section>
   );
 }

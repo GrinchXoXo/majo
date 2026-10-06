@@ -72,6 +72,9 @@ const (
 	// archived it (DRAFT/ACTIVE -> ARCHIVED, with an optional reason).
 	SupplyListingPublished Type = "SUPPLY_LISTING_PUBLISHED"
 	SupplyListingRejected  Type = "SUPPLY_LISTING_REJECTED"
+	// Phase 4A.5: an explicit verification of a listing's availability
+	// (today: operator verification). Moves last_verified_at only.
+	SupplyListingVerified Type = "SUPPLY_LISTING_VERIFIED"
 
 	OfferReviewed Type = "OFFER_REVIEWED"
 	OfferSent     Type = "OFFER_SENT"

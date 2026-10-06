@@ -73,7 +73,7 @@ func TestIntegration_Matching_UsesPublishedListings(t *testing.T) {
 	}
 
 	// After: matching reads ACTIVE listings.
-	e.routing.SetListingEvidence(e.listings)
+	e.routing.SetListingEvidence(e.listings, nil)
 	cs, _, err = e.routing.SuggestVendors(ctx, req)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestIntegration_Matching_UsesPublishedListings(t *testing.T) {
 func TestIntegration_Matching_ExpiredOrUnpublishedListingsIgnored(t *testing.T) {
 	e := newListingEnv(t)
 	ctx := context.Background()
-	e.routing.SetListingEvidence(e.listings)
+	e.routing.SetListingEvidence(e.listings, nil)
 	v := e.vendorAt("V", "2348051130010", "Benin City")
 	mustExec(t, e.db, `INSERT INTO vendor_categories (vendor_id, category) VALUES ($1, 'electronics')`, v)
 	sig := e.signal(v, "PS5", 450000, "", nil)
