@@ -37,11 +37,26 @@ type Media struct {
 	Voice    bool // true for WhatsApp voice notes (audio recorded in-app)
 }
 
+// StatusUpdate is one Meta delivery-status callback for a message Majo sent
+// (webhook value.statuses[]). Status is "sent" | "delivered" | "read" |
+// "failed". "read" only arrives if the recipient has read receipts on.
+type StatusUpdate struct {
+	MessageID   string // wamid of OUR outbound message
+	Status      string
+	RecipientID string
+	Timestamp   string // unix seconds, as sent by Meta
+	ErrorCode   int
+	ErrorTitle  string
+}
+
 // MessagingProvider is the interface the rest of the backend depends on.
 // A future provider (a different BSP, a different channel) implements the
 // same interface without requiring changes elsewhere.
 type MessagingProvider interface {
 	SendText(ctx context.Context, to, body string) error
+	// SendTextWithID is SendText that also returns the provider's message
+	// ID (WhatsApp wamid), so delivery receipts can be correlated later.
+	SendTextWithID(ctx context.Context, to, body string) (string, error)
 	SendInteractive(ctx context.Context, to string, interactive Interactive) error
 	VerifyWebhookToken(mode, token, challenge, expectedToken string) (string, bool)
 	// VerifyWebhookSignature checks Meta's X-Hub-Signature-256 header
@@ -50,6 +65,9 @@ type MessagingProvider interface {
 	// also when no App Secret is configured (fail closed).
 	VerifyWebhookSignature(payload []byte, signatureHeader string) bool
 	ParseWebhookPayload(payload []byte) ([]InboundMessage, error)
+	// ParseStatusUpdates extracts delivery-status callbacks (statuses[])
+	// from the same webhook payload.
+	ParseStatusUpdates(payload []byte) ([]StatusUpdate, error)
 }
 
 // Interactive is a minimal representation of WhatsApp's interactive message

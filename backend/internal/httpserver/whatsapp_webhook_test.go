@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -78,7 +79,7 @@ func newTestWebhook(allowUnsigned bool) (*WhatsAppWebhookHandler, *recConvRepo, 
 	v := &vendor.Vendor{ID: uuid.New(), BusinessName: "Mike Gadgets", Status: vendor.StatusActive}
 	h := NewWhatsAppWebhookHandler(
 		whatsapp.NewCloudAPIProvider("", "", "", "verify", "app-secret"),
-		conv, nil, activeVendorRepo{v}, ev, nil, nil, nil, "verify", allowUnsigned,
+		conv, nil, nil, activeVendorRepo{v}, ev, nil, nil, nil, "verify", allowUnsigned,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	return h, conv, ev
@@ -136,5 +137,81 @@ func TestWebhook_DevelopmentModeAllowsUnsignedOnlyWhenExplicit(t *testing.T) {
 	h, conv, _ := newTestWebhook(true)
 	if code := post(h, voiceNoteFromVendor, ""); code != http.StatusOK || len(conv.saved) != 1 {
 		t.Fatalf("AllowUnsignedWebhooks=true should accept unsigned (dev only); code=%d saved=%d", code, len(conv.saved))
+	}
+}
+
+// --- §23A delivery receipts ---
+
+type fakeDeliveries struct {
+	seen map[string]map[string]bool // wamid -> status -> already applied
+	meta map[string]map[string]any
+}
+
+func (f *fakeDeliveries) ApplyDeliveryStatus(ctx context.Context, wamid, status string, at time.Time, errDetail string) (*conversation.DeliveryTransition, error) {
+	meta, ok := f.meta[wamid]
+	if !ok {
+		return nil, nil
+	}
+	if f.seen[wamid] == nil {
+		f.seen[wamid] = map[string]bool{}
+	}
+	t := &conversation.DeliveryTransition{Message: &conversation.Message{ID: uuid.New(), Metadata: meta}}
+	switch status {
+	case "delivered":
+		t.FirstDelivered = !f.seen[wamid]["delivered"]
+		f.seen[wamid]["delivered"] = true
+	case "read":
+		t.FirstDelivered = !f.seen[wamid]["delivered"]
+		t.FirstRead = !f.seen[wamid]["read"]
+		f.seen[wamid]["delivered"], f.seen[wamid]["read"] = true, true
+	case "failed":
+		t.FirstFailed = !f.seen[wamid]["failed"]
+		f.seen[wamid]["failed"] = true
+	default:
+		return nil, nil
+	}
+	return t, nil
+}
+
+func statusPayload(wamid, status string) string {
+	return `{"entry":[{"changes":[{"value":{"statuses":[{"id":"` + wamid + `","status":"` + status +
+		`","timestamp":"1759700000","recipient_id":"2348099999999"}]}}]}]}`
+}
+
+func TestWebhook_DeliveryReceiptsProduceOneFunnelEventPerTransition(t *testing.T) {
+	conv := &recConvRepo{}
+	ev := &recEvents{}
+	reqID := uuid.New()
+	deliveries := &fakeDeliveries{seen: map[string]map[string]bool{}, meta: map[string]map[string]any{
+		"wamid.OFFER": {"kind": "offer_delivery", "entity_type": "buyer_request", "entity_id": reqID.String()},
+	}}
+	h := NewWhatsAppWebhookHandler(
+		whatsapp.NewCloudAPIProvider("", "", "", "verify", "app-secret"),
+		conv, deliveries, nil, activeVendorRepo{}, ev, nil, nil, nil, "verify", false,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
+	for _, st := range []string{"sent", "delivered", "delivered", "read", "read"} {
+		body := statusPayload("wamid.OFFER", st)
+		if code := post(h, body, metaSign("app-secret", body)); code != http.StatusOK {
+			t.Fatalf("status %s: expected 200, got %d", st, code)
+		}
+	}
+	// A receipt for a message Majo never recorded is ignored.
+	body := statusPayload("wamid.UNKNOWN", "delivered")
+	post(h, body, metaSign("app-secret", body))
+
+	counts := map[event.Type]int{}
+	for _, e := range ev.all {
+		counts[e.EventType]++
+		if e.EntityType != "buyer_request" || e.EntityID == nil || *e.EntityID != reqID || e.Payload["kind"] != "offer_delivery" {
+			t.Fatalf("receipt event must be attributed to the offer's buyer request, got %+v", e)
+		}
+	}
+	if counts[event.MessageDelivered] != 1 || counts[event.MessageRead] != 1 || len(ev.all) != 2 {
+		t.Fatalf("expected exactly one MESSAGE_DELIVERED and one MESSAGE_READ, got %v", counts)
+	}
+	if len(conv.saved) != 0 {
+		t.Fatal("status callbacks must not be stored as inbound messages")
 	}
 }

@@ -28,13 +28,13 @@ type MessagingProvider interface {
 // handlers and webhook processing call into — it is the single place
 // business rules about requests live.
 type Service struct {
-	requests  Repository
-	convRepo  conversation.Repository
+	requests   Repository
+	convRepo   conversation.Repository
 	aiProvider ai.Provider
-	events    event.Writer
-	audits    audit.Writer
-	messaging MessagingProvider
-	logger    *slog.Logger
+	events     event.Writer
+	audits     audit.Writer
+	messaging  MessagingProvider
+	logger     *slog.Logger
 }
 
 func NewService(
@@ -76,12 +76,19 @@ func (s *Service) CreateFromMessage(ctx context.Context, conversationID, buyerID
 		return nil, fmt.Errorf("creating buyer request: %w", err)
 	}
 
+	channel := ""
+	if conv, err := s.convRepo.FindByID(ctx, conversationID); err == nil && conv != nil {
+		channel = conv.Channel
+	}
 	if err := s.events.Write(ctx, &event.Event{
 		EventType:  event.RequestCreated,
 		EntityType: "buyer_request",
 		EntityID:   &created.ID,
 		ActorType:  event.ActorBuyer,
-		Payload:    map[string]any{"raw_message": rawText},
+		ActorID:    &buyerID,
+		Payload: event.Merge(created.FunnelDims(), map[string]any{
+			"raw_message": rawText, "channel": channel, "origin_message_id": messageID.String(),
+		}),
 	}); err != nil {
 		s.logger.Error("writing REQUEST_CREATED event", "error", err)
 	}
@@ -155,10 +162,11 @@ func (s *Service) RunExtraction(ctx context.Context, requestID uuid.UUID) {
 		EntityType: "buyer_request",
 		EntityID:   &requestID,
 		ActorType:  event.ActorSystem,
-		Payload: map[string]any{
-			"success":    true,
-			"confidence": result.Confidence,
-		},
+		Payload: event.Merge(updated.FunnelDims(), map[string]any{
+			"success":      true,
+			"confidence":   result.Confidence,
+			"completeness": string(updated.Completeness),
+		}),
 	}); err != nil {
 		s.logger.Error("writing REQUEST_EXTRACTED event", "error", err)
 	}
@@ -220,9 +228,16 @@ func (s *Service) Correct(ctx context.Context, requestID uuid.UUID, patch Fields
 // Confirm marks a request as CONFIRMED — the signal that Phase 2's vendor
 // matching is allowed to consume it (PRD 1 §6/§49).
 func (s *Service) Confirm(ctx context.Context, requestID uuid.UUID, operatorID *uuid.UUID) (*BuyerRequest, error) {
+	before, err := s.requests.FindByID(ctx, requestID)
+	if err != nil {
+		return nil, fmt.Errorf("loading request: %w", err)
+	}
 	confirmed, err := s.requests.Confirm(ctx, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("confirming request: %w", err)
+	}
+	if before != nil && before.Status == StatusConfirmed {
+		return confirmed, nil // idempotent re-confirm: no second funnel event
 	}
 
 	if err := s.events.Write(ctx, &event.Event{
@@ -231,6 +246,7 @@ func (s *Service) Confirm(ctx context.Context, requestID uuid.UUID, operatorID *
 		EntityID:   &requestID,
 		ActorType:  event.ActorOperator,
 		ActorID:    operatorID,
+		Payload:    event.Merge(confirmed.FunnelDims(), map[string]any{"completeness": string(confirmed.Completeness)}),
 	}); err != nil {
 		s.logger.Error("writing REQUEST_CONFIRMED event", "error", err)
 	}
@@ -257,7 +273,10 @@ func (s *Service) Clarify(ctx context.Context, requestID uuid.UUID, question str
 		question = defaultClarificationQuestion(req)
 	}
 
-	if err := s.messaging.SendText(ctx, conv.ExternalID, question); err != nil {
+	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
+		Kind: "clarification", EntityType: "buyer_request", EntityID: &requestID,
+	})
+	if err := s.messaging.SendText(sendCtx, conv.ExternalID, question); err != nil {
 		return fmt.Errorf("sending clarification message: %w", err)
 	}
 

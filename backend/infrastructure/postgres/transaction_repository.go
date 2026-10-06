@@ -22,14 +22,14 @@ func NewTransactionRepository(db *sql.DB) *TransactionRepository {
 
 func (r *TransactionRepository) FindSelectionByBuyerRequest(ctx context.Context, buyerRequestID uuid.UUID) (*transaction.Selection, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, buyer_request_id, offer_id, buyer_id, status, created_at
+		SELECT id, buyer_request_id, offer_id, buyer_id, status, COALESCE(source, ''), created_at
 		FROM buyer_selections WHERE buyer_request_id = $1 AND status = 'ACTIVE'
 		ORDER BY created_at DESC LIMIT 1
 	`, buyerRequestID.String())
 
 	var s transaction.Selection
 	var idStr, brIDStr, offerIDStr, buyerIDStr string
-	err := row.Scan(&idStr, &brIDStr, &offerIDStr, &buyerIDStr, &s.Status, &s.CreatedAt)
+	err := row.Scan(&idStr, &brIDStr, &offerIDStr, &buyerIDStr, &s.Status, &s.Source, &s.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -123,10 +123,10 @@ func (r *TransactionRepository) CreateSelectionWithTransaction(ctx context.Conte
 	defer dbtx.Rollback()
 
 	if err := dbtx.QueryRowContext(ctx, `
-		INSERT INTO buyer_selections (id, buyer_request_id, offer_id, buyer_id, status)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO buyer_selections (id, buyer_request_id, offer_id, buyer_id, status, source)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
 		RETURNING created_at
-	`, s.ID.String(), s.BuyerRequestID.String(), s.OfferID.String(), s.BuyerID.String(), s.Status).Scan(&s.CreatedAt); err != nil {
+	`, s.ID.String(), s.BuyerRequestID.String(), s.OfferID.String(), s.BuyerID.String(), s.Status, s.Source).Scan(&s.CreatedAt); err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 			return nil, nil, transaction.ErrSelectionExists

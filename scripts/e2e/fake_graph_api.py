@@ -4,7 +4,9 @@ Stand-in for the Meta Graph API messages endpoint, for local end-to-end runs
 without a real WhatsApp number.
 
 Point the backend at it with WHATSAPP_API_URL=http://127.0.0.1:9090 . Every
-outbound message the backend sends is appended to OUTBOUND_LOG (JSON lines).
+outbound message the backend sends is appended to OUTBOUND_LOG (JSON lines),
+and each accepted message gets a unique wamid (like Meta's), so delivery
+status callbacks can be simulated against it.
 
 Recipients listed in FAIL_RECIPIENTS (comma-separated wa_ids) get the same
 HTTP 400 / error 131047 ("Re-engagement message") that Meta returns when the
@@ -12,6 +14,7 @@ HTTP 400 / error 131047 ("Re-engagement message") that Meta returns when the
 """
 import json
 import os
+import uuid
 import http.server
 
 LOG = os.environ.get("OUTBOUND_LOG", "outbound.jsonl")
@@ -24,8 +27,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))))
         to = body.get("to", "")
         failed = to in FAIL
+        wamid = "" if failed else "wamid.fake." + uuid.uuid4().hex
         with open(LOG, "a") as f:
-            f.write(json.dumps({"path": self.path, "to": to, "failed": failed, "body": body}) + "\n")
+            f.write(json.dumps({"path": self.path, "to": to, "failed": failed, "wamid": wamid, "body": body}) + "\n")
         if failed:
             self.send_response(400)
             self.send_header("content-type", "application/json")
@@ -38,7 +42,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"messaging_product":"whatsapp","messages":[{"id":"wamid.fake"}]}')
+        self.wfile.write(json.dumps({"messaging_product": "whatsapp", "messages": [{"id": wamid}]}).encode())
 
     def log_message(self, *args):
         pass

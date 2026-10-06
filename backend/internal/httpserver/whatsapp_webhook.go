@@ -6,6 +6,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/middleman/backend/infrastructure/whatsapp"
 	"github.com/middleman/backend/internal/buyer"
@@ -30,6 +34,7 @@ const maxWebhookBody = 1 << 20 // 1 MiB
 type WhatsAppWebhookHandler struct {
 	provider              whatsapp.MessagingProvider
 	convRepo              conversation.Repository
+	deliveries            conversation.DeliveryRecorder
 	buyerRepo             buyer.Repository
 	vendorRepo            vendor.Repository
 	eventWriter           event.Writer
@@ -44,6 +49,7 @@ type WhatsAppWebhookHandler struct {
 func NewWhatsAppWebhookHandler(
 	provider whatsapp.MessagingProvider,
 	convRepo conversation.Repository,
+	deliveries conversation.DeliveryRecorder,
 	buyerRepo buyer.Repository,
 	vendorRepo vendor.Repository,
 	eventWriter event.Writer,
@@ -57,6 +63,7 @@ func NewWhatsAppWebhookHandler(
 	return &WhatsAppWebhookHandler{
 		provider:              provider,
 		convRepo:              convRepo,
+		deliveries:            deliveries,
 		buyerRepo:             buyerRepo,
 		vendorRepo:            vendorRepo,
 		eventWriter:           eventWriter,
@@ -130,6 +137,81 @@ func (h *WhatsAppWebhookHandler) handleIncoming(w http.ResponseWriter, r *http.R
 
 	for _, msg := range messages {
 		h.processInboundMessage(ctx, msg, log)
+	}
+
+	// §23A: delivery receipts for messages Majo sent (same signed payload).
+	statuses, err := h.provider.ParseStatusUpdates(body)
+	if err != nil {
+		log.Error("parsing webhook statuses", "error", err)
+		return
+	}
+	for _, st := range statuses {
+		h.processStatusUpdate(ctx, st, log)
+	}
+}
+
+// processStatusUpdate records a delivery receipt and, on the first
+// transition to delivered/read/failed, writes one funnel event attributed
+// to the business entity the message was about.
+func (h *WhatsAppWebhookHandler) processStatusUpdate(ctx context.Context, st whatsapp.StatusUpdate, log *slog.Logger) {
+	if h.deliveries == nil {
+		return
+	}
+	at := time.Now().UTC()
+	if secs, err := strconv.ParseInt(st.Timestamp, 10, 64); err == nil {
+		at = time.Unix(secs, 0).UTC()
+	}
+	errDetail := ""
+	if st.ErrorCode != 0 || st.ErrorTitle != "" {
+		errDetail = strconv.Itoa(st.ErrorCode) + " " + st.ErrorTitle
+	}
+
+	tr, err := h.deliveries.ApplyDeliveryStatus(ctx, st.MessageID, st.Status, at, errDetail)
+	if err != nil {
+		log.Error("recording delivery status", "external_message_id", st.MessageID, "status", st.Status, "error", err)
+		return
+	}
+	if tr == nil || tr.Message == nil {
+		return // unknown/untracked message, or a status that adds no fact
+	}
+
+	entityType, _ := tr.Message.Metadata["entity_type"].(string)
+	if entityType == "" {
+		entityType = "message"
+	}
+	var entityID *uuid.UUID
+	if s, ok := tr.Message.Metadata["entity_id"].(string); ok {
+		if id, err := uuid.Parse(s); err == nil {
+			entityID = &id
+		}
+	}
+	if entityID == nil {
+		id := tr.Message.ID
+		entityID = &id
+	}
+	payload := event.Merge(tr.Message.Metadata, map[string]any{
+		"message_id": tr.Message.ID.String(), "external_message_id": st.MessageID,
+		"conversation_id": tr.Message.ConversationID.String(), "status_at": at.Format(time.RFC3339),
+		"recipient": st.RecipientID, "error": errDetail, "channel": "whatsapp",
+	})
+	delete(payload, "entity_type")
+	delete(payload, "entity_id")
+
+	write := func(t event.Type) {
+		if err := h.eventWriter.Write(ctx, &event.Event{
+			EventType: t, EntityType: entityType, EntityID: entityID, ActorType: event.ActorSystem, Payload: payload,
+		}); err != nil {
+			log.Error("writing delivery event", "type", t, "error", err)
+		}
+	}
+	if tr.FirstDelivered {
+		write(event.MessageDelivered)
+	}
+	if tr.FirstRead {
+		write(event.MessageRead)
+	}
+	if tr.FirstFailed {
+		write(event.MessageFailed)
 	}
 }
 

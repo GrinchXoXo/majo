@@ -42,6 +42,35 @@ func (r *BuyerRequest) EnsureConfirmed() error {
 	return nil
 }
 
+// FunnelDims returns the request's funnel dimensions (event payload keys,
+// see internal/event). Only known values are included: category, product
+// and location appear once extraction/correction has produced them; they
+// are never inferred here.
+func (r *BuyerRequest) FunnelDims() map[string]any {
+	if r == nil {
+		return map[string]any{}
+	}
+	d := map[string]any{
+		"buyer_request_id": r.ID.String(),
+		"buyer_id":         r.BuyerID.String(),
+		"conversation_id":  r.ConversationID.String(),
+		"request_status":   string(r.Status),
+	}
+	if r.Category != nil && *r.Category != "" {
+		d["category"] = *r.Category
+	}
+	if r.Product != nil && *r.Product != "" {
+		d["product"] = *r.Product
+	}
+	if r.Location != nil && *r.Location != "" {
+		d["location"] = *r.Location
+	}
+	if r.BudgetMax != nil {
+		d["budget_max"] = *r.BudgetMax
+	}
+	return d
+}
+
 // Completeness is an operator-assistance signal, not a gate (PRD 1 §29-30):
 // the system must never reject a request merely because optional fields
 // are missing.

@@ -15,6 +15,17 @@ export async function getHealth(): Promise<HealthStatus> {
   return res.json();
 }
 
+export type FunnelStage = { key: string; label: string; count: number; source: string; note?: string };
+export type FunnelReport = { since: string; until: string; stages: FunnelStage[] };
+
+// Core marketplace funnel (Phase 3.1 §23A), read-only, counted from the
+// system-of-record tables.
+export async function getFunnel(days = 30): Promise<FunnelReport> {
+  const res = await fetch(`${API_URL}/api/metrics/funnel?days=${days}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to load funnel: ${res.status}`);
+  return res.json();
+}
+
 export async function getReadiness(): Promise<HealthStatus> {
   const res = await fetch(`${API_URL}/ready`, { cache: "no-store" });
   return res.json(); // may be 200 or 503; both are valid, informative responses

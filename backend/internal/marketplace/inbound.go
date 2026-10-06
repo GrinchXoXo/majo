@@ -124,7 +124,7 @@ func (b *BuyerInbound) handleNewRequest(ctx context.Context, m InboundBuyerMessa
 }
 
 func (b *BuyerInbound) handleSelection(ctx context.Context, m InboundBuyerMessage, res Resolution) {
-	result, err := b.txSvc.Select(ctx, res.BuyerRequestID, res.OfferID, m.BuyerID)
+	result, err := b.txSvc.Select(ctx, res.BuyerRequestID, res.OfferID, m.BuyerID, transaction.SourceWhatsApp)
 	switch {
 	case err == nil:
 		chosen, _ := b.offers.FindByID(ctx, res.OfferID)
@@ -254,11 +254,14 @@ func (b *BuyerInbound) unresolved(ctx context.Context, m InboundBuyerMessage, re
 }
 
 func (b *BuyerInbound) reply(ctx context.Context, m InboundBuyerMessage, text, kind string, extra map[string]any) {
-	if err := b.messaging.SendText(ctx, m.ReplyTo, text); err != nil {
+	convID := m.ConversationID
+	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
+		Kind: kind, EntityType: "conversation", EntityID: &convID, Extra: extra,
+	})
+	if err := b.messaging.SendText(sendCtx, m.ReplyTo, text); err != nil {
 		b.logger.Error("sending buyer reply", "kind", kind, "error", err)
 		return
 	}
-	convID := m.ConversationID
 	payload := map[string]any{"kind": kind}
 	for k, v := range extra {
 		payload[k] = v

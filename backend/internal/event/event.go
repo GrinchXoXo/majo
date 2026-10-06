@@ -88,7 +88,21 @@ const (
 	// range, or no longer available). No state was changed.
 	BuyerReplyUnresolved Type = "BUYER_REPLY_UNRESOLVED"
 
-	VendorRequestSendFailed           Type = "VENDOR_REQUEST_SEND_FAILED"
+	VendorRequestSendFailed Type = "VENDOR_REQUEST_SEND_FAILED"
+
+	// --- Phase 3.1 §23A: delivery receipts (from Meta status callbacks) ---
+	// Written once per outbound message on its FIRST transition to each
+	// state. EntityType/EntityID are the business entity the message was
+	// about (vendor_request, buyer_request, conversation), and the payload
+	// carries the message "kind" (vendor_request, offer_delivery, ...).
+	MessageDelivered Type = "MESSAGE_DELIVERED"
+	MessageRead      Type = "MESSAGE_READ" // only observable if the recipient has read receipts on
+	MessageFailed    Type = "MESSAGE_FAILED"
+
+	// TransactionCompleted is RESERVED for the future fulfilment phase. No
+	// code path completes a transaction yet; until it exists the funnel's
+	// "transaction completed" stage is transactions.status = 'COMPLETED'.
+	TransactionCompleted              Type = "TRANSACTION_COMPLETED"
 	VendorResponseAssociationRejected Type = "VENDOR_RESPONSE_ASSOCIATION_REJECTED"
 )
 
@@ -112,6 +126,52 @@ type Event struct {
 	ActorID    *uuid.UUID
 	Payload    map[string]any
 	CreatedAt  time.Time
+}
+
+// Funnel dimension keys (Phase 3.1 §23A). Marketplace events put the
+// identifiers and context needed to measure the buyer funnel under these
+// exact payload keys, so funnel queries can rely on one vocabulary:
+//
+//	buyer_id, buyer_request_id, conversation_id, vendor_id,
+//	vendor_request_id, vendor_response_id, offer_id, supply_listing_id,
+//	transaction_id, category, product, location, channel, outcome
+//
+// Only values Majo legitimately knows are included (a nil/empty value is
+// omitted rather than guessed). The event's own created_at is the timestamp.
+// See docs/analytics/funnel.md.
+
+// Merge combines payload fragments into one payload, dropping nil values,
+// empty strings and nil pointers, so events never record "unknown" as if it
+// were a fact. Later fragments override earlier ones.
+func Merge(parts ...map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, p := range parts {
+		for k, v := range p {
+			if isEmpty(v) {
+				continue
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func isEmpty(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case string:
+		return x == ""
+	case *string:
+		return x == nil || *x == ""
+	case *int64:
+		return x == nil
+	case *int:
+		return x == nil
+	case *uuid.UUID:
+		return x == nil
+	}
+	return false
 }
 
 // Writer persists events. Kept as a narrow interface so callers never

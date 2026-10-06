@@ -156,3 +156,82 @@ func (r *ConversationRepository) MessageExists(ctx context.Context, conversation
 
 	return exists, err
 }
+
+// ApplyDeliveryStatus implements conversation.DeliveryRecorder (§23A). Row
+// lock + COALESCE make it idempotent: repeated or out-of-order receipts
+// never move a timestamp, and First* flags are set only on first arrival.
+func (r *ConversationRepository) ApplyDeliveryStatus(ctx context.Context, externalMessageID, status string, at time.Time, errDetail string) (*conversation.DeliveryTransition, error) {
+	if externalMessageID == "" {
+		return nil, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var (
+		idStr, convStr          string
+		metaBytes               []byte
+		delivered, read, failed sql.NullTime
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, conversation_id, metadata, delivered_at, read_at, failed_at
+		FROM messages
+		WHERE external_message_id = $1 AND direction = 'OUTBOUND'
+		ORDER BY created_at DESC LIMIT 1
+		FOR UPDATE
+	`, externalMessageID).Scan(&idStr, &convStr, &metaBytes, &delivered, &read, &failed)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	t := &conversation.DeliveryTransition{}
+	switch status {
+	case conversation.DeliveryDelivered:
+		t.FirstDelivered = !delivered.Valid
+	case conversation.DeliveryRead:
+		t.FirstDelivered = !delivered.Valid // read implies delivered
+		t.FirstRead = !read.Valid
+	case conversation.DeliveryFailed:
+		t.FirstFailed = !failed.Valid
+	default:
+		return nil, nil // "sent" and unknown statuses carry no new fact
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE messages SET
+			delivered_at   = CASE WHEN $2 IN ('delivered','read') THEN COALESCE(delivered_at, $3) ELSE delivered_at END,
+			read_at        = CASE WHEN $2 = 'read'   THEN COALESCE(read_at, $3)   ELSE read_at END,
+			failed_at      = CASE WHEN $2 = 'failed' THEN COALESCE(failed_at, $3) ELSE failed_at END,
+			delivery_error = CASE WHEN $2 = 'failed' THEN NULLIF($4, '') ELSE delivery_error END
+		WHERE id = $1
+	`, idStr, status, at, errDetail); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE messages SET delivery_status = CASE
+			WHEN read_at IS NOT NULL THEN 'read'
+			WHEN failed_at IS NOT NULL THEN 'failed'
+			WHEN delivered_at IS NOT NULL THEN 'delivered'
+			ELSE delivery_status END
+		WHERE id = $1
+	`, idStr); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	msg := &conversation.Message{ExternalMessageID: externalMessageID, Direction: conversation.DirectionOutbound}
+	msg.ID, _ = uuid.Parse(idStr)
+	msg.ConversationID, _ = uuid.Parse(convStr)
+	if err := json.Unmarshal(metaBytes, &msg.Metadata); err != nil || msg.Metadata == nil {
+		msg.Metadata = map[string]any{}
+	}
+	t.Message = msg
+	return t, nil
+}

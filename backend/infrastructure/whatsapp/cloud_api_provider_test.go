@@ -1,9 +1,12 @@
 package whatsapp
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -66,5 +69,36 @@ func TestParseWebhookPayload_TextMediaAndProfileName(t *testing.T) {
 	}
 	if m := msgs[3].Media; m == nil || m.Kind != "document" || m.Filename != "quote.pdf" {
 		t.Errorf("document media parsed wrong: %+v", msgs[3].Media)
+	}
+}
+
+func TestSendTextWithID_ReturnsMetaMessageID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/PNID/messages" || r.Header.Get("Authorization") != "Bearer tok" {
+			t.Errorf("unexpected request %s %s", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Write([]byte(`{"messaging_product":"whatsapp","contacts":[{"input":"234","wa_id":"234"}],"messages":[{"id":"wamid.HBgN123"}]}`))
+	}))
+	defer srv.Close()
+	id, err := NewCloudAPIProvider(srv.URL, "tok", "PNID", "", "").SendTextWithID(context.Background(), "234", "hi")
+	if err != nil || id != "wamid.HBgN123" {
+		t.Fatalf("expected wamid.HBgN123, got %q err=%v", id, err)
+	}
+}
+
+func TestParseStatusUpdates(t *testing.T) {
+	payload := []byte(`{"entry":[{"changes":[{"value":{"statuses":[
+		{"id":"wamid.1","status":"delivered","timestamp":"1759700000","recipient_id":"234"},
+		{"id":"wamid.2","status":"failed","timestamp":"1759700001","recipient_id":"235","errors":[{"code":131047,"title":"Re-engagement message"}]}
+	]}}]}]}`)
+	got, err := NewCloudAPIProvider("", "", "", "", "").ParseStatusUpdates(payload)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("expected 2 statuses, got %d err=%v", len(got), err)
+	}
+	if got[0].MessageID != "wamid.1" || got[0].Status != "delivered" || got[0].Timestamp != "1759700000" {
+		t.Errorf("delivered status parsed wrong: %+v", got[0])
+	}
+	if got[1].Status != "failed" || got[1].ErrorCode != 131047 || got[1].ErrorTitle != "Re-engagement message" {
+		t.Errorf("failed status parsed wrong: %+v", got[1])
 	}
 }

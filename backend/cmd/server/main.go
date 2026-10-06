@@ -19,6 +19,7 @@ import (
 	"github.com/middleman/backend/infrastructure/postgres"
 	"github.com/middleman/backend/infrastructure/whatsapp"
 	"github.com/middleman/backend/internal/config"
+	"github.com/middleman/backend/internal/conversation"
 	"github.com/middleman/backend/internal/httpserver"
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/logging"
@@ -73,6 +74,10 @@ func main() {
 	}
 
 	convRepo := postgres.NewConversationRepository(pool)
+	// §23A: every outbound message goes through the recorder, which persists
+	// it with its WhatsApp message ID and business purpose so delivery/read
+	// receipts can be measured. Services keep their SendText interface.
+	outbound := conversation.NewRecordingSender(whatsappProvider, convRepo, "whatsapp", logger)
 	buyerRepo := postgres.NewBuyerRepository(pool)
 	requestRepo := postgres.NewRequestRepository(pool)
 	vendorRepo := postgres.NewVendorRepository(pool)
@@ -87,11 +92,11 @@ func main() {
 	// --- Application services ---
 
 	requestService := request.NewService(
-		requestRepo, convRepo, aiProvider, eventWriter, auditWriter, whatsappProvider, logger,
+		requestRepo, convRepo, aiProvider, eventWriter, auditWriter, outbound, logger,
 	)
 
 	routingService := routing.NewService(
-		vendorRepo, supplyRepo, routingRepo, requestRepo, aiProvider, eventWriter, auditWriter, whatsappProvider, logger,
+		vendorRepo, supplyRepo, routingRepo, requestRepo, aiProvider, eventWriter, auditWriter, outbound, logger,
 	)
 
 	listingService := supply.NewListingService(supplyRepo, listingRepo, eventWriter, auditWriter, logger)
@@ -108,12 +113,12 @@ func main() {
 	// and delivers offers to the buyer; BuyerInbound resolves each buyer
 	// message to a new request or an offer selection.
 	offerDelivery := marketplace.NewOfferDelivery(
-		requestRepo, convRepo, offerService, offerRepo, offerRepo, routingRepo, txRepo, whatsappProvider, eventWriter, logger,
+		requestRepo, convRepo, offerService, offerRepo, offerRepo, routingRepo, txRepo, outbound, eventWriter, logger,
 	)
 	routingService.SetResponseListener(offerDelivery)
 	contextResolver := marketplace.NewContextResolver(offerRepo, offerRepo)
 	buyerInbound := marketplace.NewBuyerInbound(
-		contextResolver, requestService, requestRepo, txService, offerRepo, routingRepo, whatsappProvider, eventWriter, jobRunner, logger,
+		contextResolver, requestService, requestRepo, txService, offerRepo, routingRepo, outbound, eventWriter, jobRunner, logger,
 	)
 
 	// --- HTTP ---
@@ -123,7 +128,7 @@ func main() {
 	mux.HandleFunc("GET /ready", httpserver.ReadyHandler(pool, aiProvider))
 
 	webhookHandler := httpserver.NewWhatsAppWebhookHandler(
-		whatsappProvider, convRepo, buyerRepo, vendorRepo, eventWriter, buyerInbound, routingService, jobRunner,
+		whatsappProvider, convRepo, convRepo, buyerRepo, vendorRepo, eventWriter, buyerInbound, routingService, jobRunner,
 		cfg.WhatsAppVerifyToken, cfg.AllowUnsignedWebhooks, logger,
 	)
 	mux.Handle("/webhooks/whatsapp", webhookHandler)
@@ -167,6 +172,10 @@ func main() {
 	mux.HandleFunc("POST /api/requests/{id}/offers/deliver", offerHandlers.Deliver)
 	mux.HandleFunc("POST /api/requests/{id}/select", offerHandlers.Select)
 	mux.HandleFunc("GET /api/requests/{id}/selection", offerHandlers.Selection)
+
+	// §23A: read-only core funnel, counted from system-of-record tables.
+	funnelHandlers := httpserver.NewFunnelHandlers(postgres.NewFunnelRepository(pool))
+	mux.HandleFunc("GET /api/metrics/funnel", funnelHandlers.Get)
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)
 	mux.HandleFunc("GET /api/transactions/{id}", transactionHandlers.Get)

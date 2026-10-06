@@ -124,13 +124,24 @@ func (d *OfferDelivery) DeliverPendingOffers(ctx context.Context, buyerRequestID
 	followUp := highest > len(claimed) // earlier options were already presented
 	body := offer.FormatOfferDelivery(SummaryOf(req), claimed, highest, followUp)
 
-	if err := d.messaging.SendText(ctx, conv.ExternalID, body); err != nil {
+	idStrs := make([]string, len(ids))
+	for i, id := range ids {
+		idStrs[i] = id.String()
+	}
+	reqID := req.ID
+	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
+		Kind: "offer_delivery", EntityType: "buyer_request", EntityID: &reqID,
+		Extra: map[string]any{"offer_ids": idStrs, "ordinals": ordinals},
+	})
+	if err := d.messaging.SendText(sendCtx, conv.ExternalID, body); err != nil {
 		d.releaseClaim(ctx, ids, err.Error())
 		for i, id := range ids {
 			offerID := id
 			if wErr := d.events.Write(ctx, &event.Event{
 				EventType: event.OfferSendFailed, EntityType: "offer", EntityID: &offerID, ActorType: event.ActorSystem,
-				Payload: map[string]any{"buyer_request_id": buyerRequestID.String(), "attempted_ordinal": ordinals[i], "error": err.Error()},
+				Payload: event.Merge(req.FunnelDims(), offerDims(claimed[i]), map[string]any{
+					"attempted_ordinal": ordinals[i], "error": err.Error(), "channel": conv.Channel, "outcome": "send_failed",
+				}),
 			}); wErr != nil {
 				d.logger.Error("writing OFFER_SEND_FAILED event", "error", wErr)
 			}
@@ -149,7 +160,9 @@ func (d *OfferDelivery) DeliverPendingOffers(ctx context.Context, buyerRequestID
 		offerID := id
 		if wErr := d.events.Write(ctx, &event.Event{
 			EventType: event.OfferSent, EntityType: "offer", EntityID: &offerID, ActorType: event.ActorSystem,
-			Payload: map[string]any{"buyer_request_id": buyerRequestID.String(), "ordinal": ordinals[i], "channel": conv.Channel},
+			Payload: event.Merge(req.FunnelDims(), offerDims(claimed[i]), map[string]any{
+				"ordinal": ordinals[i], "channel": conv.Channel, "batch_size": len(claimed), "outcome": "sent",
+			}),
 		}); wErr != nil {
 			d.logger.Error("writing OFFER_SENT event", "error", wErr)
 		}
@@ -226,10 +239,11 @@ func (d *OfferDelivery) withdrawOfferFor(ctx context.Context, resp *routing.Vend
 	offerID := existing.ID
 	if wErr := d.events.Write(ctx, &event.Event{
 		EventType: event.OfferWithdrawn, EntityType: "offer", EntityID: &offerID, ActorType: event.ActorSystem,
-		Payload: map[string]any{
-			"vendor_response_id": resp.ID.String(), "response_status": string(resp.Status),
-			"review_state": string(resp.ReviewState), "previous_offer_status": string(existing.Status),
-		},
+		Payload: event.Merge(offerDims(existing), map[string]any{
+			"buyer_request_id": existing.BuyerRequestID.String(),
+			"response_status":  string(resp.Status), "review_state": string(resp.ReviewState),
+			"previous_offer_status": string(existing.Status), "outcome": "withdrawn",
+		}),
 	}); wErr != nil {
 		d.logger.Error("writing OFFER_WITHDRAWN event", "error", wErr)
 	}
@@ -249,4 +263,25 @@ func SummaryOf(req *request.BuyerRequest) offer.RequestSummary {
 		s.Condition = *req.Condition
 	}
 	return s
+}
+
+// offerDims returns the funnel dimensions of an offer (event payload keys).
+func offerDims(o *offer.Offer) map[string]any {
+	if o == nil {
+		return map[string]any{}
+	}
+	d := map[string]any{
+		"offer_id": o.ID.String(), "vendor_id": o.VendorID.String(), "offer_type": string(o.Type),
+		"price": o.Price, "ranking_score": o.RankingScore,
+	}
+	if o.VendorResponseID != nil {
+		d["vendor_response_id"] = o.VendorResponseID.String()
+	}
+	if o.VendorRequestID != nil {
+		d["vendor_request_id"] = o.VendorRequestID.String()
+	}
+	if o.SupplyListingID != nil {
+		d["supply_listing_id"] = o.SupplyListingID.String()
+	}
+	return d
 }

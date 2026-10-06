@@ -199,7 +199,7 @@ func (h *OfferHandlers) Select(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.txSvc.Select(r.Context(), buyerRequestID, offerID, buyerID)
+	res, err := h.txSvc.Select(r.Context(), buyerRequestID, offerID, buyerID, transaction.SourceOperator)
 	switch {
 	case errors.Is(err, request.ErrNotConfirmed):
 		writeError(w, http.StatusConflict, "request must be CONFIRMED before an offer can be selected")

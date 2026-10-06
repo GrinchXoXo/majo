@@ -257,4 +257,47 @@ before = len(api("GET", "/api/requests")[1])
 ok(webhook(BUYER, f"wamid.{RUN}.ps5", "Abeg I need PS5 slim for Lagos, 550k") == 200, "buyer starts a new request")
 ok(wait(lambda: len(api("GET", "/api/requests")[1]) == before + 1), "new BuyerRequest created (not trapped in selection)")
 
+print("\n§23A Funnel data: delivery/read receipts + funnel counts")
+
+
+def status_webhook(wamid, status, recipient):
+    payload = json.dumps({"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
+        "messaging_product": "whatsapp",
+        "statuses": [{"id": wamid, "status": status, "timestamp": str(int(time.time())), "recipient_id": recipient}],
+    }}]}]}).encode()
+    sig = "sha256=" + hmac.new(SECRET.encode(), payload, hashlib.sha256).hexdigest()
+    req = urllib.request.Request(BASE + "/webhooks/whatsapp", data=payload, method="POST",
+                                 headers={"Content-Type": "application/json", "X-Hub-Signature-256": sig})
+    with urllib.request.urlopen(req) as r:
+        return r.status
+
+
+def funnel():
+    _, f = api("GET", "/api/metrics/funnel?days=1", expect=200)
+    return {st["key"]: st["count"] for st in f["stages"]}
+
+
+offer_wamid = [r["wamid"] for r in outbound(BUYER) if "I found 1 option" in r["body"]["text"]["body"]][0]
+vendor_wamid = [r["wamid"] for r in outbound(MIKE) if "Majo Request" in r["body"]["text"]["body"]][0]
+ok(offer_wamid.startswith("wamid.") and vendor_wamid.startswith("wamid."), "outbound WhatsApp message IDs captured")
+
+before = funnel()
+for wamid, status, to in [(vendor_wamid, "delivered", MIKE), (vendor_wamid, "read", MIKE),
+                          (offer_wamid, "sent", BUYER), (offer_wamid, "delivered", BUYER),
+                          (offer_wamid, "delivered", BUYER), (offer_wamid, "read", BUYER), (offer_wamid, "read", BUYER)]:
+    ok(status_webhook(wamid, status, to) == 200, f"signed status callback {status} for {'offer' if wamid == offer_wamid else 'vendor request'} message")
+after = funnel()
+ok(after["vendor_request_delivered"] - before["vendor_request_delivered"] == 1, "vendor request delivered counted once")
+ok(after["offer_message_delivered"] - before["offer_message_delivered"] == 1, "offer delivered counted once (duplicate receipt ignored)")
+ok(after["offer_message_read"] - before["offer_message_read"] == 1, "offer read counted once")
+
+for key in ["buyer_request_created", "buyer_request_confirmed", "vendor_request_created", "vendor_request_sent",
+            "vendor_request_send_failed", "vendor_response_received", "offer_created", "offer_sent",
+            "offer_selected", "offer_selected_via_whatsapp", "transaction_created"]:
+    ok(after[key] >= 1, f"funnel stage {key}", str(after[key]))
+ok(after["transaction_completed"] == 0, "transaction_completed stays 0 (no fulfilment yet)")
+print("    ── funnel (last 1 day) ──")
+for k, v in after.items():
+    print(f"    │ {k:<30} {v}")
+
 print(f"\nALL {checks} CHECKS PASSED")

@@ -917,3 +917,67 @@ func TestInbound_MediaMessageGetsGracefulReplyAndCreatesNothing(t *testing.T) {
 		t.Fatalf("voice note: expected graceful reply and no request, got %q", h.out.last())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// §23A funnel data: the events of the core loop carry the dimensions needed
+// to measure it later (who, which request/offer/vendor, what, where, how).
+// ---------------------------------------------------------------------------
+
+func eventsOf(h *harness, t event.Type) []*event.Event {
+	h.ev.mu.Lock()
+	defer h.ev.mu.Unlock()
+	var out []*event.Event
+	for _, e := range h.ev.all {
+		if e.EventType == t {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func TestFunnel_CoreLoopEventsCarryMeasurementDimensions(t *testing.T) {
+	h, offers := twoOfferHarness(t)
+	h.buyerSays("1")
+
+	required := map[event.Type][]string{
+		event.OfferCreated:          {"buyer_request_id", "buyer_id", "offer_id", "vendor_id", "vendor_request_id", "product", "location", "offer_type", "price"},
+		event.OfferSent:             {"buyer_request_id", "buyer_id", "offer_id", "vendor_id", "product", "location", "channel", "ordinal", "outcome"},
+		event.BuyerSelectionCreated: {"buyer_request_id", "buyer_id", "offer_id", "vendor_id", "product", "location", "price", "source", "transaction_id"},
+		event.OfferAccepted:         {"buyer_request_id", "offer_id", "vendor_id", "source"},
+		event.TransactionCreated:    {"buyer_request_id", "buyer_id", "offer_id", "vendor_id", "gross_amount", "payment_status", "source", "location"},
+	}
+	for typ, keys := range required {
+		evs := eventsOf(h, typ)
+		if len(evs) == 0 {
+			t.Fatalf("no %s event written", typ)
+		}
+		for _, k := range keys {
+			if _, ok := evs[0].Payload[k]; !ok {
+				t.Errorf("%s payload missing %q: %v", typ, k, evs[0].Payload)
+			}
+		}
+	}
+	sel := eventsOf(h, event.BuyerSelectionCreated)[0]
+	if sel.Payload["source"] != transaction.SourceWhatsApp || sel.Payload["offer_id"] != offers[0].ID.String() {
+		t.Fatalf("selection must record source=whatsapp_reply and the chosen offer, got %v", sel.Payload)
+	}
+	if sel.Payload["buyer_request_id"] != h.requestID.String() || sel.Payload["location"] != "Benin City" {
+		t.Fatalf("selection must carry the buyer/request relationship and known location, got %v", sel.Payload)
+	}
+}
+
+func TestFunnel_UnknownDimensionsAreOmittedNotGuessed(t *testing.T) {
+	h := newHarness(t, request.StatusConfirmed)
+	h.w.requests[h.requestID].Location = nil // buyer never said where
+	h.w.requests[h.requestID].Category = nil
+	resp := h.vendorReplies("MM-382910", routing.ResponseAvailable, routing.ReviewReviewed, nil, 620000)
+	h.delivery.VendorResponseChanged(context.Background(), resp)
+	for _, e := range eventsOf(h, event.OfferSent) {
+		if _, ok := e.Payload["location"]; ok {
+			t.Fatalf("location must be omitted when unknown, got %v", e.Payload["location"])
+		}
+		if _, ok := e.Payload["category"]; ok {
+			t.Fatalf("category must be omitted when unknown, got %v", e.Payload["category"])
+		}
+	}
+}

@@ -38,6 +38,12 @@ func NewCloudAPIProvider(apiURL, accessToken, phoneNumberID, verifyToken, appSec
 }
 
 func (p *CloudAPIProvider) SendText(ctx context.Context, to, body string) error {
+	_, err := p.SendTextWithID(ctx, to, body)
+	return err
+}
+
+// SendTextWithID sends a text message and returns Meta's message ID (wamid).
+func (p *CloudAPIProvider) SendTextWithID(ctx context.Context, to, body string) (string, error) {
 	payload := map[string]any{
 		"messaging_product": "whatsapp",
 		"to":                to,
@@ -74,26 +80,29 @@ func (p *CloudAPIProvider) SendInteractive(ctx context.Context, to string, inter
 			},
 		},
 	}
-	return p.send(ctx, payload)
+	_, err := p.send(ctx, payload)
+	return err
 }
 
-func (p *CloudAPIProvider) send(ctx context.Context, payload map[string]any) error {
+// send posts a message and returns the wamid from Meta's response
+// ({"messages":[{"id":"wamid..."}]}); "" if the response carried none.
+func (p *CloudAPIProvider) send(ctx context.Context, payload map[string]any) (string, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshaling whatsapp payload: %w", err)
+		return "", fmt.Errorf("marshaling whatsapp payload: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/%s/messages", p.apiURL, p.phoneNumberID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("building whatsapp request: %w", err)
+		return "", fmt.Errorf("building whatsapp request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+p.accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("calling whatsapp api: %w", err)
+		return "", fmt.Errorf("calling whatsapp api: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -103,9 +112,17 @@ func (p *CloudAPIProvider) send(ctx context.Context, payload map[string]any) err
 		// service window has closed and a template is required), which is
 		// what the operator needs to see on a failed VendorRequest/Offer.
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("whatsapp api returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+		return "", fmt.Errorf("whatsapp api returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	return nil
+	var sent struct {
+		Messages []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&sent); err == nil && len(sent.Messages) > 0 {
+		return sent.Messages[0].ID, nil
+	}
+	return "", nil
 }
 
 // VerifyWebhookSignature implements Meta's documented webhook payload
@@ -218,4 +235,43 @@ func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage
 	}
 
 	return messages, nil
+}
+
+// ParseStatusUpdates extracts Meta delivery-status callbacks
+// (entry[].changes[].value.statuses[]) from a webhook body.
+func (p *CloudAPIProvider) ParseStatusUpdates(payload []byte) ([]StatusUpdate, error) {
+	var raw struct {
+		Entry []struct {
+			Changes []struct {
+				Value struct {
+					Statuses []struct {
+						ID          string `json:"id"`
+						Status      string `json:"status"`
+						Timestamp   string `json:"timestamp"`
+						RecipientID string `json:"recipient_id"`
+						Errors      []struct {
+							Code  int    `json:"code"`
+							Title string `json:"title"`
+						} `json:"errors"`
+					} `json:"statuses"`
+				} `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return nil, fmt.Errorf("parsing whatsapp status payload: %w", err)
+	}
+	var out []StatusUpdate
+	for _, e := range raw.Entry {
+		for _, c := range e.Changes {
+			for _, st := range c.Value.Statuses {
+				u := StatusUpdate{MessageID: st.ID, Status: st.Status, RecipientID: st.RecipientID, Timestamp: st.Timestamp}
+				if len(st.Errors) > 0 {
+					u.ErrorCode, u.ErrorTitle = st.Errors[0].Code, st.Errors[0].Title
+				}
+				out = append(out, u)
+			}
+		}
+	}
+	return out, nil
 }

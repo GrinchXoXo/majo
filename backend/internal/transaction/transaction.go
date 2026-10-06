@@ -23,8 +23,19 @@ type Selection struct {
 	OfferID        uuid.UUID
 	BuyerID        uuid.UUID
 	Status         SelectionStatus
-	CreatedAt      time.Time
+	// Source records how the selection was made (Phase 3.1 §23A), so organic
+	// buyer selections can be told apart from operator overrides:
+	// SourceWhatsApp | SourceOperator | SourceAPI.
+	Source    string
+	CreatedAt time.Time
 }
+
+// Selection sources.
+const (
+	SourceWhatsApp = "whatsapp_reply"
+	SourceOperator = "dashboard_operator"
+	SourceAPI      = "api"
+)
 
 // SelectionStatus: ACTIVE is the single live selection for a BuyerRequest
 // (DB-enforced, Phase 3.1). VOID marks pre-3.1 duplicates retired by

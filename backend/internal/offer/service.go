@@ -150,7 +150,12 @@ func (s *Service) buildForRequest(ctx context.Context, req *request.BuyerRequest
 
 		if err := s.events.Write(ctx, &event.Event{
 			EventType: event.OfferCreated, EntityType: "offer", EntityID: &created.ID,
-			ActorType: event.ActorSystem, Payload: map[string]any{"vendor_response_id": resp.ID.String(), "score": score},
+			ActorType: event.ActorSystem,
+			Payload: event.Merge(req.FunnelDims(), map[string]any{
+				"offer_id": created.ID.String(), "vendor_response_id": resp.ID.String(), "vendor_request_id": vr.ID.String(),
+				"vendor_id": vr.VendorID.String(), "offer_type": string(created.Type), "price": created.Price,
+				"score": score, "origin": "vendor_response",
+			}),
 		}); err != nil {
 			s.logger.Error("writing OFFER_CREATED event", "error", err)
 		}

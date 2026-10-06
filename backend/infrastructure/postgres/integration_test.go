@@ -325,7 +325,7 @@ func TestIntegration_Migration0006OnDataWithPre31Duplicates(t *testing.T) {
 	pre31 := t.TempDir()
 	entries, _ := os.ReadDir(migrationsPath())
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "0006") {
+		if e.Name() >= "0006" { // the pre-3.1 schema: 0001-0005 only
 			continue
 		}
 		b, _ := os.ReadFile(filepath.Join(migrationsPath(), e.Name()))
@@ -382,5 +382,81 @@ func TestIntegration_Migration0006OnDataWithPre31Duplicates(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO buyer_selections (id, buyer_request_id, offer_id, buyer_id) VALUES ($1, $2, $3, $4)`, uuid.New(), s.req, o1, s.buyer); err == nil {
 		t.Fatal("after 0006 a second ACTIVE selection must be rejected by the DB")
+	}
+}
+
+// --- §23A: delivery receipts and the funnel ---
+
+func TestIntegration_DeliveryReceiptsAreIdempotentAndFeedTheFunnel(t *testing.T) {
+	db := testDB(t, migrationsPath())
+	s := seed(t, db, "2348099000010")
+	ctx := context.Background()
+	convRepo := NewConversationRepository(db)
+
+	// Outbound offer message persisted the way RecordingSender does it.
+	if _, err := convRepo.SaveMessage(ctx, &conversation.Message{
+		ConversationID: s.conv, Direction: conversation.DirectionOutbound, ExternalMessageID: "wamid.OFFER1",
+		MessageType: "text", Content: map[string]any{"text": "I found 1 option…"},
+		Metadata: map[string]any{"kind": "offer_delivery", "entity_type": "buyer_request", "entity_id": s.req.String()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := time.Now().UTC().Truncate(time.Second)
+	tr, err := convRepo.ApplyDeliveryStatus(ctx, "wamid.OFFER1", "delivered", t0, "")
+	if err != nil || tr == nil || !tr.FirstDelivered || tr.FirstRead || tr.Message.Metadata["kind"] != "offer_delivery" {
+		t.Fatalf("first delivered: %+v err=%v", tr, err)
+	}
+	tr, _ = convRepo.ApplyDeliveryStatus(ctx, "wamid.OFFER1", "delivered", t0.Add(time.Minute), "")
+	if tr.FirstDelivered {
+		t.Fatal("a repeated receipt must not be a first transition")
+	}
+	tr, _ = convRepo.ApplyDeliveryStatus(ctx, "wamid.OFFER1", "read", t0.Add(2*time.Minute), "")
+	if !tr.FirstRead || tr.FirstDelivered {
+		t.Fatalf("read after delivered: expected FirstRead only, got %+v", tr)
+	}
+	if tr, _ := convRepo.ApplyDeliveryStatus(ctx, "wamid.NOPE", "read", t0, ""); tr != nil {
+		t.Fatal("receipts for unknown messages must be ignored")
+	}
+
+	var status string
+	var deliveredAt, readAt time.Time
+	db.QueryRow(`SELECT delivery_status, delivered_at, read_at FROM messages WHERE external_message_id = 'wamid.OFFER1'`).Scan(&status, &deliveredAt, &readAt)
+	if status != "read" || !deliveredAt.Equal(t0) || !readAt.Equal(t0.Add(2*time.Minute)) {
+		t.Fatalf("expected status read, delivered_at kept at first receipt; got %s %v %v", status, deliveredAt, readAt)
+	}
+
+	// Funnel counts it.
+	stages, err := NewFunnelRepository(db).Funnel(ctx, t0.Add(-24*time.Hour), t0.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, st := range stages {
+		got[st.Key] = st.Count
+	}
+	if got["buyer_request_created"] != 1 || got["buyer_request_confirmed"] != 1 || got["vendor_request_created"] != 1 ||
+		got["vendor_request_sent"] != 1 || got["vendor_response_received"] != 1 ||
+		got["offer_message_delivered"] != 1 || got["offer_message_read"] != 1 || got["transaction_completed"] != 0 {
+		t.Fatalf("unexpected funnel counts: %v", got)
+	}
+	if len(stages) != 15 {
+		t.Fatalf("expected 15 funnel stages, got %d", len(stages))
+	}
+}
+
+func TestIntegration_SelectionSourceIsPersisted(t *testing.T) {
+	db := testDB(t, migrationsPath())
+	s := seed(t, db, "2348099000011")
+	o := insertOffer(t, db, s, &s.resp, 60, "SENT")
+	repo := NewTransactionRepository(db)
+	if _, _, err := repo.CreateSelectionWithTransaction(context.Background(),
+		&transaction.Selection{BuyerRequestID: s.req, OfferID: o, BuyerID: s.buyer, Source: transaction.SourceWhatsApp},
+		&transaction.Transaction{BuyerRequestID: s.req, OfferID: o, BuyerID: s.buyer, VendorID: s.vendor}); err != nil {
+		t.Fatal(err)
+	}
+	sel, _ := repo.FindSelectionByBuyerRequest(context.Background(), s.req)
+	if sel == nil || sel.Source != transaction.SourceWhatsApp {
+		t.Fatalf("expected source whatsapp_reply, got %+v", sel)
 	}
 }

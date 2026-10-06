@@ -13,6 +13,7 @@ import (
 
 	"github.com/middleman/backend/infrastructure/ai"
 	"github.com/middleman/backend/internal/audit"
+	"github.com/middleman/backend/internal/conversation"
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/matching"
 	"github.com/middleman/backend/internal/request"
@@ -187,7 +188,12 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 		ref := vr.PublicReference
 
 		message := buildVendorRequestMessage(ref, req)
-		if err := s.messaging.SendText(ctx, v.WhatsAppExternalID, message); err != nil {
+		vrID := vr.ID
+		sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
+			Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID,
+			Extra: map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vendorID.String(), "reference": ref},
+		})
+		if err := s.messaging.SendText(sendCtx, v.WhatsAppExternalID, message); err != nil {
 			s.logger.Error("sending vendor request via whatsapp", "vendor_id", vendorID, "error", err)
 			// Phase 3.1 §3A-4: a rejected send is a distinct, visible
 			// state (SEND_FAILED), never an "awaiting reply" request.
@@ -212,12 +218,23 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 			_ = s.vendors.RecordRequestSent(ctx, vendorID)
 		}
 
+		// Funnel: one VENDORS_ROUTED per VendorRequest created; outcome
+		// records whether WhatsApp accepted the send ("sent") or rejected it
+		// ("send_failed"). Actual delivery/read arrive later as
+		// MESSAGE_DELIVERED / MESSAGE_READ on the vendor_request entity.
+		outcome := "sent"
+		if vr.Status == VendorRequestSendFailed {
+			outcome = "send_failed"
+		}
 		if err := s.events.Write(ctx, &event.Event{
 			EventType:  event.VendorsRouted,
 			EntityType: "vendor_request",
 			EntityID:   &vr.ID,
 			ActorType:  event.ActorOperator,
-			Payload:    map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vendorID.String(), "reference": ref},
+			Payload: event.Merge(req.FunnelDims(), map[string]any{
+				"vendor_request_id": vr.ID.String(), "vendor_id": vendorID.String(), "reference": ref,
+				"match_score": scorePtr, "channel": "whatsapp", "outcome": outcome,
+			}),
 		}); err != nil {
 			s.logger.Error("writing VENDORS_ROUTED event", "error", err)
 		}
@@ -358,7 +375,11 @@ func (s *Service) processAsSupplySubmission(ctx context.Context, v *vendor.Vendo
 		EntityID:   &signal.ID,
 		ActorType:  event.ActorVendor,
 		ActorID:    &v.ID,
-		Payload:    map[string]any{"raw_message": rawText},
+		Payload: event.Merge(map[string]any{
+			"raw_message": rawText, "vendor_id": v.ID.String(), "category": category, "product": product,
+			"variant": variant, "price": price, "location": location, "availability": string(availability),
+			"confidence": confidence, "channel": "whatsapp",
+		}),
 	}); err != nil {
 		s.logger.Error("writing SUPPLY_SIGNAL_CREATED event", "error", err)
 	}
@@ -437,10 +458,22 @@ func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor,
 	_ = s.vendors.RecordResponseActivity(ctx, v.ID)
 
 	entityID := resp.ID
-	payload := map[string]any{"status": string(status), "review_state": string(reviewState), "raw_message": rawText, "matched": vr != nil}
+	payload := event.Merge(map[string]any{
+		"status": string(status), "review_state": string(reviewState), "raw_message": rawText, "matched": vr != nil,
+		"vendor_id": v.ID.String(), "vendor_response_id": resp.ID.String(), "price": price,
+		"extraction_method": string(extractionMethod), "channel": "whatsapp",
+	})
+	if vr != nil {
+		payload["vendor_request_id"] = vr.ID.String()
+		payload["buyer_request_id"] = vr.BuyerRequestID.String()
+		if vr.SentAt != nil {
+			payload["seconds_since_request_sent"] = int64(resp.CreatedAt.Sub(*vr.SentAt).Seconds())
+		}
+	}
+	vendorID := v.ID
 	if err := s.events.Write(ctx, &event.Event{
 		EventType: event.VendorResponseReceived, EntityType: "vendor_response", EntityID: &entityID,
-		ActorType: event.ActorVendor, Payload: payload,
+		ActorType: event.ActorVendor, ActorID: &vendorID, Payload: payload,
 	}); err != nil {
 		s.logger.Error("writing VENDOR_RESPONSE_RECEIVED event", "error", err)
 	}

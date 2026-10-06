@@ -62,7 +62,7 @@ type SelectionResult struct {
 // SelectOffer records a buyer's choice and creates the Transaction shell.
 // Kept for existing callers; see Select for the full result.
 func (s *Service) SelectOffer(ctx context.Context, buyerRequestID, offerID, buyerID uuid.UUID) (*Selection, *Transaction, error) {
-	res, err := s.Select(ctx, buyerRequestID, offerID, buyerID)
+	res, err := s.Select(ctx, buyerRequestID, offerID, buyerID, SourceAPI)
 	if err != nil {
 		if res != nil {
 			return res.Selection, res.Transaction, err
@@ -86,7 +86,7 @@ func (s *Service) SelectOffer(ctx context.Context, buyerRequestID, offerID, buye
 //
 // Per PRD 3 §20 this never implies payment: PaymentStatus is UNPAID and no
 // PaymentProvider is invoked.
-func (s *Service) Select(ctx context.Context, buyerRequestID, offerID, buyerID uuid.UUID) (*SelectionResult, error) {
+func (s *Service) Select(ctx context.Context, buyerRequestID, offerID, buyerID uuid.UUID, source string) (*SelectionResult, error) {
 	req, err := s.requests.FindByID(ctx, buyerRequestID)
 	if err != nil {
 		return nil, fmt.Errorf("loading buyer request: %w", err)
@@ -124,7 +124,7 @@ func (s *Service) Select(ctx context.Context, buyerRequestID, offerID, buyerID u
 	vendorAmount := gross - platformFee
 
 	selection, tx, err := s.repo.CreateSelectionWithTransaction(ctx,
-		&Selection{BuyerRequestID: buyerRequestID, OfferID: offerID, BuyerID: buyerID, Status: SelectionActive},
+		&Selection{BuyerRequestID: buyerRequestID, OfferID: offerID, BuyerID: buyerID, Status: SelectionActive, Source: source},
 		&Transaction{
 			BuyerRequestID: buyerRequestID, OfferID: offerID,
 			BuyerID: buyerID, VendorID: o.VendorID, SupplyListingID: o.SupplyListingID,
@@ -144,7 +144,7 @@ func (s *Service) Select(ctx context.Context, buyerRequestID, offerID, buyerID u
 		return nil, fmt.Errorf("creating selection and transaction: %w", err)
 	}
 
-	s.recordSelection(ctx, selection, tx, buyerID)
+	s.recordSelection(ctx, req, o, selection, tx, buyerID)
 	return &SelectionResult{Selection: selection, Transaction: tx}, nil
 }
 
@@ -169,11 +169,28 @@ func (s *Service) resolveExistingSelection(ctx context.Context, buyerRequestID, 
 	return res, true, nil
 }
 
-func (s *Service) recordSelection(ctx context.Context, selection *Selection, tx *Transaction, buyerID uuid.UUID) {
+func (s *Service) recordSelection(ctx context.Context, req *request.BuyerRequest, o *offer.Offer, selection *Selection, tx *Transaction, buyerID uuid.UUID) {
+	// Funnel dimensions shared by the selection, acceptance and transaction
+	// events: who, which request/offer/vendor/listing, what, where, how.
+	dims := event.Merge(req.FunnelDims(), map[string]any{
+		"offer_id": o.ID.String(), "vendor_id": o.VendorID.String(), "offer_type": string(o.Type),
+		"price": o.Price, "selection_id": selection.ID.String(), "transaction_id": tx.ID.String(),
+		"source": selection.Source, "presentation_ordinal": o.PresentationOrdinal,
+	})
+	if o.SupplyListingID != nil {
+		dims["supply_listing_id"] = o.SupplyListingID.String()
+	}
+	if o.VendorRequestID != nil {
+		dims["vendor_request_id"] = o.VendorRequestID.String()
+	}
+	if o.SentAt != nil {
+		dims["seconds_since_offer_sent"] = int64(selection.CreatedAt.Sub(*o.SentAt).Seconds())
+	}
+
 	if err := s.events.Write(ctx, &event.Event{
 		EventType: event.BuyerSelectionCreated, EntityType: "buyer_selection", EntityID: &selection.ID,
 		ActorType: event.ActorBuyer, ActorID: &buyerID,
-		Payload: map[string]any{"offer_id": selection.OfferID.String(), "buyer_request_id": selection.BuyerRequestID.String()},
+		Payload: dims,
 	}); err != nil {
 		s.logger.Error("writing BUYER_SELECTION_CREATED event", "error", err)
 	}
@@ -182,7 +199,7 @@ func (s *Service) recordSelection(ctx context.Context, selection *Selection, tx 
 	if err := s.events.Write(ctx, &event.Event{
 		EventType: event.OfferAccepted, EntityType: "offer", EntityID: &offerID,
 		ActorType: event.ActorBuyer, ActorID: &buyerID,
-		Payload: map[string]any{"selection_id": selection.ID.String(), "buyer_request_id": selection.BuyerRequestID.String()},
+		Payload: dims,
 	}); err != nil {
 		s.logger.Error("writing OFFER_ACCEPTED event", "error", err)
 	}
@@ -198,7 +215,10 @@ func (s *Service) recordSelection(ctx context.Context, selection *Selection, tx 
 	if err := s.events.Write(ctx, &event.Event{
 		EventType: event.TransactionCreated, EntityType: "transaction", EntityID: &tx.ID,
 		ActorType: event.ActorSystem,
-		Payload:   map[string]any{"gross_amount": tx.GrossAmount, "platform_fee": tx.PlatformFee, "payment_status": string(tx.PaymentStatus)},
+		Payload: event.Merge(dims, map[string]any{
+			"gross_amount": tx.GrossAmount, "platform_fee": tx.PlatformFee, "vendor_amount": tx.VendorAmount,
+			"currency": tx.Currency, "payment_status": string(tx.PaymentStatus), "transaction_status": string(tx.Status),
+		}),
 	}); err != nil {
 		s.logger.Error("writing TRANSACTION_CREATED event", "error", err)
 	}
