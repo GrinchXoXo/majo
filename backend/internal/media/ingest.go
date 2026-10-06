@@ -24,6 +24,14 @@ type Enqueuer interface {
 	EnqueueDownload(ctx context.Context, vendorID, messageID uuid.UUID, ref *conversation.MediaRef) error
 }
 
+// SettleListener is told when a message's media download reached a final
+// state: stored, linked to an existing asset, or failed terminally. Phase
+// 4A.2 supply grouping uses it to evaluate the submission the media belongs
+// to. Must be idempotent (it can be called more than once per message).
+type SettleListener interface {
+	MediaSettled(ctx context.Context, messageID uuid.UUID) error
+}
+
 // Ingestor turns MediaRefs into MediaAssets through the durable job queue.
 type Ingestor struct {
 	jobs        jobs.Store
@@ -34,6 +42,20 @@ type Ingestor struct {
 	limits      Limits
 	maxAttempts int
 	logger      *slog.Logger
+	settled     SettleListener
+}
+
+// SetSettleListener wires the post-download hook (composition root).
+func (s *Ingestor) SetSettleListener(l SettleListener) { s.settled = l }
+
+func (s *Ingestor) notifySettled(ctx context.Context, messageID uuid.UUID) error {
+	if s.settled == nil {
+		return nil
+	}
+	if err := s.settled.MediaSettled(ctx, messageID); err != nil {
+		return fmt.Errorf("notifying media settled: %w", err)
+	}
+	return nil
 }
 
 func NewIngestor(js jobs.Store, assets Repository, store storage.Provider, downloaders map[string]Downloader,
@@ -157,7 +179,7 @@ func (s *Ingestor) Handle(ctx context.Context, j *jobs.Job) (err error) {
 		return fmt.Errorf("checking existing message asset: %w", err)
 	} else if linked != nil {
 		log.Info("message already has a media asset; nothing to do", "media_asset_id", *linked)
-		return nil
+		return s.notifySettled(ctx, p.MessageID)
 	}
 
 	max := s.limits.MaxBytes(p.Kind)
@@ -186,7 +208,7 @@ func (s *Ingestor) Handle(ctx context.Context, j *jobs.Job) (err error) {
 			return fmt.Errorf("linking message to existing asset: %w", err)
 		}
 		log.Info("media bytes already stored for this vendor; message linked to existing asset", "media_asset_id", existing.ID)
-		return nil
+		return s.notifySettled(ctx, p.MessageID)
 	}
 
 	key := StorageKey(p.VendorID, v.SHA256, v.Extension)
@@ -219,7 +241,7 @@ func (s *Ingestor) Handle(ctx context.Context, j *jobs.Job) (err error) {
 	} else {
 		log.Info("media asset already existed (concurrent ingestion); message linked", "media_asset_id", got.ID)
 	}
-	return nil
+	return s.notifySettled(ctx, p.MessageID)
 }
 
 // OnFailure records MEDIA_INGESTION_FAILED after a job fails terminally,
@@ -242,5 +264,11 @@ func (s *Ingestor) OnFailure(ctx context.Context, j *jobs.Job, cause error) {
 		}),
 	}); err != nil {
 		s.logger.Error("writing MEDIA_INGESTION_FAILED event", "job_id", j.ID, "error", err)
+	}
+	if p.MessageID != uuid.Nil {
+		if err := s.notifySettled(ctx, p.MessageID); err != nil {
+			// The supply window job still evaluates the submission later.
+			s.logger.Error("notifying media settled after failure", "job_id", j.ID, "error", err)
+		}
 	}
 }

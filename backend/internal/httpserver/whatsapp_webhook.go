@@ -20,6 +20,7 @@ import (
 	"github.com/middleman/backend/internal/marketplace"
 	"github.com/middleman/backend/internal/media"
 	"github.com/middleman/backend/internal/routing"
+	"github.com/middleman/backend/internal/supply"
 	"github.com/middleman/backend/internal/vendor"
 )
 
@@ -250,6 +251,12 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 	if msg.ProfileName != "" {
 		metadata["profile_name"] = msg.ProfileName
 	}
+	// Phase 4A.2: the vendor's own send time (Meta's timestamp), recorded at
+	// creation so supply grouping can order messages by when they were sent.
+	sentAt := providerTime(msg.Timestamp)
+	if !sentAt.IsZero() {
+		metadata["provider_timestamp"] = sentAt.Format(time.RFC3339)
+	}
 
 	savedMsg, err := h.convRepo.SaveMessage(ctx, &conversation.Message{
 		ConversationID:    conv.ID,
@@ -296,26 +303,33 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 
 	if isVendor {
 		if msg.Type != "text" || msg.Text == "" {
-			// Phase 4A.1: vendor media is handed to durable ingestion
-			// (MediaRef -> MEDIA_DOWNLOAD job). It is stored, not processed
-			// as supply: grouping into a SupplySignal is a later step.
+			// Vendor media: routing decides whether it is supply content
+			// (4A.2), then it is handed to durable ingestion (4A.1,
+			// MediaRef -> MEDIA_DOWNLOAD job). No download happens here.
+			ref := supply.Inbound{MessageID: savedMsg.ID, ConversationID: conv.ID, At: sentAt}
+			// Phase 4A.2: classify first (supply content or not), so the
+			// supply candidate exists before its download can finish.
+			if mediaRef != nil && h.routingService != nil {
+				h.routingService.ProcessVendorMedia(ctx, v, ref, mediaRef.Kind, mediaRef.Caption)
+			}
 			if mediaRef != nil && h.media != nil {
 				if err := h.media.EnqueueDownload(ctx, v.ID, savedMsg.ID, mediaRef); err != nil {
 					// The startup backfill re-enqueues vendor media without a job.
 					log.Error("enqueueing vendor media download", "error", err, "vendor_id", v.ID, "message_id", savedMsg.ID)
 				}
 			}
-			log.Info("non-text vendor message persisted, not processed as supply", "vendor_id", v.ID, "message_type", msg.Type)
+			log.Info("non-text vendor message persisted and handed off", "vendor_id", v.ID, "message_type", msg.Type)
 			return
 		}
 		log.Info("inbound message from known active vendor, routing to vendor pipeline",
 			"vendor_id", v.ID, "vendor_name", v.BusinessName)
 		vendorRef := v
 		text := msg.Text
+		ref := supply.Inbound{MessageID: savedMsg.ID, ConversationID: conv.ID, At: sentAt}
 		h.jobs.Enqueue(func(bgCtx context.Context) {
 			// ProcessVendorMessage notifies the marketplace offer loop
 			// (ResponseListener) once the response is persisted.
-			h.routingService.ProcessVendorMessage(bgCtx, vendorRef, text)
+			h.routingService.ProcessVendorMessageFrom(bgCtx, vendorRef, ref, text)
 		})
 		return
 	}
@@ -340,6 +354,15 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 		Text:           msg.Text,
 		Media:          mediaRef,
 	})
+}
+
+// providerTime parses Meta's unix-seconds message timestamp ("" or invalid -> zero).
+func providerTime(ts string) time.Time {
+	secs, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil || secs <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(secs, 0).UTC()
 }
 
 // toMediaRef maps the WhatsApp-specific media description onto the

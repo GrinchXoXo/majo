@@ -143,6 +143,15 @@ func main() {
 		Retry: jobs.RetryPolicy{BaseDelay: cfg.JobsBackoffBase, MaxDelay: cfg.JobsBackoffMax},
 	}, logger)
 	durableWorker.Register(media.JobTypeDownload, mediaIngestor.Handle, mediaIngestor.OnFailure)
+
+	// --- Phase 4A.2: vendor media + captions -> grouped SupplySignal ---
+	// routing classifies vendor content; the intake groups it (durable
+	// SUPPLY_GROUPING jobs) once media downloads are final.
+	supplyIntake := supply.NewIntake(postgres.NewSupplyGroupingRepository(pool), aiProvider, jobStore, vendorRepo,
+		cfg.SupplyGroupingWindow, cfg.JobsMaxAttempts, logger)
+	routingService.SetSupplyIntake(supplyIntake)
+	mediaIngestor.SetSettleListener(supplyIntake)
+	durableWorker.Register(supply.JobTypeGroup, supplyIntake.Handle, nil)
 	// Close the "message saved, job not yet enqueued" gap after a crash,
 	// and pick up vendor media persisted before durable ingestion existed.
 	if n, err := mediaIngestor.Backfill(ctx, time.Now().Add(-cfg.MediaBackfillWindow), 5000); err != nil {

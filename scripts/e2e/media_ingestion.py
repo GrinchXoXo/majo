@@ -212,8 +212,8 @@ def verify():
     ok(files == 5, "5 stored objects, no orphans or temp files", str(files))
     voice = sql(f"SELECT count(*) FROM messages WHERE external_message_id = 'wamid.{run}.voice' AND media_asset_id IS NULL")
     ok(voice == "1", "voice note kept as MediaRef only")
-    supply = sql(f"SELECT count(*) FROM supply_signals WHERE vendor_id IN ('{A}', '{B}')")
-    ok(supply == "0", "no SupplySignal created from media (grouping is a later step)", supply)
+    listings = sql(f"SELECT count(*) FROM supply_listings WHERE vendor_id IN ('{A}', '{B}')")
+    ok(listings == "0", "no SupplyListing created from media", listings)
     print(f"\nVERIFY phase: {checks} checks passed")
 
 

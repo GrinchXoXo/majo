@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/big"
 	"regexp"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -47,7 +48,22 @@ type Service struct {
 	// re-associated (Phase 3.1). Set via SetResponseListener; nil means
 	// nobody is listening (Phase 2 behaviour).
 	listener ResponseListener
+
+	// intake groups vendor supply content (text, photos, captions) into
+	// SupplySignals with source provenance (Phase 4A.2). nil = the Phase 2
+	// text-only path (processAsSupplySubmission).
+	intake SupplyIntake
 }
+
+// SupplyIntake receives vendor messages classified as supply content
+// (Phase 4A.2). Implemented by supply.Intake.
+type SupplyIntake interface {
+	SubmitText(ctx context.Context, vendorID uuid.UUID, ref supply.Inbound, text string) error
+	SubmitMedia(ctx context.Context, vendorID uuid.UUID, ref supply.Inbound, caption, reason string, ext *ai.SupplyExtractionResult) error
+}
+
+// SetSupplyIntake wires Phase 4A.2 supply grouping (composition root).
+func (s *Service) SetSupplyIntake(i SupplyIntake) { s.intake = i }
 
 // ResponseListener is notified whenever a VendorResponse that is attached
 // to a VendorRequest is recorded or changed. It exists so the buyer-facing
@@ -279,6 +295,13 @@ var mmReferencePattern = regexp.MustCompile(`(?i)\bMM-(\d+)\b`)
 // to a VendorRequest is persisted, the ResponseListener is notified so the
 // buyer-facing offer loop can run.
 func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, rawText string) *VendorResponse {
+	return s.ProcessVendorMessageFrom(ctx, v, supply.Inbound{}, rawText)
+}
+
+// ProcessVendorMessageFrom is ProcessVendorMessage with the inbound
+// message's identity (Phase 4A.2), so a text that becomes supply records
+// its source message. VendorRequest handling is unchanged.
+func (s *Service) ProcessVendorMessageFrom(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, rawText string) *VendorResponse {
 	_ = s.vendors.RecordMessageActivity(ctx, v.ID)
 
 	active, err := s.routing.ListActiveByVendor(ctx, v.ID)
@@ -318,6 +341,12 @@ func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, ra
 	switch len(active) {
 	case 0:
 		// No active request at all -> supply submission (PRD 2 §39-40).
+		if s.intake != nil && ref.MessageID != uuid.Nil {
+			if err := s.intake.SubmitText(ctx, v.ID, ref, rawText); err != nil {
+				s.logger.Error("supply intake failed for vendor text", "vendor_id", v.ID, "message_id", ref.MessageID, "error", err)
+			}
+			return nil
+		}
 		s.processAsSupplySubmission(ctx, v, rawText)
 		return nil
 	case 1:
@@ -332,6 +361,102 @@ func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, ra
 			"vendor_id", v.ID, "active_count", len(active))
 		return s.processAsVendorResponse(ctx, v, nil, rawText)
 	}
+}
+
+// Media supply classification reasons (Phase 4A.2). Stable strings: they
+// are recorded on the candidate and logged.
+const (
+	MediaSupplyNoActiveRequest  = "no_active_vendor_request"
+	MediaSupplyUnrelatedCaption = "caption_has_product_and_price_unrelated_to_active_request"
+	mediaNotSupplyReference     = "caption_cites_vendor_request_reference"
+	mediaNotSupplyNoCaption     = "uncaptioned_media_during_active_vendor_request"
+	mediaNotSupplyReply         = "caption_reads_as_a_reply"
+	mediaNotSupplyIncomplete    = "caption_lacks_product_or_price"
+	mediaNotSupplySameProduct   = "caption_matches_an_active_request_product"
+	mediaNotSupplyNoExtraction  = "caption_extraction_unavailable"
+	mediaNotSupplyLookupFailed  = "vendor_request_lookup_failed"
+)
+
+// replyOpeners: captions starting with these read as an answer to Majo's
+// question, not as new supply. Deliberately small and explicit.
+var replyOpeners = regexp.MustCompile(`(?i)^\s*(yes|yeah|yea|yep|yup|no|nope|ok|okay|sure|sorry|available|not available|i get|i have|we get|we have|e dey|dey|sold|na this|this one)\b`)
+
+// ClassifyVendorMedia decides deterministically whether a vendor photo/video
+// (with its caption) is supply content. Phase 4A.2 rule (Architecture Lock
+// V2 §M 4A step 3, implemented conservatively):
+//
+//   - caption cites an MM- reference -> not supply (it is about a request);
+//   - no active VendorRequest -> supply;
+//   - active VendorRequest(s) -> supply ONLY if the caption names a product
+//     AND a price (existing heuristic extractor), does not open like a reply
+//     ("yes", "available", "I get" ...), and its product does not overlap
+//     any active request's product. Anything else keeps the existing
+//     behaviour: the media is stored but the message is not processed.
+//
+// ext is the caption's extraction when one was made (reused by intake).
+func (s *Service) ClassifyVendorMedia(ctx context.Context, v *vendor.Vendor, caption string) (bool, string, *ai.SupplyExtractionResult) {
+	if mmReferencePattern.MatchString(caption) {
+		return false, mediaNotSupplyReference, nil
+	}
+	active, err := s.routing.ListActiveByVendor(ctx, v.ID)
+	if err != nil {
+		s.logger.Error("listing active vendor requests", "vendor_id", v.ID, "error", err)
+		return false, mediaNotSupplyLookupFailed, nil
+	}
+	if len(active) == 0 {
+		return true, MediaSupplyNoActiveRequest, nil
+	}
+	if strings.TrimSpace(caption) == "" {
+		return false, mediaNotSupplyNoCaption, nil
+	}
+	if replyOpeners.MatchString(caption) {
+		return false, mediaNotSupplyReply, nil
+	}
+	ext, err := s.aiProvider.ExtractSupply(ctx, caption)
+	if err != nil {
+		return false, mediaNotSupplyNoExtraction, nil
+	}
+	if ext.Product == nil || *ext.Product == "" || ext.Price == nil || *ext.Price <= 0 {
+		return false, mediaNotSupplyIncomplete, ext
+	}
+	captionProduct := normalizeForCompare(*ext.Product)
+	for _, vr := range active {
+		req, err := s.requests.FindByID(ctx, vr.BuyerRequestID)
+		if err != nil || req == nil {
+			return false, mediaNotSupplyLookupFailed, ext
+		}
+		if req.Product != nil {
+			rp := normalizeForCompare(*req.Product)
+			if rp != "" && (strings.Contains(rp, captionProduct) || strings.Contains(captionProduct, rp)) {
+				return false, mediaNotSupplySameProduct, ext
+			}
+		}
+	}
+	return true, MediaSupplyUnrelatedCaption, ext
+}
+
+func normalizeForCompare(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), ""))
+}
+
+// ProcessVendorMedia handles an inbound photo/video from an active vendor
+// (Phase 4A.2): classify it, and hand supply content to grouping. Media that
+// is not supply keeps the pre-4A.2 behaviour (stored, not processed).
+func (s *Service) ProcessVendorMedia(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, kind, caption string) {
+	_ = s.vendors.RecordMessageActivity(ctx, v.ID)
+	if s.intake == nil || !supply.IsSupplyMediaKind(kind) {
+		return
+	}
+	ok, reason, ext := s.ClassifyVendorMedia(ctx, v, caption)
+	if !ok {
+		s.logger.Info("vendor media not treated as supply", "vendor_id", v.ID, "message_id", ref.MessageID, "reason", reason)
+		return
+	}
+	if err := s.intake.SubmitMedia(ctx, v.ID, ref, caption, reason, ext); err != nil {
+		s.logger.Error("supply intake failed for vendor media", "vendor_id", v.ID, "message_id", ref.MessageID, "error", err)
+		return
+	}
+	s.logger.Info("vendor media accepted as supply content", "vendor_id", v.ID, "message_id", ref.MessageID, "reason", reason)
 }
 
 func (s *Service) processAsSupplySubmission(ctx context.Context, v *vendor.Vendor, rawText string) {

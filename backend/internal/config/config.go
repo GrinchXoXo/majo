@@ -51,6 +51,11 @@ type Config struct {
 	// JobsLease: a RUNNING job not finished within this time is assumed
 	// abandoned (worker crashed) and becomes claimable again.
 	JobsLease time.Duration
+
+	// SupplyGroupingWindow (Phase 4A.2) [PARAM]: consecutive vendor supply
+	// messages sent within this time of a submission's first message can
+	// form one SupplySignal.
+	SupplyGroupingWindow time.Duration
 }
 
 // Load reads configuration from environment variables.
@@ -104,6 +109,7 @@ func Load() (*Config, error) {
 		{"JOBS_BACKOFF_BASE", 30 * time.Second, &cfg.JobsBackoffBase},
 		{"JOBS_BACKOFF_MAX", 30 * time.Minute, &cfg.JobsBackoffMax},
 		{"JOBS_LEASE", 5 * time.Minute, &cfg.JobsLease},
+		{"SUPPLY_GROUPING_WINDOW", 120 * time.Second, &cfg.SupplyGroupingWindow},
 	}
 	for _, d := range durs {
 		if *d.dest, err = getDuration(d.key, d.def); err != nil {
