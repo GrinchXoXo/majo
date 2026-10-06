@@ -70,11 +70,11 @@ export default async function DashboardPage() {
             <tbody>
               {funnel.supply.map((m) => (
                 <tr key={m.key} style={{ borderBottom: "1px solid #eee" }}>
-                  <td style={{ padding: "4px 12px 4px 0" }}>
+                  <td style={{ padding: "4px 12px 4px 0", whiteSpace: "nowrap" }}>
                     {m.label}
                     {m.scope === "now" ? <span style={{ color: "#888", fontSize: "0.8em" }}> (now)</span> : null}
                   </td>
-                  <td style={{ padding: "4px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  <td style={{ padding: "4px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
                     <strong>{supplyValue(m)}</strong>
                   </td>
                   <td style={{ padding: "4px 0", color: "#888", fontSize: "0.85em" }}>{m.note}</td>
