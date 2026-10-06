@@ -388,7 +388,18 @@ export default function RequestDetailPage() {
                     <td style={{ padding: "6px 4px" }}>{m.vendor_name}</td>
                     <td style={{ padding: "6px 4px", fontWeight: 600 }}>{m.score}</td>
                     <td style={{ padding: "6px 4px" }}>{m.match_type}</td>
-                    <td style={{ padding: "6px 4px", color: "#666", fontSize: "0.9em" }}>{m.reasons.join(", ")}</td>
+                    <td style={{ padding: "6px 4px", color: "#666", fontSize: "0.9em" }}>
+                      {m.reasons.join(", ")}
+                      {m.relevant_listing && (
+                        <div>
+                          via published listing{" "}
+                          <a href={`/offers/${m.relevant_listing.id}`} style={{ fontFamily: "monospace" }}>
+                            {m.relevant_listing.public_reference}
+                          </a>
+                          {m.relevant_listing.price != null ? ` · ₦${m.relevant_listing.price.toLocaleString()}` : ""}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ padding: "6px 4px" }}>{m.within_budget === null ? "—" : m.within_budget ? "✓" : "✗"}</td>
                   </tr>
                 ))}

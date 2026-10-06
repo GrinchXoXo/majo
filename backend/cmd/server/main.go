@@ -102,6 +102,7 @@ func main() {
 	)
 
 	listingService := supply.NewListingService(supplyRepo, listingRepo, vendorRepo, listingRepo, eventWriter, auditWriter, logger)
+	routingService.SetListingEvidence(listingRepo) // Phase 4A: matching reads ACTIVE listings
 	offerService := offer.NewService(offerRepo, routingRepo, requestRepo, eventWriter, auditWriter, logger)
 	txService := transaction.NewService(txRepo, offerRepo, requestRepo, eventWriter, auditWriter, logger)
 
@@ -240,6 +241,7 @@ func main() {
 
 	// §23A: read-only core funnel, counted from system-of-record tables.
 	funnelHandlers := httpserver.NewFunnelHandlers(postgres.NewFunnelRepository(pool))
+	funnelHandlers.SetListingFreshness(cfg.ListingFreshnessWindow) // §K.2 stale-listing rate [PARAM]
 	mux.HandleFunc("GET /api/metrics/funnel", funnelHandlers.Get)
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)

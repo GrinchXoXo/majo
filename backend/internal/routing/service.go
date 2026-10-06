@@ -54,7 +54,15 @@ type Service struct {
 	// SupplySignals with source provenance (Phase 4A.2). nil = the Phase 2
 	// text-only path (processAsSupplySubmission).
 	intake SupplyIntake
+
+	// listingEvidence supplies ACTIVE SupplyListings as matching evidence
+	// (Phase 4A). nil = signals only (pre-4A behaviour).
+	listingEvidence supply.MatchingEvidenceReader
 }
+
+// SetListingEvidence makes matching use operator-published listings as
+// supply evidence alongside fresh signals (Architecture Lock V2 §M-4A.6).
+func (s *Service) SetListingEvidence(r supply.MatchingEvidenceReader) { s.listingEvidence = r }
 
 // SupplyIntake receives vendor messages classified as supply content
 // (Phase 4A.2). Implemented by supply.Intake.
@@ -150,8 +158,35 @@ func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) 
 		supplyByVendor[v.ID.String()] = signals
 	}
 
+	var listingsByVendor map[string][]supply.MatchableListing
+	if s.listingEvidence != nil {
+		ids := make([]uuid.UUID, 0, len(candidateVendors))
+		for _, v := range candidateVendors {
+			ids = append(ids, v.ID)
+		}
+		ev, err := s.listingEvidence.MatchingEvidence(ctx, ids)
+		if err != nil {
+			// Degrade to signal-only matching rather than failing the operator.
+			s.logger.Error("loading listing evidence for matching", "buyer_request_id", buyerRequestID, "error", err)
+		} else {
+			listingsByVendor = map[string][]supply.MatchableListing{}
+			for vid, ls := range ev.ListingsByVendor {
+				listingsByVendor[vid.String()] = ls
+			}
+			for vid, signals := range supplyByVendor {
+				kept := signals[:0:0]
+				for _, sig := range signals {
+					if !ev.SupersededSignals[sig.ID] {
+						kept = append(kept, sig)
+					}
+				}
+				supplyByVendor[vid] = kept
+			}
+		}
+	}
+
 	candidates := matching.Match(
-		req, candidateVendors, supplyByVendor,
+		req, candidateVendors, supplyByVendor, listingsByVendor,
 		matching.DefaultWeights(), matching.DefaultMinRelevanceScore, matching.DefaultMaxCandidates,
 	)
 
@@ -160,7 +195,7 @@ func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) 
 		EntityType: "buyer_request",
 		EntityID:   &buyerRequestID,
 		ActorType:  event.ActorSystem,
-		Payload:    map[string]any{"candidate_count": len(candidates)},
+		Payload:    map[string]any{"candidate_count": len(candidates), "listing_evidence_count": countListingEvidence(candidates)},
 	}); err != nil {
 		s.logger.Error("writing VENDORS_SUGGESTED event", "error", err)
 	}
@@ -1020,4 +1055,14 @@ func derefStr(s *string) string {
 		return "unspecified item"
 	}
 	return *s
+}
+
+func countListingEvidence(cs []matching.Candidate) int {
+	n := 0
+	for _, c := range cs {
+		if c.RelevantListing != nil {
+			n++
+		}
+	}
+	return n
 }

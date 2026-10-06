@@ -1,4 +1,12 @@
-import { getHealth, getReadiness, getFunnel, type FunnelReport } from "@/lib/api";
+import { getHealth, getReadiness, getFunnel, type FunnelReport, type SupplyMetric } from "@/lib/api";
+
+function supplyValue(m: SupplyMetric): string {
+  if (m.kind === "count") return m.value.toLocaleString();
+  const of = m.of ?? 0;
+  if (of === 0) return `${m.value} / 0 —`;
+  if (m.kind === "rate") return `${m.value} / ${of} (${Math.round((m.value / of) * 100)}%)`;
+  return `${(m.value / of).toFixed(1)} (${m.value} / ${of})`;
+}
 
 // Proves dashboard -> Go connectivity, per Phase 0 acceptance criteria
 // (PRD 0 FINAL §3, item 9 / §28 service communication test).
@@ -40,6 +48,32 @@ export default async function DashboardPage() {
                     <strong>{s.count.toLocaleString()}</strong>
                   </td>
                   <td style={{ padding: "4px 0", color: "#888", fontSize: "0.85em" }}>{s.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {funnel?.supply && funnel.supply.length > 0 && (
+        <section style={{ marginTop: 16 }}>
+          <h2>Supply — last 30 days</h2>
+          <p style={{ color: "#666", fontSize: "0.85em", marginTop: 0 }}>
+            Did vendors provide enough current, usable supply? Counted from the signal, listing and vendor tables. Rows
+            marked “now” are a snapshot of the current state.
+          </p>
+          <table style={{ borderCollapse: "collapse", fontSize: "0.9em" }}>
+            <tbody>
+              {funnel.supply.map((m) => (
+                <tr key={m.key} style={{ borderBottom: "1px solid #eee" }}>
+                  <td style={{ padding: "4px 12px 4px 0" }}>
+                    {m.label}
+                    {m.scope === "now" ? <span style={{ color: "#888", fontSize: "0.8em" }}> (now)</span> : null}
+                  </td>
+                  <td style={{ padding: "4px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                    <strong>{supplyValue(m)}</strong>
+                  </td>
+                  <td style={{ padding: "4px 0", color: "#888", fontSize: "0.85em" }}>{m.note}</td>
                 </tr>
               ))}
             </tbody>

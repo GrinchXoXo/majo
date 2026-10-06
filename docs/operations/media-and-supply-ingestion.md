@@ -180,3 +180,24 @@ SELECT event_type, payload, created_at FROM events WHERE entity_id = '<listing i
 ```
 
 E2E: `scripts/e2e/listing_curation.py` drives the real dashboard with headless Chromium (Playwright) against the real backend. Its docstring lists the environment variables.
+
+## Matching reads published listings (Phase 4A)
+
+`routing.SuggestVendors` uses each vendor's **ACTIVE, unexpired** listings as supply evidence, alongside fresh signals. The weights are unchanged.
+
+**Scoring:**
+- A listing is scored like a fresh AVAILABLE signal: exact product + variant = full product points; exact = 0.9; family = 0.5; full availability points.
+- The product comparison uses the compact form of the listing's product **or** of its source signal's product. An operator's display correction ("bag" → "Imported ladies bags") therefore still matches a request for "bag" exactly.
+- The strongest evidence wins, and a listing wins a tie. Condition and budget are then judged on that evidence, so a corrected listing price is used.
+
+**Which signals still count:**
+- A signal whose listing is published (ACTIVE) is represented by that listing.
+- A signal whose listing was rejected is no longer evidence.
+- Signals with only a DRAFT listing (not yet curated) count as before.
+
+**Where the evidence is recorded:**
+- `GET /api/requests/{id}/matches` shows `relevant_listing` (L-reference, price), plus the reasons `SUPPLY_CONFIRMED_active_listing` and `active_listing`.
+- Routing stores `evidence`, `supply_listing_id` and `listing_reference` in `vendor_requests.match_breakdown`.
+- `VENDORS_SUGGESTED` carries `listing_evidence_count`.
+
+Matching still only suggests vendors to ask; nothing is sent or created by it.

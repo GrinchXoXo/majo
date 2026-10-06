@@ -70,6 +70,7 @@ func TestMatch_PRD2SmokeTestScenario(t *testing.T) {
 		req,
 		[]*vendor.Vendor{mikeGadgets, ojPhones, furnitureWorld},
 		supplyByVendor,
+		nil,
 		DefaultWeights(),
 		DefaultMinRelevanceScore,
 		DefaultMaxCandidates,
@@ -125,7 +126,7 @@ func TestMatch_NoPaddingWhenFewCandidates(t *testing.T) {
 		Categories: []string{"electronics"},
 	}
 
-	candidates := Match(req, []*vendor.Vendor{onlyVendor}, map[string][]*supply.Signal{}, DefaultWeights(), DefaultMinRelevanceScore, DefaultMaxCandidates)
+	candidates := Match(req, []*vendor.Vendor{onlyVendor}, map[string][]*supply.Signal{}, nil, DefaultWeights(), DefaultMinRelevanceScore, DefaultMaxCandidates)
 
 	if len(candidates) > 1 {
 		t.Errorf("expected at most 1 candidate (no padding), got %d", len(candidates))
@@ -141,7 +142,7 @@ func TestMatch_InactiveVendorExcluded(t *testing.T) {
 		Categories: []string{"electronics"},
 	}
 
-	candidates := Match(req, []*vendor.Vendor{inactive}, map[string][]*supply.Signal{}, DefaultWeights(), DefaultMinRelevanceScore, DefaultMaxCandidates)
+	candidates := Match(req, []*vendor.Vendor{inactive}, map[string][]*supply.Signal{}, nil, DefaultWeights(), DefaultMinRelevanceScore, DefaultMaxCandidates)
 
 	if len(candidates) != 0 {
 		t.Errorf("expected inactive vendor to be excluded, got %d candidates", len(candidates))
@@ -154,8 +155,8 @@ func TestMatch_DeterministicTieBreaking(t *testing.T) {
 	v1 := &vendor.Vendor{ID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), Status: vendor.StatusActive, Categories: []string{"electronics"}}
 	v2 := &vendor.Vendor{ID: uuid.MustParse("00000000-0000-0000-0000-000000000002"), Status: vendor.StatusActive, Categories: []string{"electronics"}}
 
-	run1 := Match(req, []*vendor.Vendor{v2, v1}, map[string][]*supply.Signal{}, DefaultWeights(), 0, DefaultMaxCandidates)
-	run2 := Match(req, []*vendor.Vendor{v1, v2}, map[string][]*supply.Signal{}, DefaultWeights(), 0, DefaultMaxCandidates)
+	run1 := Match(req, []*vendor.Vendor{v2, v1}, map[string][]*supply.Signal{}, nil, DefaultWeights(), 0, DefaultMaxCandidates)
+	run2 := Match(req, []*vendor.Vendor{v1, v2}, map[string][]*supply.Signal{}, nil, DefaultWeights(), 0, DefaultMaxCandidates)
 
 	if len(run1) != 2 || len(run2) != 2 {
 		t.Fatalf("expected 2 candidates in both runs, got %d and %d", len(run1), len(run2))

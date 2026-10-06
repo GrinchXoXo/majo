@@ -309,3 +309,82 @@ func nullStr(s sql.NullString) *string {
 	}
 	return &s.String
 }
+
+// MatchingEvidence implements supply.MatchingEvidenceReader. Listings must
+// be ACTIVE and unexpired; their vendor's status is checked by matching.
+func (r *SupplyListingRepository) MatchingEvidence(ctx context.Context, vendorIDs []uuid.UUID) (*supply.MatchingEvidence, error) {
+	out := &supply.MatchingEvidence{ListingsByVendor: map[uuid.UUID][]supply.MatchableListing{}, SupersededSignals: map[uuid.UUID]bool{}}
+	if len(vendorIDs) == 0 {
+		return out, nil
+	}
+	ids := make([]string, len(vendorIDs))
+	for i, id := range vendorIDs {
+		ids[i] = id.String()
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT `+listingColumns+` FROM supply_listings
+		WHERE vendor_id = ANY($1::uuid[]) AND status = 'ACTIVE' AND expires_at > now()
+		ORDER BY vendor_id, published_at, id`, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var signalIDs []string
+	for rows.Next() {
+		l, err := scanListingRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out.ListingsByVendor[l.VendorID] = append(out.ListingsByVendor[l.VendorID], supply.MatchableListing{Listing: l})
+		if l.SupplySignalID != nil {
+			signalIDs = append(signalIDs, l.SupplySignalID.String())
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(signalIDs) > 0 {
+		sources := map[uuid.UUID]string{}
+		prow, err := r.db.QueryContext(ctx, `SELECT id, COALESCE(product, '') FROM supply_signals WHERE id = ANY($1::uuid[])`, pq.Array(signalIDs))
+		if err != nil {
+			return nil, err
+		}
+		for prow.Next() {
+			var id, product string
+			if err := prow.Scan(&id, &product); err != nil {
+				prow.Close()
+				return nil, err
+			}
+			sources[uuid.MustParse(id)] = supply.NormalizeSearch(product)
+		}
+		prow.Close()
+		if err := prow.Err(); err != nil {
+			return nil, err
+		}
+		for vid, ls := range out.ListingsByVendor {
+			for i := range ls {
+				if sid := ls[i].Listing.SupplySignalID; sid != nil {
+					ls[i].SourceProduct = sources[*sid]
+				}
+			}
+			out.ListingsByVendor[vid] = ls
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	srows, err := r.db.QueryContext(ctx, `SELECT supply_signal_id FROM supply_listings
+		WHERE vendor_id = ANY($1::uuid[]) AND supply_signal_id IS NOT NULL
+		  AND (status = 'ACTIVE' OR rejected_at IS NOT NULL)`, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer srows.Close()
+	for srows.Next() {
+		var sid string
+		if err := srows.Scan(&sid); err != nil {
+			return nil, err
+		}
+		out.SupersededSignals[uuid.MustParse(sid)] = true
+	}
+	return out, srows.Err()
+}

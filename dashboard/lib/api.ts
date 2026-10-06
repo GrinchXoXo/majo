@@ -16,7 +16,19 @@ export async function getHealth(): Promise<HealthStatus> {
 }
 
 export type FunnelStage = { key: string; label: string; count: number; source: string; note?: string };
-export type FunnelReport = { since: string; until: string; stages: FunnelStage[] };
+// Supply-side rows (Architecture Lock V2 §K.2, Phase 4A). kind: count = a
+// number; rate = value/of as a share; per = value/of as an average.
+export type SupplyMetric = {
+  key: string;
+  label: string;
+  kind: "count" | "rate" | "per";
+  value: number;
+  of?: number;
+  scope: "window" | "now";
+  source: string;
+  note?: string;
+};
+export type FunnelReport = { since: string; until: string; stages: FunnelStage[]; supply?: SupplyMetric[] };
 
 // Core marketplace funnel (Phase 3.1 §23A), read-only, counted from the
 // system-of-record tables.
@@ -152,6 +164,17 @@ export type MatchCandidateDTO = {
   reasons: string[];
   within_budget: boolean | null;
   relevant_supply?: Record<string, unknown>;
+  // Phase 4A: set when the strongest evidence is an operator-published listing.
+  relevant_listing?: {
+    id: string;
+    public_reference: string;
+    product: string | null;
+    variant: string | null;
+    condition: string | null;
+    price: number | null;
+    currency: string;
+    location: string | null;
+  };
 };
 
 export type VendorResponseDTO = {

@@ -127,3 +127,34 @@ recorded signals that would justify it.
 - "Transaction completed" is always 0 until fulfilment is built.
 - `raw_message` (buyer/vendor free text) is stored in events and entities — treat event
   exports as personal data.
+
+
+## Supply side (Phase 4A, Architecture Lock V2 §K.2)
+
+The same endpoint (`GET /api/metrics/funnel?days=N`) also returns `supply`: one row per metric, counted from the
+`supply_signals`, `supply_listings`, `vendors`, `vendor_requests` and `vendor_responses` tables. The dashboard shows them under
+"Supply". Each row has a `kind`:
+- `count`: a number;
+- `rate`: `value / of` as a share;
+- `per`: `value / of` as an average.
+
+`scope` is `window` (activity inside the period) or `now` (a snapshot of the current state).
+
+| Key | Meaning | Source |
+|---|---|---|
+| `vendor_submissions` | supply signals created | `supply_signals.created_at` |
+| `submissions_per_submitting_vendor` | signals / vendors with ≥ 1 signal | `supply_signals` |
+| `valid_supply_rate` | signals with product **and** price / all signals | `supply_signals` |
+| `vendor_supply_repeat_rate` | vendors submitting on ≥ 2 distinct UTC days / submitting vendors | `supply_signals` |
+| `listings_drafted` | listings created | `supply_listings.created_at` |
+| `media_complete_rate` | drafted listings with ≥ 1 image reference / drafted listings | `supply_listings.media_references` |
+| `listings_published` | operator publications | `supply_listings.published_at` |
+| `listings_rejected` | drafts rejected (never published) | `supply_listings.rejected_at`, `published_at IS NULL` |
+| `listing_approval_rate` / `listing_rejection_rate` | published (or rejected) / (published + drafts rejected), decisions made in the period | `supply_listings` |
+| `listings_withdrawn` | published listings later rejected | `rejected_at` with `published_at` set |
+| `stale_listing_rate` (now) | ACTIVE listings whose evidence is older than `LISTING_FRESHNESS_WINDOW` [PARAM, default 72h] / ACTIVE | `last_verified_at` |
+| `usable_listings_per_active_vendor` (now) | ACTIVE unexpired listings of ACTIVE vendors / ACTIVE vendors | `supply_listings`, `vendors` |
+| `vendor_response_rate` | matched vendor responses / vendor requests sent, activity in the period (not a cohort) | `vendor_responses`, `vendor_requests` |
+
+Rejection reasons are in `supply_listings.rejection_reason`. Two §K.2 rows wait for Phase 4B: vendor re-confirmation rate,
+and discovery-eligible supply volume.

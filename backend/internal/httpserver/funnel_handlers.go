@@ -10,9 +10,22 @@ import (
 
 // FunnelHandlers exposes the core marketplace funnel (Phase 3.1 §23A),
 // read-only, for the operator dashboard.
-type FunnelHandlers struct{ reader funnel.Reader }
+type FunnelHandlers struct {
+	reader funnel.Reader
+	// freshness is the listing freshness window [PARAM] for supply rows.
+	freshness time.Duration
+}
 
-func NewFunnelHandlers(reader funnel.Reader) *FunnelHandlers { return &FunnelHandlers{reader: reader} }
+func NewFunnelHandlers(reader funnel.Reader) *FunnelHandlers {
+	return &FunnelHandlers{reader: reader, freshness: 72 * time.Hour}
+}
+
+// SetListingFreshness sets the [PARAM] window behind the stale-listing rate.
+func (h *FunnelHandlers) SetListingFreshness(d time.Duration) {
+	if d > 0 {
+		h.freshness = d
+	}
+}
 
 // Get handles GET /api/metrics/funnel?days=30 (1-365, default 30).
 func (h *FunnelHandlers) Get(w http.ResponseWriter, r *http.Request) {
@@ -32,5 +45,15 @@ func (h *FunnelHandlers) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to compute funnel")
 		return
 	}
-	writeJSON(w, http.StatusOK, funnel.Report{Since: since, Until: until, Stages: stages})
+	report := funnel.Report{Since: since, Until: until, Stages: stages}
+	// Supply-side rows (Lock V2 §K.2) when the reader provides them.
+	if sr, ok := h.reader.(funnel.SupplyReader); ok {
+		supply, err := sr.Supply(r.Context(), since, until, h.freshness)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to compute supply metrics")
+			return
+		}
+		report.Supply = supply
+	}
+	writeJSON(w, http.StatusOK, report)
 }

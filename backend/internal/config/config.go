@@ -65,6 +65,11 @@ type Config struct {
 	// messages sent within this time of a submission's first message can
 	// form one SupplySignal.
 	SupplyGroupingWindow time.Duration
+
+	// ListingFreshnessWindow [PARAM] (Lock V2 §D: pilot hypothesis 72h): an
+	// ACTIVE listing whose evidence is older counts as stale in the supply
+	// metrics. Measurement only; nothing is expired or hidden by it.
+	ListingFreshnessWindow time.Duration
 }
 
 // Load reads configuration from environment variables.
@@ -120,6 +125,7 @@ func Load() (*Config, error) {
 		{"JOBS_BACKOFF_MAX", 30 * time.Minute, &cfg.JobsBackoffMax},
 		{"JOBS_LEASE", 5 * time.Minute, &cfg.JobsLease},
 		{"SUPPLY_GROUPING_WINDOW", 120 * time.Second, &cfg.SupplyGroupingWindow},
+		{"LISTING_FRESHNESS_WINDOW", 72 * time.Hour, &cfg.ListingFreshnessWindow},
 	}
 	for _, d := range durs {
 		if *d.dest, err = getDuration(d.key, d.def); err != nil {

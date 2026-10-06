@@ -25,6 +25,29 @@ type Report struct {
 	Since  time.Time `json:"since"`
 	Until  time.Time `json:"until"`
 	Stages []Stage   `json:"stages"`
+	// Supply holds the supply-side rows (Architecture Lock V2 §K.2, Phase
+	// 4A). Additive: absent when the reader does not provide them.
+	Supply []SupplyMetric `json:"supply,omitempty"`
+}
+
+// SupplyMetric is one supply-side row: a count, or a numerator over a
+// denominator ("rate" = a share, "per" = an average). Counted from entity
+// tables, like the stages.
+type SupplyMetric struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Kind   string `json:"kind"` // count | rate | per
+	Value  int64  `json:"value"`
+	Of     *int64 `json:"of,omitempty"` // denominator for rate/per
+	Scope  string `json:"scope"`        // window (activity in the period) | now (current snapshot)
+	Source string `json:"source"`
+	Note   string `json:"note,omitempty"`
+}
+
+// SupplyReader computes the supply-side rows. freshness is the listing
+// freshness window [PARAM] used for the stale-listing rate.
+type SupplyReader interface {
+	Supply(ctx context.Context, since, until time.Time, freshness time.Duration) ([]SupplyMetric, error)
 }
 
 // Reader computes the funnel. The Postgres implementation counts from

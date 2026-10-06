@@ -56,7 +56,23 @@ type Candidate struct {
 	Breakdown      map[string]int
 	Reasons        []string
 	RelevantSupply *supply.Signal
-	WithinBudget   *bool
+	// RelevantListing is set when the strongest product evidence is an
+	// operator-published (ACTIVE) SupplyListing (Phase 4A, Lock V2 §M-4A.6).
+	// At most one of RelevantSupply / RelevantListing is set.
+	RelevantListing *supply.Listing
+	WithinBudget    *bool
+}
+
+// evidence is the product evidence chosen for a vendor: a fresh signal or
+// an ACTIVE listing, reduced to the fields scoring needs.
+type evidence struct {
+	signal    *supply.Signal
+	listing   *supply.Listing
+	condition *string
+	price     *int64
+	// availability points fraction: listing/AVAILABLE = 1.0, CAN_SOURCE = 0.6
+	availability float64
+	reason       string
 }
 
 // Match scores every eligible vendor against req and returns up to
@@ -64,10 +80,17 @@ type Candidate struct {
 // relevant category are excluded entirely (eligibility failure, not a
 // low score — PRD 2 §17), and the result is never padded with weak
 // matches to reach a target count (PRD 2 §26).
+//
+// listingsByVendor holds each vendor's ACTIVE, unexpired SupplyListings
+// (Phase 4A): curated supply evidence used alongside fresh signals. Signals
+// already represented by a published or rejected listing should be left out
+// of supplyByVendor by the caller (the curation decision supersedes the raw
+// evidence). nil keeps the signals-only behaviour.
 func Match(
 	req *request.BuyerRequest,
 	vendors []*vendor.Vendor,
 	supplyByVendor map[string][]*supply.Signal,
+	listingsByVendor map[string][]supply.MatchableListing,
 	weights Weights,
 	minScore int,
 	maxCandidates int,
@@ -102,10 +125,32 @@ func Match(
 		breakdown["category"] = categoryScore
 
 		// --- Product relevance (PRD 2 §19) ---
+		// Signals and ACTIVE listings are both evidence; the strongest wins
+		// and a listing wins a tie (it is operator-curated).
 		productScore, matchType, relevantSignal := scoreProduct(reqProduct, deref(req.Variant), signals, weights.ProductMax)
+		listingScore, listingType, relevantListing := scoreListings(deref(req.Product), deref(req.Variant), listingsByVendor[v.ID.String()], weights.ProductMax)
+		var ev *evidence
+		switch {
+		case relevantListing != nil && listingScore >= productScore:
+			productScore, matchType, relevantSignal = listingScore, listingType, nil
+			ev = &evidence{listing: relevantListing, condition: relevantListing.Condition, price: relevantListing.Price,
+				availability: 1.0, reason: "active_listing"}
+		case relevantSignal != nil:
+			ev = &evidence{signal: relevantSignal, condition: relevantSignal.Condition, price: relevantSignal.Price}
+			switch relevantSignal.AvailabilityStatus {
+			case supply.AvailabilityAvailable:
+				ev.availability, ev.reason = 1.0, "available_supply"
+			case supply.AvailabilityCanSource:
+				ev.availability, ev.reason = 0.6, "can_source_supply"
+			}
+		}
 		breakdown["product"] = productScore
 		if matchType != "" {
-			reasons = append(reasons, string(matchType)+"_supply_signal")
+			if ev != nil && ev.listing != nil {
+				reasons = append(reasons, string(matchType)+"_active_listing")
+			} else {
+				reasons = append(reasons, string(matchType)+"_supply_signal")
+			}
 		}
 
 		// --- Location (PRD 2 §21) ---
@@ -123,8 +168,8 @@ func Match(
 
 		// --- Condition (PRD 2 §22) ---
 		conditionScore := 0
-		if reqCondition != "" && relevantSignal != nil && relevantSignal.Condition != nil &&
-			strings.EqualFold(*relevantSignal.Condition, reqCondition) {
+		if reqCondition != "" && ev != nil && ev.condition != nil &&
+			strings.EqualFold(*ev.condition, reqCondition) {
 			conditionScore = weights.ConditionMax
 			reasons = append(reasons, "condition_match")
 		}
@@ -132,15 +177,9 @@ func Match(
 
 		// --- Availability (PRD 2 §23) ---
 		availabilityScore := 0
-		if relevantSignal != nil {
-			switch relevantSignal.AvailabilityStatus {
-			case supply.AvailabilityAvailable:
-				availabilityScore = weights.AvailabilityMax
-				reasons = append(reasons, "available_supply")
-			case supply.AvailabilityCanSource:
-				availabilityScore = int(float64(weights.AvailabilityMax) * 0.6)
-				reasons = append(reasons, "can_source_supply")
-			}
+		if ev != nil && ev.availability > 0 {
+			availabilityScore = int(float64(weights.AvailabilityMax) * ev.availability)
+			reasons = append(reasons, ev.reason)
 		}
 		breakdown["availability"] = availabilityScore
 
@@ -151,22 +190,23 @@ func Match(
 		}
 
 		var withinBudget *bool
-		if relevantSignal != nil && relevantSignal.Price != nil && (req.BudgetMax != nil || req.BudgetMin != nil) {
+		if ev != nil && ev.price != nil && (req.BudgetMax != nil || req.BudgetMin != nil) {
 			wb := true
-			if req.BudgetMax != nil && *relevantSignal.Price > *req.BudgetMax {
+			if req.BudgetMax != nil && *ev.price > *req.BudgetMax {
 				wb = false
 			}
 			withinBudget = &wb
 		}
 
 		candidates = append(candidates, Candidate{
-			Vendor:         v,
-			Score:          total,
-			MatchType:      matchTypeOrCategoryOnly(matchType, categoryScore),
-			Breakdown:      breakdown,
-			Reasons:        reasons,
-			RelevantSupply: relevantSignal,
-			WithinBudget:   withinBudget,
+			Vendor:          v,
+			Score:           total,
+			MatchType:       matchTypeOrCategoryOnly(matchType, categoryScore),
+			Breakdown:       breakdown,
+			Reasons:         reasons,
+			RelevantSupply:  relevantSignal,
+			RelevantListing: evListing(ev),
+			WithinBudget:    withinBudget,
 		})
 	}
 
@@ -243,6 +283,66 @@ func scoreProduct(reqProduct, reqVariant string, signals []*supply.Signal, maxPo
 		return 0, "", nil
 	}
 	return bestScore, bestType, bestSignal
+}
+
+func evListing(ev *evidence) *supply.Listing {
+	if ev == nil {
+		return nil
+	}
+	return ev.listing
+}
+
+// scoreListings scores ACTIVE listings with the same PRD 2 §19 table as
+// signals. A published listing is curated, available supply, so it scores
+// like a fresh AVAILABLE signal. Products are compared in the listing's
+// compact search form (lowercase letters and digits only).
+func scoreListings(reqProduct, reqVariant string, listings []supply.MatchableListing, maxPoints int) (int, MatchType, *supply.Listing) {
+	rp := supply.NormalizeSearch(reqProduct)
+	if rp == "" {
+		return 0, "", nil
+	}
+	var best *supply.Listing
+	var bestScore int
+	var bestType MatchType
+	for _, ml := range listings {
+		l := ml.Listing
+		if l == nil || l.Status != supply.ListingActive {
+			continue
+		}
+		// The listing's (curated) product or its source signal's product.
+		var names []string
+		if l.NormalizedProduct != nil && *l.NormalizedProduct != "" {
+			names = append(names, *l.NormalizedProduct)
+		}
+		if ml.SourceProduct != "" {
+			names = append(names, ml.SourceProduct)
+		}
+		exact, family := false, false
+		for _, lp := range names {
+			if lp == rp {
+				exact = true
+			} else if strings.Contains(lp, rp) || strings.Contains(rp, lp) {
+				family = true
+			}
+		}
+		variantMatch := reqVariant != "" && l.Variant != nil && strings.EqualFold(*l.Variant, reqVariant)
+		var score int
+		var mt MatchType
+		switch {
+		case exact && variantMatch:
+			score, mt = pct(maxPoints, 1.0), MatchSupplyConfirmed
+		case exact:
+			score, mt = pct(maxPoints, 0.9), MatchSupplyConfirmed
+		case family:
+			score, mt = pct(maxPoints, 0.5), MatchProductCapable
+		default:
+			continue
+		}
+		if score > bestScore {
+			best, bestScore, bestType = l, score, mt
+		}
+	}
+	return bestScore, bestType, best
 }
 
 func matchTypeOrCategoryOnly(mt MatchType, categoryScore int) MatchType {

@@ -32,6 +32,9 @@ type matchCandidateDTO struct {
 	Reasons        []string       `json:"reasons"`
 	WithinBudget   *bool          `json:"within_budget"`
 	RelevantSupply map[string]any `json:"relevant_supply,omitempty"`
+	// RelevantListing (Phase 4A) is the published listing that made this
+	// vendor relevant, when listing evidence was the strongest.
+	RelevantListing map[string]any `json:"relevant_listing,omitempty"`
 }
 
 // Matches handles GET /api/requests/:id/matches — the suggested vendor
@@ -63,6 +66,12 @@ func (h *RoutingHandlers) Matches(w http.ResponseWriter, r *http.Request) {
 			dto.RelevantSupply = map[string]any{
 				"product": c.RelevantSupply.Product, "variant": c.RelevantSupply.Variant,
 				"price": c.RelevantSupply.Price, "availability_status": c.RelevantSupply.AvailabilityStatus,
+			}
+		}
+		if l := c.RelevantListing; l != nil {
+			dto.RelevantListing = map[string]any{
+				"id": l.ID.String(), "public_reference": l.PublicReference, "product": l.Product, "variant": l.Variant,
+				"condition": l.Condition, "price": l.Price, "currency": l.Currency, "location": l.Location,
 			}
 		}
 		dtos = append(dtos, dto)
@@ -112,6 +121,15 @@ func (h *RoutingHandlers) Route(w http.ResponseWriter, r *http.Request) {
 		breakdown := map[string]any{}
 		for k, v := range c.Breakdown {
 			breakdown[k] = v
+		}
+		// Provenance of the evidence behind the score (Phase 4A).
+		if c.RelevantListing != nil {
+			breakdown["evidence"] = "listing"
+			breakdown["supply_listing_id"] = c.RelevantListing.ID.String()
+			breakdown["listing_reference"] = c.RelevantListing.PublicReference
+		} else if c.RelevantSupply != nil {
+			breakdown["evidence"] = "signal"
+			breakdown["supply_signal_id"] = c.RelevantSupply.ID.String()
 		}
 		breakdowns[c.Vendor.ID] = breakdown
 	}
