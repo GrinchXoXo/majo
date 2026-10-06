@@ -18,6 +18,7 @@ import (
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/logging"
 	"github.com/middleman/backend/internal/marketplace"
+	"github.com/middleman/backend/internal/media"
 	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/vendor"
 )
@@ -41,6 +42,7 @@ type WhatsAppWebhookHandler struct {
 	buyerInbound          *marketplace.BuyerInbound
 	routingService        *routing.Service
 	jobs                  *jobs.Runner
+	media                 media.Enqueuer // Phase 4A.1; nil = vendor media is not ingested
 	verifyToken           string
 	allowUnsignedWebhooks bool
 	logger                *slog.Logger
@@ -75,6 +77,11 @@ func NewWhatsAppWebhookHandler(
 		logger:                logger,
 	}
 }
+
+// SetMediaIngestion hands inbound vendor media to durable ingestion
+// (Phase 4A.1). The adapter only records a durable job; downloading and
+// storing happen in the background worker, never in the webhook request.
+func (h *WhatsAppWebhookHandler) SetMediaIngestion(m media.Enqueuer) { h.media = m }
 
 // ServeHTTP handles both the Meta verification handshake (GET) and
 // incoming message webhooks (POST).
@@ -289,9 +296,16 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 
 	if isVendor {
 		if msg.Type != "text" || msg.Text == "" {
-			// Vendor media (e.g. product photos) is persisted with its
-			// MediaRef but not yet processed.
-			log.Info("non-text vendor message persisted, not processed", "vendor_id", v.ID, "message_type", msg.Type)
+			// Phase 4A.1: vendor media is handed to durable ingestion
+			// (MediaRef -> MEDIA_DOWNLOAD job). It is stored, not processed
+			// as supply: grouping into a SupplySignal is a later step.
+			if mediaRef != nil && h.media != nil {
+				if err := h.media.EnqueueDownload(ctx, v.ID, savedMsg.ID, mediaRef); err != nil {
+					// The startup backfill re-enqueues vendor media without a job.
+					log.Error("enqueueing vendor media download", "error", err, "vendor_id", v.ID, "message_id", savedMsg.ID)
+				}
+			}
+			log.Info("non-text vendor message persisted, not processed as supply", "vendor_id", v.ID, "message_type", msg.Type)
 			return
 		}
 		log.Info("inbound message from known active vendor, routing to vendor pipeline",

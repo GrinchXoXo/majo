@@ -215,3 +215,52 @@ func TestWebhook_DeliveryReceiptsProduceOneFunnelEventPerTransition(t *testing.T
 		t.Fatal("status callbacks must not be stored as inbound messages")
 	}
 }
+
+// ---- Phase 4A.1: vendor media hand-off --------------------------------------
+
+type recEnqueuer struct {
+	calls []struct {
+		vendor, msg uuid.UUID
+		ref         *conversation.MediaRef
+	}
+}
+
+func (r *recEnqueuer) EnqueueDownload(ctx context.Context, vendorID, messageID uuid.UUID, ref *conversation.MediaRef) error {
+	r.calls = append(r.calls, struct {
+		vendor, msg uuid.UUID
+		ref         *conversation.MediaRef
+	}{vendorID, messageID, ref})
+	return nil
+}
+
+const imageFromVendor = `{"entry":[{"changes":[{"value":{"messages":[{"from":"2348000000001","id":"wamid.IMG1","timestamp":"1","type":"image","image":{"id":"MEDIA-IMG-1","mime_type":"image/jpeg","sha256":"abc","caption":"Imported ladies bags ₦18,500"}}]}}]}]}`
+
+func TestWebhook_VendorMediaIsHandedToDurableIngestion(t *testing.T) {
+	h, conv, _ := newTestWebhook(false)
+	enq := &recEnqueuer{}
+	h.SetMediaIngestion(enq)
+
+	if code := post(h, imageFromVendor, metaSign("app-secret", imageFromVendor)); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(conv.saved) != 1 || len(enq.calls) != 1 {
+		t.Fatalf("expected 1 saved message and 1 enqueue, got %d/%d", len(conv.saved), len(enq.calls))
+	}
+	c := enq.calls[0]
+	if c.msg != conv.saved[0].ID || c.ref.ProviderRef != "MEDIA-IMG-1" || c.ref.Kind != "image" || c.ref.Caption != "Imported ladies bags ₦18,500" {
+		t.Fatalf("unexpected hand-off: %+v ref=%+v", c, c.ref)
+	}
+	// The MediaRef persisted on the message is unchanged by 4A.1.
+	if ref, ok := conv.saved[0].Content["media"].(*conversation.MediaRef); !ok || ref.ProviderRef != "MEDIA-IMG-1" {
+		t.Fatalf("MediaRef not persisted as before: %#v", conv.saved[0].Content["media"])
+	}
+}
+
+func TestWebhook_RejectedPayloadNeverEnqueuesMedia(t *testing.T) {
+	h, _, _ := newTestWebhook(false)
+	enq := &recEnqueuer{}
+	h.SetMediaIngestion(enq)
+	if code := post(h, imageFromVendor, metaSign("wrong", imageFromVendor)); code != http.StatusUnauthorized || len(enq.calls) != 0 {
+		t.Fatalf("forged payload must not enqueue: code=%d calls=%d", code, len(enq.calls))
+	}
+}

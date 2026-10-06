@@ -4,6 +4,8 @@
 
 # Go
 backend/bin/
+# Local media storage (Phase 4A.1 local storage.Provider)
+backend/data/
 *.test
 *.out
 

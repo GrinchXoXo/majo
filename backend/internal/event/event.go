@@ -104,6 +104,15 @@ const (
 	// "transaction completed" stage is transactions.status = 'COMPLETED'.
 	TransactionCompleted              Type = "TRANSACTION_COMPLETED"
 	VendorResponseAssociationRejected Type = "VENDOR_RESPONSE_ASSOCIATION_REJECTED"
+
+	// --- Phase 4A.1: durable media ingestion ---
+	// MediaAssetStored means Majo has durably stored the asset and can
+	// retrieve it (written in the same DB transaction that creates the
+	// media_assets row, after storage.Put succeeded). Not "published".
+	MediaAssetStored Type = "MEDIA_ASSET_STORED"
+	// MediaIngestionFailed: a MEDIA_DOWNLOAD job failed terminally
+	// (permanent error, or retries exhausted). No asset exists.
+	MediaIngestionFailed Type = "MEDIA_INGESTION_FAILED"
 )
 
 // ActorType identifies who/what caused an event.

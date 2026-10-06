@@ -5,6 +5,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 // Config holds every environment-driven setting the application needs.
@@ -29,6 +31,26 @@ type Config struct {
 	AllowUnsignedWebhooks bool
 
 	DashboardURL string
+
+	// --- Phase 4A.1: durable media ingestion ---
+	// MediaStorageDir is the root of the local storage.Provider. Must be a
+	// persistent volume in any deployed environment.
+	MediaStorageDir   string
+	MediaMaxImageSize int64 // bytes
+	MediaMaxVideoSize int64 // bytes
+	// MediaBackfillWindow: at startup, vendor media received within this
+	// window that has neither an asset nor a job is enqueued. WhatsApp
+	// media IDs stay downloadable for about 7 days.
+	MediaBackfillWindow time.Duration
+
+	JobsPollInterval time.Duration
+	JobsConcurrency  int
+	JobsMaxAttempts  int
+	JobsBackoffBase  time.Duration
+	JobsBackoffMax   time.Duration
+	// JobsLease: a RUNNING job not finished within this time is assumed
+	// abandoned (worker crashed) and becomes claimable again.
+	JobsLease time.Duration
 }
 
 // Load reads configuration from environment variables.
@@ -47,6 +69,46 @@ func Load() (*Config, error) {
 		WhatsAppVerifyToken:   os.Getenv("WHATSAPP_VERIFY_TOKEN"),
 		WhatsAppAppSecret:     os.Getenv("WHATSAPP_APP_SECRET"),
 		DashboardURL:          getEnv("DASHBOARD_URL", "http://localhost:3000"),
+		MediaStorageDir:       getEnv("MEDIA_STORAGE_DIR", "data/media"),
+	}
+
+	var err error
+	ints := []struct {
+		key  string
+		def  int64
+		dest *int64
+	}{
+		{"MEDIA_MAX_IMAGE_BYTES", 5 << 20, &cfg.MediaMaxImageSize},
+		{"MEDIA_MAX_VIDEO_BYTES", 16 << 20, &cfg.MediaMaxVideoSize},
+	}
+	for _, i := range ints {
+		if *i.dest, err = getInt(i.key, i.def); err != nil {
+			return nil, err
+		}
+	}
+	var concurrency, attempts int64
+	if concurrency, err = getInt("JOBS_CONCURRENCY", 2); err != nil {
+		return nil, err
+	}
+	if attempts, err = getInt("JOBS_MAX_ATTEMPTS", 8); err != nil {
+		return nil, err
+	}
+	cfg.JobsConcurrency, cfg.JobsMaxAttempts = int(concurrency), int(attempts)
+	durs := []struct {
+		key  string
+		def  time.Duration
+		dest *time.Duration
+	}{
+		{"MEDIA_BACKFILL_WINDOW", 7 * 24 * time.Hour, &cfg.MediaBackfillWindow},
+		{"JOBS_POLL_INTERVAL", 2 * time.Second, &cfg.JobsPollInterval},
+		{"JOBS_BACKOFF_BASE", 30 * time.Second, &cfg.JobsBackoffBase},
+		{"JOBS_BACKOFF_MAX", 30 * time.Minute, &cfg.JobsBackoffMax},
+		{"JOBS_LEASE", 5 * time.Minute, &cfg.JobsLease},
+	}
+	for _, d := range durs {
+		if *d.dest, err = getDuration(d.key, d.def); err != nil {
+			return nil, err
+		}
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -61,6 +123,30 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func getInt(key string, fallback int64) (int64, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer, got %q", key, v)
+	}
+	return n, nil
+}
+
+func getDuration(key string, fallback time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration like 30s or 5m, got %q", key, v)
+	}
+	return d, nil
 }
 
 func getEnv(key, fallback string) string {

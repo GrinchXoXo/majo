@@ -11,6 +11,14 @@ status callbacks can be simulated against it.
 Recipients listed in FAIL_RECIPIENTS (comma-separated wa_ids) get the same
 HTTP 400 / error 131047 ("Re-engagement message") that Meta returns when the
 24-hour customer-service window has closed and a template is required.
+
+Phase 4A.1 media endpoints (inbound media download), when MEDIA_DIR is set:
+  GET /{media-id}           -> {"url": ".../download/{media-id}", "mime_type", "file_size", ...}
+  GET /download/{media-id}  -> bytes of MEDIA_DIR/{media-id}.bin
+A missing .bin is a 404 (expired/unknown media ID). MEDIA_DIR/{media-id}.fail
+holds comma-separated HTTP statuses returned (one per call) before success,
+e.g. "503,503". MEDIA_DIR/{media-id}.mime overrides the claimed MIME type.
+If ACCESS_TOKEN is set, a matching Bearer token is required (401 otherwise).
 """
 import json
 import os
@@ -20,6 +28,8 @@ import http.server
 LOG = os.environ.get("OUTBOUND_LOG", "outbound.jsonl")
 FAIL = {r.strip() for r in os.environ.get("FAIL_RECIPIENTS", "").split(",") if r.strip()}
 PORT = int(os.environ.get("PORT", "9090"))
+MEDIA_DIR = os.environ.get("MEDIA_DIR", "")
+TOKEN = os.environ.get("ACCESS_TOKEN", "")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -43,6 +53,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("content-type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps({"messaging_product": "whatsapp", "messages": [{"id": wamid}]}).encode())
+
+    def _json(self, status, obj):
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(obj).encode())
+
+    def do_GET(self):
+        if not MEDIA_DIR:
+            return self._json(404, {"error": {"message": "media endpoints disabled", "code": 100}})
+        if TOKEN and self.headers.get("authorization") != "Bearer " + TOKEN:
+            return self._json(401, {"error": {"message": "Invalid OAuth access token", "code": 190}})
+        path = self.path.split("?")[0].strip("/")
+        download = path.startswith("download/")
+        media_id = path[len("download/"):] if download else path
+        if "/" in media_id or media_id in ("", ".", ".."):
+            return self._json(400, {"error": {"message": "bad id", "code": 100}})
+        base = os.path.join(MEDIA_DIR, media_id)
+        fail = base + ".fail"
+        if os.path.exists(fail):
+            codes = [c for c in open(fail).read().split(",") if c.strip()]
+            if codes:
+                with open(fail, "w") as f:
+                    f.write(",".join(codes[1:]))
+                return self._json(int(codes[0]), {"error": {"message": "scripted failure", "code": 0}})
+        if not os.path.exists(base + ".bin"):
+            return self._json(404, {"error": {"message": f"Object with ID '{media_id}' does not exist", "code": 100}})
+        data = open(base + ".bin", "rb").read()
+        mime = open(base + ".mime").read().strip() if os.path.exists(base + ".mime") else "image/jpeg"
+        if download:
+            self.send_response(200)
+            self.send_header("content-type", mime)
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        host = self.headers.get("host", f"127.0.0.1:{PORT}")
+        return self._json(200, {"messaging_product": "whatsapp", "id": media_id, "mime_type": mime,
+                                "file_size": len(data), "url": f"http://{host}/download/{media_id}?sig=short-lived"})
 
     def log_message(self, *args):
         pass

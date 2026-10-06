@@ -24,6 +24,9 @@ type CloudAPIProvider struct {
 	verifyToken   string
 	appSecret     string
 	client        *http.Client
+	// mediaClient downloads inbound media (Phase 4A.1); longer timeout
+	// than message sends because a video can be up to 16 MB.
+	mediaClient *http.Client
 }
 
 func NewCloudAPIProvider(apiURL, accessToken, phoneNumberID, verifyToken, appSecret string) *CloudAPIProvider {
@@ -34,6 +37,7 @@ func NewCloudAPIProvider(apiURL, accessToken, phoneNumberID, verifyToken, appSec
 		verifyToken:   verifyToken,
 		appSecret:     appSecret,
 		client:        &http.Client{Timeout: 10 * time.Second},
+		mediaClient:   &http.Client{Timeout: 2 * time.Minute},
 	}
 }
 

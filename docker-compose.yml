@@ -46,8 +46,11 @@ services:
       WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
       WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
       DASHBOARD_URL: http://localhost:3000
+      MEDIA_STORAGE_DIR: /app/data/media
     ports:
       - "8080:8080"
+    volumes:
+      - media_data:/app/data/media
 
   dashboard:
     build: ./dashboard
@@ -61,3 +64,4 @@ services:
 
 volumes:
   postgres_data:
+  media_data:

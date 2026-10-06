@@ -17,6 +17,7 @@ import (
 
 	"github.com/middleman/backend/infrastructure/ai"
 	"github.com/middleman/backend/infrastructure/postgres"
+	"github.com/middleman/backend/infrastructure/storage"
 	"github.com/middleman/backend/infrastructure/whatsapp"
 	"github.com/middleman/backend/internal/config"
 	"github.com/middleman/backend/internal/conversation"
@@ -24,6 +25,7 @@ import (
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/logging"
 	"github.com/middleman/backend/internal/marketplace"
+	"github.com/middleman/backend/internal/media"
 	"github.com/middleman/backend/internal/offer"
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
@@ -121,6 +123,39 @@ func main() {
 		contextResolver, requestService, requestRepo, txService, offerRepo, routingRepo, outbound, eventWriter, jobRunner, logger,
 	)
 
+	// --- Phase 4A.1: durable media ingestion ---
+	// Vendor media -> MEDIA_DOWNLOAD job (Postgres) -> in-process worker ->
+	// Graph download -> validate -> SHA-256 -> storage.Provider -> MediaAsset.
+	mediaStore, err := storage.NewLocalProvider(cfg.MediaStorageDir)
+	if err != nil {
+		logger.Error("initialising media storage", "error", err)
+		os.Exit(1)
+	}
+	jobStore := postgres.NewJobRepository(pool)
+	mediaIngestor := media.NewIngestor(
+		jobStore, postgres.NewMediaAssetRepository(pool), mediaStore,
+		map[string]media.Downloader{"whatsapp": whatsappProvider}, eventWriter,
+		media.Limits{MaxImageBytes: cfg.MediaMaxImageSize, MaxVideoBytes: cfg.MediaMaxVideoSize},
+		cfg.JobsMaxAttempts, logger,
+	)
+	durableWorker := jobs.NewWorker(jobStore, jobs.WorkerConfig{
+		PollInterval: cfg.JobsPollInterval, Lease: cfg.JobsLease, Concurrency: cfg.JobsConcurrency,
+		Retry: jobs.RetryPolicy{BaseDelay: cfg.JobsBackoffBase, MaxDelay: cfg.JobsBackoffMax},
+	}, logger)
+	durableWorker.Register(media.JobTypeDownload, mediaIngestor.Handle, mediaIngestor.OnFailure)
+	// Close the "message saved, job not yet enqueued" gap after a crash,
+	// and pick up vendor media persisted before durable ingestion existed.
+	if n, err := mediaIngestor.Backfill(ctx, time.Now().Add(-cfg.MediaBackfillWindow), 5000); err != nil {
+		logger.Error("media backfill failed (will retry on next start)", "error", err)
+	} else if n > 0 {
+		logger.Info("media backfill enqueued downloads", "count", n)
+	}
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		durableWorker.Run(ctx)
+	}()
+
 	// --- HTTP ---
 
 	mux := http.NewServeMux()
@@ -131,6 +166,7 @@ func main() {
 		whatsappProvider, convRepo, convRepo, buyerRepo, vendorRepo, eventWriter, buyerInbound, routingService, jobRunner,
 		cfg.WhatsAppVerifyToken, cfg.AllowUnsignedWebhooks, logger,
 	)
+	webhookHandler.SetMediaIngestion(mediaIngestor)
 	mux.Handle("/webhooks/whatsapp", webhookHandler)
 
 	requestHandlers := httpserver.NewRequestHandlers(requestRepo, requestService, eventWriter)
@@ -209,6 +245,13 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
+	}
+	// In-flight durable jobs finish their bookkeeping; anything cut short
+	// stays RUNNING and is reclaimed after JOBS_LEASE by the next process.
+	select {
+	case <-workerDone:
+	case <-shutdownCtx.Done():
+		logger.Warn("durable worker did not stop before the shutdown deadline")
 	}
 
 	logger.Info("server shut down cleanly")
