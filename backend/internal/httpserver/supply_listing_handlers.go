@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/middleman/backend/internal/supply"
@@ -22,12 +23,14 @@ type mediaRefDTO struct {
 	Type       string `json:"type"`
 	StorageKey string `json:"storage_key,omitempty"`
 	URL        string `json:"url,omitempty"`
+	AssetID    string `json:"asset_id,omitempty"`
 }
 
 type listingDTO struct {
 	ID                string        `json:"id"`
 	VendorID          string        `json:"vendor_id"`
 	SupplySignalID    *string       `json:"supply_signal_id"`
+	PublicReference   string        `json:"public_reference"`
 	Category          *string       `json:"category"`
 	Product           *string       `json:"product"`
 	Variant           *string       `json:"variant"`
@@ -42,6 +45,7 @@ type listingDTO struct {
 	ExtractionMethod  string        `json:"extraction_method"`
 	Confidence        float64       `json:"confidence"`
 	PublishedAt       *string       `json:"published_at"`
+	LastVerifiedAt    *string       `json:"last_verified_at"`
 	ExpiresAt         string        `json:"expires_at"`
 	CreatedAt         string        `json:"created_at"`
 }
@@ -63,9 +67,14 @@ func toListingDTO(l *supply.Listing) listingDTO {
 		s := l.PublishedAt.Format(timeFormat)
 		dto.PublishedAt = &s
 	}
+	if l.LastVerifiedAt != nil {
+		s := l.LastVerifiedAt.Format(timeFormat)
+		dto.LastVerifiedAt = &s
+	}
+	dto.PublicReference = l.PublicReference
 	dto.MediaReferences = make([]mediaRefDTO, 0, len(l.MediaReferences))
 	for _, m := range l.MediaReferences {
-		dto.MediaReferences = append(dto.MediaReferences, mediaRefDTO{Type: m.Type, StorageKey: m.StorageKey, URL: m.URL})
+		dto.MediaReferences = append(dto.MediaReferences, mediaRefDTO{Type: m.Type, StorageKey: m.StorageKey, URL: m.URL, AssetID: m.AssetID})
 	}
 	return dto
 }
@@ -89,8 +98,16 @@ func (h *SupplyListingHandlers) Publish(w http.ResponseWriter, r *http.Request) 
 	}
 
 	listing, err := h.service.PublishFromSignal(r.Context(), signalID, nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to publish listing: "+err.Error())
+	var inel supply.ErrIneligible
+	switch {
+	case errors.As(err, &inel):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	case errors.Is(err, supply.ErrSignalNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "failed to create listing: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, toListingDTO(listing))

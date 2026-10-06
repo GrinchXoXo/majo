@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/middleman/backend/internal/event"
 )
 
 type Availability string
@@ -94,12 +96,17 @@ type MediaReference struct {
 	Type       string `json:"type"` // "image" | "audio" | "video" | "document"
 	StorageKey string `json:"storage_key,omitempty"`
 	URL        string `json:"url,omitempty"`
+	// AssetID is the MediaAsset this reference points at (Phase 4A.3).
+	// The asset stays the single stored copy; the listing only refers to it.
+	AssetID string `json:"asset_id,omitempty"`
 }
 
 type Listing struct {
 	ID                uuid.UUID
 	VendorID          uuid.UUID
 	SupplySignalID    *uuid.UUID
+	// PublicReference is the human-facing "L-XXXXXX" identity (Phase 4A.3).
+	PublicReference string
 
 	Category          *string
 	Product           *string
@@ -173,4 +180,35 @@ type ListingRepository interface {
 	FindRecentDuplicate(ctx context.Context, vendorID uuid.UUID, normalizedProduct string, variant *string, price *int64) (*Listing, error)
 	Search(ctx context.Context, q ListingQuery) ([]*Listing, error)
 	ListByVendor(ctx context.Context, vendorID uuid.UUID) ([]*Listing, error)
+	// CreateFromSignal (Phase 4A.3) persists a listing built from a signal,
+	// atomically and race-safely (one transaction, serialised per vendor):
+	//   - a live listing already exists for this signal -> returns it
+	//     (ListingExisting), first appending any of w.Listing's media
+	//     references it lacks if it is still a DRAFT (ListingMediaSynced);
+	//   - a Phase 3 duplicate exists (same vendor + normalized product +
+	//     variant + price, not expired/archived) -> only its freshness is
+	//     advanced (ListingRefreshed); other fields are never overwritten;
+	//   - otherwise inserts w.Listing with a fresh unique public reference
+	//     (ListingCreated).
+	// The matching event callback is written in the same transaction.
+	CreateFromSignal(ctx context.Context, w ListingWrite) (*Listing, ListingOutcome, error)
+}
+
+// ListingOutcome says what CreateFromSignal did.
+type ListingOutcome string
+
+const (
+	ListingCreated     ListingOutcome = "CREATED"
+	ListingExisting    ListingOutcome = "EXISTING"
+	ListingMediaSynced ListingOutcome = "MEDIA_SYNCED"
+	ListingRefreshed   ListingOutcome = "REFRESHED"
+)
+
+// ListingWrite is the input of CreateFromSignal. The callbacks build the
+// event for whichever outcome happens (nil callback or nil event = none).
+type ListingWrite struct {
+	Listing     *Listing
+	OnCreate    func(created *Listing) *event.Event
+	OnRefresh   func(existing *Listing) *event.Event
+	OnMediaSync func(existing *Listing, added []MediaReference) *event.Event
 }

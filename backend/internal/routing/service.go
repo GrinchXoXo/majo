@@ -399,11 +399,11 @@ func (s *Service) replyContextWindow() time.Duration {
 // answering, deterministically:
 //   - active (SENT) requests, or else
 //   - the requests the vendor answered just before this message (their
-//     VendorResponse is within the reply-context window of `at`), so
+//     VendorResponse was recorded within the reply-context window), so
 //     "Yes boss" followed by a photo, or by "₦620k", stays with the reply.
 //
 // inReply reports the second case.
-func (s *Service) replyContext(ctx context.Context, v *vendor.Vendor, at time.Time) (reqs []*VendorRequest, inReply bool, err error) {
+func (s *Service) replyContext(ctx context.Context, v *vendor.Vendor) (reqs []*VendorRequest, inReply bool, err error) {
 	active, err := s.routing.ListActiveByVendor(ctx, v.ID)
 	if err != nil || len(active) > 0 {
 		return active, false, err
@@ -412,12 +412,13 @@ func (s *Service) replyContext(ctx context.Context, v *vendor.Vendor, at time.Ti
 	if w <= 0 {
 		return nil, false, nil
 	}
-	if at.IsZero() {
-		at = time.Now()
-	}
-	// The reply itself is the evidence: a VendorResponse recorded within the
-	// window before this message. (The response row is written before its
-	// request turns RESPONDED, so there is no gap in which neither shows.)
+	// Compare on one clock: the reply's recorded time and the time this
+	// message is being processed (both server time; Meta's send timestamp is
+	// a different clock). The reply itself is the evidence: a VendorResponse
+	// recorded within the window before now. (The response row is written
+	// before its request turns RESPONDED, so there is no gap in which
+	// neither shows.)
+	at := time.Now()
 	all, err := s.routing.ListByVendor(ctx, v.ID)
 	if err != nil {
 		return nil, false, err
@@ -480,11 +481,11 @@ func (s *Service) clearlyUnrelatedSupply(ctx context.Context, text string, reqs 
 //     not supply: the media is stored and recorded as unresolved.
 //
 // ext is the caption's extraction when one was made (reused by intake).
-func (s *Service) ClassifyVendorMedia(ctx context.Context, v *vendor.Vendor, at time.Time, caption string) (bool, string, *ai.SupplyExtractionResult) {
+func (s *Service) ClassifyVendorMedia(ctx context.Context, v *vendor.Vendor, caption string) (bool, string, *ai.SupplyExtractionResult) {
 	if mmReferencePattern.MatchString(caption) {
 		return false, mediaNotSupplyReference, nil
 	}
-	reqs, inReply, err := s.replyContext(ctx, v, at)
+	reqs, inReply, err := s.replyContext(ctx, v)
 	if err != nil {
 		s.logger.Error("loading vendor request context", "vendor_id", v.ID, "error", err)
 		return false, mediaNotSupplyLookupFailed, nil
@@ -536,7 +537,7 @@ func (s *Service) ProcessVendorMedia(ctx context.Context, v *vendor.Vendor, ref 
 	if s.intake == nil || !supply.IsSupplyMediaKind(kind) {
 		return
 	}
-	ok, reason, ext := s.ClassifyVendorMedia(ctx, v, ref.At, caption)
+	ok, reason, ext := s.ClassifyVendorMedia(ctx, v, caption)
 	if !ok {
 		s.recordUnresolved(ctx, v, ref, "media", reason)
 		return
@@ -552,7 +553,7 @@ func (s *Service) ProcessVendorMedia(ctx context.Context, v *vendor.Vendor, ref 
 // a text right after the vendor's reply is part of that reply unless it is
 // clearly unrelated supply.
 func (s *Service) submitTextSupply(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, rawText string) {
-	reqs, inReply, err := s.replyContext(ctx, v, ref.At)
+	reqs, inReply, err := s.replyContext(ctx, v)
 	if err != nil {
 		s.logger.Error("loading vendor request context", "vendor_id", v.ID, "error", err)
 		s.recordUnresolved(ctx, v, ref, "text", mediaNotSupplyLookupFailed)

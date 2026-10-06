@@ -114,6 +114,26 @@ type Intake struct {
 	maxAttempts int
 	logger      *slog.Logger
 	now         func() time.Time
+	listener    SignalListener
+}
+
+// SignalListener is told when a signal is created or gains evidence
+// (Phase 4A.3: the listing service builds/updates its DRAFT listing).
+// Must be idempotent per key.
+type SignalListener interface {
+	SignalChanged(ctx context.Context, signalID uuid.UUID, key string) error
+}
+
+// SetSignalListener wires the post-signal hook (composition root).
+func (in *Intake) SetSignalListener(l SignalListener) { in.listener = l }
+
+func (in *Intake) notify(ctx context.Context, signalID uuid.UUID, key string, log *slog.Logger) {
+	if in.listener == nil {
+		return
+	}
+	if err := in.listener.SignalChanged(ctx, signalID, key); err != nil {
+		log.Error("notifying signal change", "supply_signal_id", signalID, "error", err)
+	}
 }
 
 func NewIntake(repo GroupingRepository, extractor Extractor, js jobs.Store, vendors ActivityRecorder,
@@ -406,6 +426,7 @@ func (in *Intake) persist(ctx context.Context, s *Signal, sources []Source, g *G
 	if in.vendors != nil {
 		_ = in.vendors.RecordSupplySubmission(ctx, vendorID)
 	}
+	in.notify(ctx, created.ID, "created", log)
 	log.Info("supply signal created", "supply_signal_id", created.ID, "grouping", grouping,
 		"source_message_ids", srcIDs, "media_asset_ids", media, "product", strOr(created.Product),
 		"confidence", created.Confidence, "extraction_source", s.ExtractedData["extraction_source"])
@@ -441,6 +462,7 @@ func (in *Intake) appendLate(ctx context.Context, signalID, vendorID uuid.UUID, 
 	} else if err != nil {
 		return fmt.Errorf("adding late media to supply signal: %w", err)
 	}
+	in.notify(ctx, signalID, fmt.Sprintf("sources:%d", offset+len(sources)), log)
 	log.Info("late media added to existing supply signal", "supply_signal_id", signalID,
 		"added_source_message_ids", srcIDs, "added_media_asset_ids", assetIDs(g))
 	return nil

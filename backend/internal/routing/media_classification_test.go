@@ -98,7 +98,7 @@ func TestClassifyVendorMedia_Rules(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			svc, v, _ := classifier(t, c.active, "iphone 13")
-			ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, time.Now(), c.caption)
+			ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, c.caption)
 			if ok != c.supply || reason != c.reason {
 				t.Fatalf("got (%v, %s), want (%v, %s)", ok, reason, c.supply, c.reason)
 			}
@@ -148,7 +148,7 @@ func TestReplyContext_FollowUpsAfterAReplyAreNotSupply(t *testing.T) {
 		t.Fatal("expected the reply to attach to the request")
 	}
 	now := time.Now()
-	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, now, ""); ok || reason != mediaNotSupplyAfterReply {
+	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, ""); ok || reason != mediaNotSupplyAfterReply {
 		t.Fatalf("uncaptioned photo after a reply must stay with the reply, got %v %s", ok, reason)
 	}
 	svc.ProcessVendorMessageFrom(context.Background(), v, supply.Inbound{MessageID: uuid.New(), At: now}, "nice one 620k")
@@ -165,11 +165,14 @@ func TestReplyContext_FollowUpsAfterAReplyAreNotSupply(t *testing.T) {
 		t.Fatalf("expected one VENDOR_MESSAGE_UNRESOLVED, got %d", unresolved)
 	}
 	// Clearly unrelated supply is still supply.
-	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, now, "Imported ladies bags ₦18,500"); !ok || reason != MediaSupplyUnrelatedCaption {
+	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, "Imported ladies bags ₦18,500"); !ok || reason != MediaSupplyUnrelatedCaption {
 		t.Fatalf("unrelated supply after a reply should be supply, got %v %s", ok, reason)
 	}
 	// Outside the window the reply no longer frames the message.
-	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, now.Add(10*time.Minute), ""); !ok || reason != MediaSupplyNoActiveRequest {
+	for _, r := range svc.routing.(*fakeRoutingRepo).responses {
+		r.CreatedAt = time.Now().Add(-10 * time.Minute)
+	}
+	if ok, reason, _ := svc.ClassifyVendorMedia(context.Background(), v, ""); !ok || reason != MediaSupplyNoActiveRequest {
 		t.Fatalf("10 minutes later a photo is proactive supply, got %v %s", ok, reason)
 	}
 }

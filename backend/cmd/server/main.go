@@ -101,7 +101,7 @@ func main() {
 		vendorRepo, supplyRepo, routingRepo, requestRepo, aiProvider, eventWriter, auditWriter, outbound, logger,
 	)
 
-	listingService := supply.NewListingService(supplyRepo, listingRepo, eventWriter, auditWriter, logger)
+	listingService := supply.NewListingService(supplyRepo, listingRepo, vendorRepo, listingRepo, eventWriter, auditWriter, logger)
 	offerService := offer.NewService(offerRepo, routingRepo, requestRepo, eventWriter, auditWriter, logger)
 	txService := transaction.NewService(txRepo, offerRepo, requestRepo, eventWriter, auditWriter, logger)
 
@@ -152,6 +152,14 @@ func main() {
 	routingService.SetSupplyIntake(supplyIntake)
 	mediaIngestor.SetSettleListener(supplyIntake)
 	durableWorker.Register(supply.JobTypeGroup, supplyIntake.Handle, nil)
+
+	// --- Phase 4A.3: SupplySignal -> DRAFT SupplyListing ---
+	// Every new (or newly media-complete) signal is evaluated by a durable
+	// SUPPLY_LISTING_DRAFT job. Eligible ones become DRAFT listings; nothing
+	// is published automatically (Activate stays an operator action).
+	listingService.SetDraftJobs(jobStore, cfg.JobsMaxAttempts)
+	supplyIntake.SetSignalListener(listingService)
+	durableWorker.Register(supply.JobTypeListingDraft, listingService.HandleDraftJob, nil)
 	// Close the "message saved, job not yet enqueued" gap after a crash,
 	// and pick up vendor media persisted before durable ingestion existed.
 	if n, err := mediaIngestor.Backfill(ctx, time.Now().Add(-cfg.MediaBackfillWindow), 5000); err != nil {

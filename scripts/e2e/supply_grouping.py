@@ -228,5 +228,7 @@ ok(len(sd) == 1 and sd[0]["product"] == "" and sd[0]["price"] == "" and sd[0]["c
 ok(evidence(sd[0]["id"])[1] == [asset_of(f"wamid.{RUN}.d1"), asset_of(f"wamid.{RUN}.d2")], "it references both stored photos, in order")
 
 print("\nScope")
-ok(sql(f"SELECT count(*) FROM supply_listings WHERE vendor_id IN ('{va}','{vb}','{vc}','{vd}')") == "0", "no SupplyListing created")
+# Since 4A.3, eligible signals get DRAFT listings automatically; nothing is published.
+ok(sql(f"SELECT count(*) FROM supply_listings WHERE vendor_id IN ('{va}','{vb}','{vc}','{vd}') AND status <> 'DRAFT'") == "0",
+   "no listing beyond DRAFT (nothing published)")
 print(f"\nALL {checks} CHECKS PASSED")

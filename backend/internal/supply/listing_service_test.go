@@ -5,11 +5,13 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/middleman/backend/internal/audit"
 	"github.com/middleman/backend/internal/event"
+	"github.com/middleman/backend/internal/vendor"
 )
 
 type fakeSignalRepo struct{ signals map[uuid.UUID]*Signal }
@@ -97,6 +99,58 @@ func (f *fakeListingRepo) FindRecentDuplicate(ctx context.Context, vendorID uuid
 	return nil, nil
 }
 func (f *fakeListingRepo) Search(ctx context.Context, q ListingQuery) ([]*Listing, error) { return nil, nil }
+
+// CreateFromSignal mirrors the Postgres semantics (same signal -> existing,
+// Phase 3 duplicate -> freshness refresh, else create) without the locking,
+// which the Postgres integration tests cover.
+func (f *fakeListingRepo) CreateFromSignal(ctx context.Context, w ListingWrite) (*Listing, ListingOutcome, error) {
+	if l, _ := f.FindBySignalID(ctx, *w.Listing.SupplySignalID); l != nil {
+		return l, ListingExisting, nil
+	}
+	if dup, _ := f.FindRecentDuplicate(ctx, w.Listing.VendorID, *w.Listing.NormalizedProduct, w.Listing.Variant, w.Listing.Price); dup != nil {
+		stored := f.listings[dup.ID]
+		if stored.LastVerifiedAt == nil || w.Listing.LastVerifiedAt.After(*stored.LastVerifiedAt) {
+			stored.LastVerifiedAt = w.Listing.LastVerifiedAt
+		}
+		cp := *stored
+		return &cp, ListingRefreshed, nil
+	}
+	w.Listing.PublicReference = "L-TEST01"
+	l, err := f.Create(ctx, w.Listing)
+	return l, ListingCreated, err
+}
+
+type fakeVendors struct{ v map[uuid.UUID]*vendor.Vendor }
+
+func (f fakeVendors) FindByID(ctx context.Context, id uuid.UUID) (*vendor.Vendor, error) { return f.v[id], nil }
+
+type fakeMedia struct{ refs []MediaReference }
+
+func (f fakeMedia) SignalMedia(ctx context.Context, id uuid.UUID) ([]MediaReference, []uuid.UUID, *uuid.UUID, error) {
+	return f.refs, nil, nil, nil
+}
+
+// newSvc builds a service whose vendor (any ID used in the test) is ACTIVE.
+func newSvc(signals *fakeSignalRepo, listings *fakeListingRepo, events *fakeEventsForListing, audits *fakeAuditsForListing, vendors ...*vendor.Vendor) *ListingService {
+	vs := fakeVendors{v: map[uuid.UUID]*vendor.Vendor{}}
+	for _, v := range vendors {
+		vs.v[v.ID] = v
+	}
+	return NewListingService(signals, listings, vs, fakeMedia{}, events, audits, testLogger())
+}
+
+func activeVendor(id uuid.UUID) *vendor.Vendor {
+	return &vendor.Vendor{ID: id, Status: vendor.StatusActive}
+}
+
+func fresh(s *Signal) *Signal {
+	s.CreatedAt = time.Now().Add(-time.Minute)
+	s.ExpiresAt = time.Now().Add(7 * 24 * time.Hour)
+	if s.AvailabilityStatus == "" {
+		s.AvailabilityStatus = AvailabilityAvailable
+	}
+	return s
+}
 func (f *fakeListingRepo) ListByVendor(ctx context.Context, vendorID uuid.UUID) ([]*Listing, error) {
 	return nil, nil
 }
@@ -123,15 +177,14 @@ func TestPublishFromSignal_CreatesListingWithoutHallucinatingFields(t *testing.T
 	signalRepo := &fakeSignalRepo{signals: map[uuid.UUID]*Signal{}}
 	listingRepo := newFakeListingRepo()
 	events := &fakeEventsForListing{}
-	svc := NewListingService(signalRepo, listingRepo, events, &fakeAuditsForListing{}, testLogger())
-
 	sigID := uuid.New()
 	vendorID := uuid.New()
-	signalRepo.signals[sigID] = &Signal{
+	svc := newSvc(signalRepo, listingRepo, events, &fakeAuditsForListing{}, activeVendor(vendorID))
+	signalRepo.signals[sigID] = fresh(&Signal{
 		ID: sigID, VendorID: vendorID, Product: strp("iPhone 13"), Variant: strp("128GB"),
 		Price: i64p(620000), RawMessage: "iPhone 13 128gb, 620k. I get am.",
 		AvailabilityStatus: AvailabilityAvailable,
-	}
+	})
 
 	listing, err := svc.PublishFromSignal(context.Background(), sigID, nil)
 	if err != nil {
@@ -152,12 +205,11 @@ func TestPublishFromSignal_CreatesListingWithoutHallucinatingFields(t *testing.T
 func TestPublishFromSignal_DuplicateSignalRefreshesInsteadOfDuplicating(t *testing.T) {
 	signalRepo := &fakeSignalRepo{signals: map[uuid.UUID]*Signal{}}
 	listingRepo := newFakeListingRepo()
-	svc := NewListingService(signalRepo, listingRepo, &fakeEventsForListing{}, &fakeAuditsForListing{}, testLogger())
-
 	vendorID := uuid.New()
+	svc := newSvc(signalRepo, listingRepo, &fakeEventsForListing{}, &fakeAuditsForListing{}, activeVendor(vendorID))
 	sig1ID, sig2ID := uuid.New(), uuid.New()
-	signalRepo.signals[sig1ID] = &Signal{ID: sig1ID, VendorID: vendorID, Product: strp("iPhone 13"), Price: i64p(620000)}
-	signalRepo.signals[sig2ID] = &Signal{ID: sig2ID, VendorID: vendorID, Product: strp("iPhone 13"), Price: i64p(620000)}
+	signalRepo.signals[sig1ID] = fresh(&Signal{ID: sig1ID, VendorID: vendorID, Product: strp("iPhone 13"), Price: i64p(620000)})
+	signalRepo.signals[sig2ID] = fresh(&Signal{ID: sig2ID, VendorID: vendorID, Product: strp("iPhone 13"), Price: i64p(620000)})
 
 	first, err := svc.PublishFromSignal(context.Background(), sig1ID, nil)
 	if err != nil {
@@ -180,10 +232,9 @@ func TestPublishFromSignal_DuplicateSignalRefreshesInsteadOfDuplicating(t *testi
 func TestPublishFromSignal_SameSignalTwiceIsIdempotent(t *testing.T) {
 	signalRepo := &fakeSignalRepo{signals: map[uuid.UUID]*Signal{}}
 	listingRepo := newFakeListingRepo()
-	svc := NewListingService(signalRepo, listingRepo, &fakeEventsForListing{}, &fakeAuditsForListing{}, testLogger())
-
 	sigID, vendorID := uuid.New(), uuid.New()
-	signalRepo.signals[sigID] = &Signal{ID: sigID, VendorID: vendorID, Product: strp("PS5"), Price: i64p(780000)}
+	svc := newSvc(signalRepo, listingRepo, &fakeEventsForListing{}, &fakeAuditsForListing{}, activeVendor(vendorID))
+	signalRepo.signals[sigID] = fresh(&Signal{ID: sigID, VendorID: vendorID, Product: strp("PS5"), Price: i64p(780000)})
 
 	svc.PublishFromSignal(context.Background(), sigID, nil)
 	svc.PublishFromSignal(context.Background(), sigID, nil) // same signal again
@@ -196,7 +247,7 @@ func TestPublishFromSignal_SameSignalTwiceIsIdempotent(t *testing.T) {
 func TestCorrect_PreservesRawProvenancePersistsCorrectionWithAudit(t *testing.T) {
 	listingRepo := newFakeListingRepo()
 	audits := &fakeAuditsForListing{}
-	svc := NewListingService(&fakeSignalRepo{}, listingRepo, &fakeEventsForListing{}, audits, testLogger())
+	svc := newSvc(&fakeSignalRepo{}, listingRepo, &fakeEventsForListing{}, audits)
 
 	listingID := uuid.New()
 	listingRepo.listings[listingID] = &Listing{ID: listingID, Price: i64p(620000), Status: ListingDraft}
@@ -219,7 +270,7 @@ func TestCorrect_PreservesRawProvenancePersistsCorrectionWithAudit(t *testing.T)
 
 func TestActivate_TransitionsStatusToActive(t *testing.T) {
 	listingRepo := newFakeListingRepo()
-	svc := NewListingService(&fakeSignalRepo{}, listingRepo, &fakeEventsForListing{}, &fakeAuditsForListing{}, testLogger())
+	svc := newSvc(&fakeSignalRepo{}, listingRepo, &fakeEventsForListing{}, &fakeAuditsForListing{})
 
 	listingID := uuid.New()
 	listingRepo.listings[listingID] = &Listing{ID: listingID, Status: ListingDraft}

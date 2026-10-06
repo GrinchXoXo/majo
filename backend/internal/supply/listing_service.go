@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/middleman/backend/internal/audit"
 	"github.com/middleman/backend/internal/event"
+	"github.com/middleman/backend/internal/jobs"
 )
 
 // ListingService turns a vendor-submitted SupplySignal into durable,
@@ -19,90 +19,31 @@ import (
 type ListingService struct {
 	signals  Repository
 	listings ListingRepository
+	vendors  VendorLookup
+	media    SignalMediaReader
 	events   event.Writer
 	audits   audit.Writer
 	logger   *slog.Logger
+
+	// Phase 4A.3 automatic DRAFT creation (optional; see SetDraftJobs).
+	jobs        jobs.Store
+	maxAttempts int
 }
 
-func NewListingService(signals Repository, listings ListingRepository, events event.Writer, audits audit.Writer, logger *slog.Logger) *ListingService {
-	return &ListingService{signals: signals, listings: listings, events: events, audits: audits, logger: logger}
+func NewListingService(signals Repository, listings ListingRepository, vendors VendorLookup, media SignalMediaReader,
+	events event.Writer, audits audit.Writer, logger *slog.Logger) *ListingService {
+	return &ListingService{signals: signals, listings: listings, vendors: vendors, media: media,
+		events: events, audits: audits, logger: logger, maxAttempts: 1}
 }
 
-// PublishFromSignal creates (or reuses, if a duplicate is detected) a
-// SupplyListing from a SupplySignal. Per PRD 3 §11: duplicate detection
-// is deterministic (same vendor + normalized product + variant + price,
-// not expired) — no ML. If a duplicate is found, its freshness is
-// bumped (last_verified_at) rather than creating a second active listing.
+// PublishFromSignal is the Phase 3 operator entry point (POST
+// /api/supply-listings). Despite its name it never publishes: it builds a
+// DRAFT (or returns the existing/refreshed listing) through the canonical
+// Phase 4A.3 path, CreateFromSignal. Activation stays a separate operator
+// action (Activate).
 func (s *ListingService) PublishFromSignal(ctx context.Context, signalID uuid.UUID, operatorID *uuid.UUID) (*Listing, error) {
-	existingListing, err := s.listings.FindBySignalID(ctx, signalID)
-	if err != nil {
-		return nil, fmt.Errorf("checking existing listing for signal: %w", err)
-	}
-	if existingListing != nil {
-		return existingListing, nil // already published from this exact signal — idempotent
-	}
-
-	sig, err := s.findSignal(ctx, signalID)
-	if err != nil {
-		return nil, err
-	}
-	if sig == nil {
-		return nil, fmt.Errorf("supply signal %s not found", signalID)
-	}
-
-	normalized := ""
-	if sig.Product != nil {
-		normalized = strings.ToLower(strings.Join(strings.Fields(*sig.Product), ""))
-	}
-	var normalizedPtr *string
-	if normalized != "" {
-		normalizedPtr = &normalized
-	}
-
-	if normalized != "" {
-		dup, err := s.listings.FindRecentDuplicate(ctx, sig.VendorID, normalized, sig.Variant, sig.Price)
-		if err != nil {
-			s.logger.Error("checking for duplicate listing", "error", err)
-		} else if dup != nil {
-			// Same product/variant/price already active for this vendor —
-			// treat the new signal as freshness confirmation rather than
-			// spawning a duplicate active listing (PRD 3 §11).
-			updated, err := s.listings.Update(ctx, dup.ID, ListingFields{})
-			if err != nil {
-				return nil, fmt.Errorf("refreshing duplicate listing: %w", err)
-			}
-			if err := s.events.Write(ctx, &event.Event{
-				EventType: event.SupplyListingDuplicateRefreshed, EntityType: "supply_listing", EntityID: &dup.ID,
-				ActorType: event.ActorSystem, Payload: map[string]any{"signal_id": signalID.String()},
-			}); err != nil {
-				s.logger.Error("writing duplicate-refresh event", "error", err)
-			}
-			return updated, nil
-		}
-	}
-
-	listing := &Listing{
-		VendorID: sig.VendorID, SupplySignalID: &signalID,
-		Category: sig.Category, Product: sig.Product, NormalizedProduct: normalizedPtr, Variant: sig.Variant, Condition: sig.Condition,
-		Price: sig.Price, Quantity: sig.Quantity, Location: sig.Location,
-		Status: ListingDraft, SourceChannel: "whatsapp",
-		ExtractionMethod: "heuristic", Confidence: sig.Confidence,
-		ExpiresAt: sig.ExpiresAt,
-	}
-
-	created, err := s.listings.Create(ctx, listing)
-	if err != nil {
-		return nil, fmt.Errorf("creating listing: %w", err)
-	}
-
-	if err := s.events.Write(ctx, &event.Event{
-		EventType: event.SupplyListingCreated, EntityType: "supply_listing", EntityID: &created.ID,
-		ActorType: event.ActorOperator, ActorID: operatorID, Payload: map[string]any{"signal_id": signalID.String()},
-	}); err != nil {
-		s.logger.Error("writing SUPPLY_LISTING_CREATED event", "error", err)
-	}
-
-	return created, nil
+	l, _, err := s.CreateFromSignal(ctx, signalID, event.ActorOperator, operatorID)
+	return l, err
 }
 
 // Activate transitions a DRAFT listing to ACTIVE (visible to discovery).
@@ -158,10 +99,6 @@ func (s *ListingService) Correct(ctx context.Context, listingID uuid.UUID, field
 	}
 
 	return after, nil
-}
-
-func (s *ListingService) findSignal(ctx context.Context, signalID uuid.UUID) (*Signal, error) {
-	return s.signals.FindByID(ctx, signalID)
 }
 
 func diffListingFields(current *Listing, patch ListingFields) (previous, newVals map[string]any) {

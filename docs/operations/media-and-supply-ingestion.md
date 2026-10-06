@@ -105,3 +105,41 @@ cd ../ai && python3 -m pytest -q
 - `supply_grouping.py` (4A.2) needs the real AI service running.
 
 Each script's docstring lists the environment variables it needs.
+
+## Listings from signals (4A.3)
+
+Every new signal, and every signal that gains late photos, gets a durable `SUPPLY_LISTING_DRAFT` job. `ListingService.CreateFromSignal` is the only path from a SupplySignal to a SupplyListing; the operator endpoint `POST /api/supply-listings` uses it too.
+
+**Eligibility** (otherwise no listing; the job completes, the API returns 422):
+- the vendor is ACTIVE;
+- the signal has a product;
+- it is AVAILABLE or CAN_SOURCE;
+- it is not expired;
+- it is not an incomplete media-only signal.
+
+**What the listing gets:**
+- **Status:** always **DRAFT**. Publishing stays `POST /api/supply-listings/{id}/activate`.
+- **Fields:** copied from the signal; nothing is invented.
+- **Location:** the signal's own location, else the vendor's `primary_location`, else NULL. Service areas are not used.
+- **Media:** `media_references` hold the signal's AVAILABLE MediaAssets in evidence order (`asset_id`, kind, `storage_key`); there is no copy and no re-download.
+- **Reference:** `public_reference` is `L-` plus 6 Crockford base32 characters, random, unique in the database, retried on collision.
+- **Freshness:** `last_verified_at` is when the supply evidence arrived (`supply_signals.created_at`), and `expires_at` is 7 days after that. Nothing expires listings automatically.
+
+**Repeat signals:**
+- **Same signal again:** returns the same listing. A DRAFT also gains any of that signal's media it lacks.
+- **Phase 3 duplicate** (same vendor + normalized product + variant + price, not expired or archived): only `last_verified_at` and `expires_at` move forward. Fields, media and operator corrections are left alone.
+
+**Concurrency:** creation, duplicate refresh and the event run in one transaction with a per-vendor advisory lock. A partial unique index allows one live listing per signal.
+
+**Search** (`GET /api/supply-listings`):
+- product and location queries are compared in compact form: lowercase, letters and digits only, so "iPhone 13", "iphone13" and "IPHONE-13" match, as do "BENIN CITY" and "Benin City";
+- category and condition are case-insensitive;
+- by default only ACTIVE listings are returned; pass `status=DRAFT` for operator review.
+
+```sql
+-- Why does listing L-XXXXXX exist?
+SELECT l.public_reference, l.status, l.location, l.last_verified_at, s.id AS signal, m.external_message_id, ss.media_asset_id
+FROM supply_listings l JOIN supply_signals s ON s.id = l.supply_signal_id
+JOIN supply_signal_sources ss ON ss.supply_signal_id = s.id JOIN messages m ON m.id = ss.message_id
+WHERE l.public_reference = 'L-XXXXXX' ORDER BY ss.position;
+```
