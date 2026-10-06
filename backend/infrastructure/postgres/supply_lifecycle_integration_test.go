@@ -297,10 +297,13 @@ func TestIntegration_Migration0012BackfillsTheCeiling(t *testing.T) {
 	db := testDB(t, pre)
 	v := uuid.New()
 	mustExec(t, db, `INSERT INTO vendors (id, business_name, whatsapp_external_id, status) VALUES ($1, 'Old', '2348051159999', 'ACTIVE')`, v)
-	active, draft, sold := uuid.New(), uuid.New(), uuid.New()
+	active, draft, sold, lapsed := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	// The old 7-day semantics: expires 7 days after the evidence.
 	mustExec(t, db, `INSERT INTO supply_listings (id, vendor_id, product, status, published_at, created_at, expires_at, public_reference)
-		VALUES ($1, $2, 'TV', 'ACTIVE', now() - interval '9 days', now() - interval '10 days', now() - interval '3 days', 'L-AAAAA1')`, active, v)
+		VALUES ($1, $2, 'TV', 'ACTIVE', now() - interval '5 days', now() - interval '6 days', now() + interval '1 day', 'L-AAAAA1')`, active, v)
+	// Already past its old ceiling: history, must NOT be resurrected.
+	mustExec(t, db, `INSERT INTO supply_listings (id, vendor_id, product, status, published_at, created_at, expires_at, public_reference)
+		VALUES ($1, $2, 'Radio', 'ACTIVE', now() - interval '9 days', now() - interval '10 days', now() - interval '3 days', 'L-AAAAA4')`, lapsed, v)
 	mustExec(t, db, `INSERT INTO supply_listings (id, vendor_id, product, status, created_at, expires_at, public_reference)
 		VALUES ($1, $2, 'Fan', 'DRAFT', now() - interval '2 days', now() + interval '5 days', 'L-AAAAA2')`, draft, v)
 	mustExec(t, db, `INSERT INTO supply_listings (id, vendor_id, product, status, published_at, created_at, expires_at, public_reference)
@@ -319,6 +322,7 @@ func TestIntegration_Migration0012BackfillsTheCeiling(t *testing.T) {
 	}
 	check(active, `expires_at = published_at + interval '60 days'`)
 	check(draft, `expires_at = created_at + interval '60 days'`)
+	check(lapsed, `expires_at < now()`)
 	var soldAfter time.Time
 	_ = db.QueryRow(`SELECT expires_at FROM supply_listings WHERE id = $1`, sold).Scan(&soldAfter)
 	if !soldAfter.Equal(soldBefore) {

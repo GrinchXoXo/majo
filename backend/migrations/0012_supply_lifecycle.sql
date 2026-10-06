@@ -15,15 +15,19 @@
 --
 -- Backfill uses the initial 60-day default (the configured value is not
 -- visible to SQL). Rows that already closed (SOLD, UNAVAILABLE, EXPIRED,
--- ARCHIVED) are history and are left exactly as they are.
+-- ARCHIVED) are history and are left exactly as they are. Rows whose old
+-- ceiling has already passed are history too: they are NOT backfilled, so
+-- no expired listing is resurrected by this migration.
 
 UPDATE supply_listings
    SET expires_at = published_at + interval '60 days'
- WHERE published_at IS NOT NULL AND status IN ('ACTIVE', 'PAUSED');
+ WHERE published_at IS NOT NULL AND status IN ('ACTIVE', 'PAUSED')
+   AND expires_at > now();
 
 UPDATE supply_listings
    SET expires_at = created_at + interval '60 days'
- WHERE status = 'DRAFT';
+ WHERE status = 'DRAFT'
+   AND expires_at > now();
 
 -- The column default no longer encodes the 7-day assumption. The
 -- application always sets expires_at explicitly from the policy.

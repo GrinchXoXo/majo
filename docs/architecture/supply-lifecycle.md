@@ -163,7 +163,9 @@ Policies are interfaces. A smarter policy replaces one component (`EligibilityPo
 - `freshness > 0`;
 - days are whole numbers from 0 to 3650.
 
-`SUPPLY_FRESHNESS_WINDOW` replaces the Phase 4A `LISTING_FRESHNESS_WINDOW`, which was introduced in the same week and never deployed.
+`SUPPLY_FRESHNESS_WINDOW` replaces the Phase 4A `LISTING_FRESHNESS_WINDOW`; the old name is still honoured when the new one is unset (the new one wins).
+
+**Migration 0012** backfills the ceiling with the initial 60 days: published ACTIVE/PAUSED rows get `published_at + 60d`, drafts `created_at + 60d`. Rows already past their old 7-day ceiling, and closed rows, are history and are left untouched, so the migration never resurrects an expired listing. An ACTIVE row without `published_at` (legacy) is not eligible (`not_published`).
 
 ## 9. Lifecycle / eligibility model
 

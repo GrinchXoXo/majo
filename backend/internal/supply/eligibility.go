@@ -299,6 +299,10 @@ func (p *EligibilityPolicy) Evaluate(f ListingFacts, now time.Time) Eligibility 
 		e.Reasons = append(e.Reasons, "rejected")
 	case f.Status != ListingActive:
 		e.Reasons = append(e.Reasons, "status_"+string(f.Status))
+	case f.PublishedAt == nil:
+		// ACTIVE without a publication time (legacy rows): the lifecycle
+		// never started, so the listing is not supply.
+		e.Reasons = append(e.Reasons, "not_published")
 	}
 	if lc.Expired {
 		e.Reasons = append(e.Reasons, "lifecycle_expired")

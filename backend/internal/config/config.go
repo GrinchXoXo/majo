@@ -143,6 +143,13 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 	}
+	// Legacy name (Phase 4A.4): honoured when the new one is not set, so an
+	// existing deployment does not silently fall back to the default.
+	if os.Getenv("SUPPLY_FRESHNESS_WINDOW") == "" && os.Getenv("LISTING_FRESHNESS_WINDOW") != "" {
+		if cfg.SupplyFreshnessWindow, err = getDuration("LISTING_FRESHNESS_WINDOW", 72*time.Hour); err != nil {
+			return nil, err
+		}
+	}
 
 	days := []struct {
 		key  string

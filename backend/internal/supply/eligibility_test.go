@@ -306,3 +306,14 @@ func contains(xs []string, x string) bool {
 	}
 	return false
 }
+
+// A legacy ACTIVE row without published_at never started a lifecycle: it is
+// not supply (review finding, 4A.5).
+func TestEligibility_ActiveWithoutPublicationIsNotEligible(t *testing.T) {
+	f := published(pubT0)
+	f.PublishedAt = nil
+	e := MustDefaultPolicy().Evaluate(f, pubT0.Add(days(1)))
+	if e.Eligible || e.Lifecycle.State != LifecycleNotPublished {
+		t.Fatalf("eligible=%v state=%s reasons=%v", e.Eligible, e.Lifecycle.State, e.Reasons)
+	}
+}

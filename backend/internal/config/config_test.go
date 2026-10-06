@@ -73,3 +73,18 @@ func TestSupplyLifecycleConfig(t *testing.T) {
 		}
 	}
 }
+
+// The 4A.4 name still works when the new one is unset; the new one wins.
+func TestLegacyFreshnessWindowName(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("SUPPLY_FRESHNESS_WINDOW", "")
+	t.Setenv("LISTING_FRESHNESS_WINDOW", "24h")
+	if cfg, err := Load(); err != nil || cfg.SupplyFreshnessWindow.Hours() != 24 {
+		t.Fatalf("legacy name: %v", err)
+	}
+	t.Setenv("SUPPLY_FRESHNESS_WINDOW", "48h")
+	if cfg, err := Load(); err != nil || cfg.SupplyFreshnessWindow.Hours() != 48 {
+		t.Fatalf("new name wins: %v", err)
+	}
+}
