@@ -1,7 +1,12 @@
 package media
 
 import (
+	"bytes"
 	"errors"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"strings"
 	"testing"
 
@@ -90,5 +95,35 @@ func TestSupportedKind(t *testing.T) {
 		if SupportedKind(k) != want {
 			t.Fatalf("SupportedKind(%q) != %v", k, want)
 		}
+	}
+}
+
+// Real (tiny, generated) image files, not just magic-byte headers.
+func TestValidate_RealEncodedFixtures(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for x := 0; x < 4; x++ {
+		img.Set(x, x, color.RGBA{200, 30, 90, 255})
+	}
+	var pb, jb bytes.Buffer
+	if err := png.Encode(&pb, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(&jb, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	big := Limits{MaxImageBytes: 1 << 20, MaxVideoBytes: 1 << 20}
+	for name, c := range map[string]struct {
+		data []byte
+		mime string
+	}{"png": {pb.Bytes(), "image/png"}, "jpeg": {jb.Bytes(), "image/jpeg"}} {
+		v, err := Validate(KindImage, c.data, big)
+		if err != nil || v.MimeType != c.mime || v.SHA256 != SHA256Hex(c.data) {
+			t.Fatalf("%s fixture: %+v %v", name, v, err)
+		}
+	}
+	// A minimal ISO-BMFF header as recorded by phones (ftyp box, mp42 brand).
+	mp4 := append([]byte{0, 0, 0, 0x20, 'f', 't', 'y', 'p', 'm', 'p', '4', '2', 0, 0, 0, 0, 'm', 'p', '4', '2', 'i', 's', 'o', 'm'}, make([]byte, 16)...)
+	if v, err := Validate(KindVideo, mp4, big); err != nil || v.MimeType != "video/mp4" || v.Extension != ".mp4" {
+		t.Fatalf("mp4 fixture: %+v %v", v, err)
 	}
 }

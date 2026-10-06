@@ -758,3 +758,33 @@ func TestIntegration_Migration0008Constraints(t *testing.T) {
 		t.Fatal("unknown job status must be rejected")
 	}
 }
+
+// §42 (media step prompt): the stored asset stays retrievable after the
+// provider's media reference has expired, and re-running the job does not
+// go back to the provider.
+func TestIntegration_MediaRetrievableAfterProviderMediaExpired(t *testing.T) {
+	e := newMediaEnv(t)
+	e.vendor("V", "2348031110121")
+	e.graph.AddMedia("exp", photo1, "image/jpeg")
+	e.post(mediaPayload("2348031110121", "wamid.EXP", "image", "exp", "image/jpeg", ""))
+	e.drain(e.worker("w", time.Minute))
+	a := e.linkedAsset("wamid.EXP")
+	if a == nil {
+		t.Fatal("asset not stored")
+	}
+	// Meta's media ID and URL are now gone.
+	e.graph.FailMetadata("exp", 404, 404, 404)
+	e.graph.FailDownload("exp", 404, 404, 404)
+	got, err := e.store.Get(context.Background(), a.StorageKey)
+	if err != nil || media.SHA256Hex(got) != a.SHA256 {
+		t.Fatalf("stored asset must not depend on the provider: %v", err)
+	}
+	metaBefore, _ := e.graph.Calls("exp")
+	j := e.job("wamid.EXP")
+	if err := e.ingestor().Handle(context.Background(), j); err != nil {
+		t.Fatalf("re-running a completed media job must be a no-op, got %v", err)
+	}
+	if metaAfter, _ := e.graph.Calls("exp"); metaAfter != metaBefore {
+		t.Fatal("re-run must not contact the provider again")
+	}
+}

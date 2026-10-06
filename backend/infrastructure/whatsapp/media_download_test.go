@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/middleman/backend/infrastructure/whatsapp"
 	"github.com/middleman/backend/infrastructure/whatsapp/whatsapptest"
@@ -124,5 +125,21 @@ func TestDownloadMedia_RejectsPathLikeMediaIDs(t *testing.T) {
 		if _, _, err := p.DownloadMedia(context.Background(), id, 1024); err == nil || !permanent(err) {
 			t.Fatalf("id %q: expected permanent rejection, got %v", id, err)
 		}
+	}
+}
+
+func TestDownloadMedia_TimeoutIsRetryable(t *testing.T) {
+	g, p := setup(t)
+	g.AddMedia("slow", jpeg, "image/jpeg")
+	g.Delay("slow", 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := p.DownloadMedia(ctx, "slow", 1<<20)
+	if err == nil || permanent(err) {
+		t.Fatalf("expected a retryable timeout error, got %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("the download did not respect the deadline")
 	}
 }

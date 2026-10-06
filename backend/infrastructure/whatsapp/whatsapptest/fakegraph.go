@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"time"
 )
 
 type entry struct {
@@ -30,6 +31,7 @@ type entry struct {
 	rawMetadata  string
 	declaredSize int64
 	truncateTo   int
+	delay        time.Duration
 }
 
 // FakeGraph is an httptest server emulating the Graph media endpoints.
@@ -83,6 +85,9 @@ func (f *FakeGraph) DeclareSize(id string, n int64) {
 	f.with(id, func(e *entry) { e.declaredSize = n })
 }
 
+// Delay makes every request for id wait d before answering (timeouts).
+func (f *FakeGraph) Delay(id string, d time.Duration) { f.with(id, func(e *entry) { e.delay = d }) }
+
 // TruncateOnce makes the next download return only n bytes.
 func (f *FakeGraph) TruncateOnce(id string, n int) { f.with(id, func(e *entry) { e.truncateTo = n }) }
 
@@ -112,6 +117,20 @@ func (f *FakeGraph) AuthHeaders() []string {
 }
 
 func (f *FakeGraph) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	var delay time.Duration
+	path0 := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/"), "download/")
+	if e := f.media[path0]; e != nil {
+		delay = e.delay
+	}
+	f.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.authHeaders = append(f.authHeaders, r.Header.Get("Authorization"))

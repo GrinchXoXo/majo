@@ -232,3 +232,38 @@ func TestIsPermanent(t *testing.T) {
 		t.Fatal("wrapped permanent error not detected")
 	}
 }
+
+func TestWorker_GracefulShutdownFinishesInFlightJob(t *testing.T) {
+	s := &memStore{now: time.Now()}
+	_, _ = s.Enqueue(context.Background(), &Job{Type: "T", IdempotencyKey: "k", MaxAttempts: 3})
+	started, release := make(chan struct{}), make(chan struct{})
+	w := newTestWorker(s, func(ctx context.Context, j *Job) error {
+		close(started)
+		<-release // still working when shutdown is requested
+		return nil
+	}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+	<-started
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("Run returned before the in-flight job finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after shutdown")
+	}
+	if s.jobs[0].Status != StatusSucceeded {
+		t.Fatalf("in-flight job should be completed despite shutdown, got %s", s.jobs[0].Status)
+	}
+	// No new job is claimed after shutdown.
+	_, _ = s.Enqueue(context.Background(), &Job{Type: "T", IdempotencyKey: "k2", MaxAttempts: 3})
+	if ran, _ := w.RunOnce(ctx, "t/0"); ran {
+		t.Fatal("a stopped worker must not claim new jobs")
+	}
+}
