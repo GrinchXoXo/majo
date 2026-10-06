@@ -63,6 +63,9 @@ type VendorLookup interface {
 // assets, and the IDs of referenced assets that are not usable.
 type SignalMediaReader interface {
 	SignalMedia(ctx context.Context, signalID uuid.UUID) (refs []MediaReference, unusable []uuid.UUID, firstMessageID *uuid.UUID, err error)
+	// MediaAssetStates (Phase 4A Step 4) returns the state of each existing
+	// asset among ids; missing assets are absent from the map.
+	MediaAssetStates(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]MediaAssetState, error)
 }
 
 // NormalizeSearch is the deterministic compact search form used for listing

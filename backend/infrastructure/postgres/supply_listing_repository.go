@@ -35,7 +35,8 @@ const listingColumns = `
 	id, vendor_id, supply_signal_id, category, product, normalized_product, variant, condition,
 	price, currency, quantity, location, description, media_references, status,
 	source_channel, source_message_id, extraction_method, confidence,
-	published_at, last_verified_at, expires_at, created_at, updated_at, public_reference
+	published_at, last_verified_at, expires_at, created_at, updated_at, public_reference,
+	rejected_at, rejection_reason
 `
 
 func scanListingRow(scanner interface{ Scan(dest ...any) error }) (*supply.Listing, error) {
@@ -49,6 +50,8 @@ func scanListingRow(scanner interface{ Scan(dest ...any) error }) (*supply.Listi
 		location, description                                  sql.NullString
 		mediaBytes                                              []byte
 		publishedAt, lastVerifiedAt                             sql.NullTime
+		rejectedAt                                              sql.NullTime
+		rejectionReason                                         sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -56,6 +59,7 @@ func scanListingRow(scanner interface{ Scan(dest ...any) error }) (*supply.Listi
 		&price, &l.Currency, &quantity, &location, &description, &mediaBytes, &l.Status,
 		&l.SourceChannel, &sourceMsgIDStr, &l.ExtractionMethod, &l.Confidence,
 		&publishedAt, &lastVerifiedAt, &l.ExpiresAt, &l.CreatedAt, &l.UpdatedAt, &l.PublicReference,
+		&rejectedAt, &rejectionReason,
 	)
 	if err != nil {
 		return nil, err
@@ -106,6 +110,12 @@ func scanListingRow(scanner interface{ Scan(dest ...any) error }) (*supply.Listi
 	}
 	if lastVerifiedAt.Valid {
 		l.LastVerifiedAt = &lastVerifiedAt.Time
+	}
+	if rejectedAt.Valid {
+		l.RejectedAt = &rejectedAt.Time
+	}
+	if rejectionReason.Valid {
+		l.RejectionReason = &rejectionReason.String
 	}
 	_ = json.Unmarshal(mediaBytes, &l.MediaReferences)
 	if l.MediaReferences == nil {
@@ -227,12 +237,17 @@ func (r *SupplyListingRepository) Update(ctx context.Context, id uuid.UUID, fiel
 	if fields.Description != nil {
 		addSet("description", *fields.Description)
 	}
-	if fields.Status != nil {
-		addSet("status", *fields.Status)
-		if *fields.Status == supply.ListingActive {
-			addSet("published_at", time.Now().UTC())
-		}
+	if fields.Currency != nil {
+		addSet("currency", *fields.Currency)
 	}
+	if fields.MediaReferences != nil {
+		b, err := json.Marshal(*fields.MediaReferences)
+		if err != nil {
+			return nil, err
+		}
+		addSet("media_references", b)
+	}
+	// Status is not a field: transitions go through Curate (Phase 4A Step 4).
 	addSet("updated_at", time.Now().UTC())
 
 	query := fmt.Sprintf("UPDATE supply_listings SET %s WHERE id = $%d RETURNING "+listingColumns,
@@ -393,9 +408,13 @@ func (r *SupplyListingRepository) CreateFromSignal(ctx context.Context, w supply
 		return out, outcome, nil
 	}
 
-	// 1. Already built from this signal.
+	// 1. Already built from this signal. A live listing is preferred; an
+	//    ARCHIVED one (operator-rejected, Phase 4A Step 4) also counts, so a
+	//    rejected signal is never re-drafted when it gains late media. The
+	//    row is locked so a media sync cannot overwrite a concurrent
+	//    operator media reorder.
 	existing, err := scanListingRow(tx.QueryRowContext(ctx, `SELECT `+listingColumns+` FROM supply_listings
-		WHERE supply_signal_id = $1 AND status <> 'ARCHIVED' LIMIT 1`, l.SupplySignalID.String()))
+		WHERE supply_signal_id = $1 ORDER BY (status = 'ARCHIVED'), created_at LIMIT 1 FOR UPDATE`, l.SupplySignalID.String()))
 	if err == nil {
 		added := missingMedia(existing.MediaReferences, l.MediaReferences)
 		if existing.Status != supply.ListingDraft || len(added) == 0 {
@@ -417,13 +436,21 @@ func (r *SupplyListingRepository) CreateFromSignal(ctx context.Context, w supply
 	}
 
 	// 2. Phase 3 duplicate (same vendor + normalized product + variant + price,
-	//    not expired/archived): advance freshness only.
+	//    not expired/archived): advance freshness only. The comparison is
+	//    made against the listing's current values OR its source signal's
+	//    values (Phase 4A Step 4), so a listing whose product/price an
+	//    operator corrected is still recognised as the same supply and is
+	//    refreshed, not duplicated; the correction itself is never touched.
 	dup, err := scanListingRow(tx.QueryRowContext(ctx, `
-		SELECT `+listingColumns+` FROM supply_listings
-		WHERE vendor_id = $1 AND normalized_product = $2
-		  AND variant IS NOT DISTINCT FROM $3 AND price IS NOT DISTINCT FROM $4
-		  AND expires_at > now() AND status NOT IN ('EXPIRED', 'ARCHIVED')
-		ORDER BY created_at DESC LIMIT 1`, l.VendorID.String(), *l.NormalizedProduct, l.Variant, l.Price))
+		SELECT `+listingColumns+` FROM supply_listings l
+		WHERE l.vendor_id = $1 AND l.expires_at > now() AND l.status NOT IN ('EXPIRED', 'ARCHIVED')
+		  AND (
+		    (l.normalized_product = $2 AND l.variant IS NOT DISTINCT FROM $3 AND l.price IS NOT DISTINCT FROM $4)
+		    OR EXISTS (SELECT 1 FROM supply_signals s WHERE s.id = l.supply_signal_id
+		        AND regexp_replace(lower(COALESCE(s.product, '')), '[^[:alnum:]]+', '', 'g') = $2
+		        AND s.variant IS NOT DISTINCT FROM $3 AND s.price IS NOT DISTINCT FROM $4)
+		  )
+		ORDER BY l.created_at DESC LIMIT 1 FOR UPDATE`, l.VendorID.String(), *l.NormalizedProduct, l.Variant, l.Price))
 	if err == nil {
 		refreshed, err := scanListingRow(tx.QueryRowContext(ctx, `
 			UPDATE supply_listings

@@ -1,4 +1,4 @@
-# Media ingestion and supply grouping (Phase 4A.1 / 4A.2)
+# Media ingestion, supply grouping and listing curation (Phase 4A.1 – 4A Step 4)
 
 How vendor WhatsApp media becomes durable `MediaAsset`s, and how vendor photos, captions and text become one `SupplySignal`. Nothing here is buyer-visible: stored is not published, and a signal is evidence, not a listing.
 
@@ -118,7 +118,7 @@ Every new signal, and every signal that gains late photos, gets a durable `SUPPL
 - it is not an incomplete media-only signal.
 
 **What the listing gets:**
-- **Status:** always **DRAFT**. Publishing stays `POST /api/supply-listings/{id}/activate`.
+- **Status:** always **DRAFT**. Only an operator can publish it (see *Curation* below).
 - **Fields:** copied from the signal; nothing is invented.
 - **Location:** the signal's own location, else the vendor's `primary_location`, else NULL. Service areas are not used.
 - **Media:** `media_references` hold the signal's AVAILABLE MediaAssets in evidence order (`asset_id`, kind, `storage_key`); there is no copy and no re-download.
@@ -143,3 +143,40 @@ FROM supply_listings l JOIN supply_signals s ON s.id = l.supply_signal_id
 JOIN supply_signal_sources ss ON ss.supply_signal_id = s.id JOIN messages m ON m.id = ss.message_id
 WHERE l.public_reference = 'L-XXXXXX' ORDER BY ss.position;
 ```
+
+## Curation (Phase 4A Step 4)
+
+The operator is the publication gate. A listing becomes ACTIVE only through `POST /api/supply-listings/{id}/publish`; nothing else sets ACTIVE (not creation, edits, media, refresh or confidence).
+
+**Dashboard:** *Supply Listings* (`/offers`) opens on the DRAFT queue (newest first; expired drafts are not shown). A listing page (`/offers/{id}`) shows the editable marketplace fields next to the source signal's values, the media previews, the source messages, and why the listing cannot be published yet.
+
+**Operator token:** set `OPERATOR_API_TOKEN` (16+ characters; required unless `APP_ENV=development`). Editing, publishing, rejecting and media previews need `Authorization: Bearer <token>`. In the dashboard, the operator types it once per browser tab. There are no per-operator identities, so audit rows say OPERATOR without a name. Reads (queue, detail) and the other operator pages are not protected, as before.
+
+| Operation | Allowed from | Result | Event / audit |
+|---|---|---|---|
+| `PATCH /api/supply-listings/{id}` | DRAFT, ACTIVE | changes only: product, category, variant, condition, price, currency (NGN), quantity, location, description, `media_order`, `primary_media_asset_id`. Any other field is a 400. | `SUPPLY_LISTING_UPDATED` + `SUPPLY_LISTING_CORRECTED` audit (old/new) |
+| `POST …/publish` (`/activate` is an alias) | DRAFT | ACTIVE; `published_at` set once and never reset | `SUPPLY_LISTING_PUBLISHED` + audit, once |
+| `POST …/reject` `{"reason"}` | DRAFT, ACTIVE | ARCHIVED, `rejected_at`, `rejection_reason`. Terminal: no republish. | `SUPPLY_LISTING_REJECTED` + audit |
+| `GET …/media/{asset}` | any | the bytes of one of *this listing's* AVAILABLE assets, via the storage provider | — |
+
+- **Repeats are no-ops:** publishing an ACTIVE listing or rejecting a rejected one returns 200 and writes nothing.
+- **Stale tabs:** send the listing's `updated_at` back as `expected_updated_at`; if it changed meanwhile, the answer is 409 `STALE`.
+- **Publication requires:**
+  - a product, a price above 0, and NGN;
+  - quantity above 0 and a non-blank location, if set;
+  - unexpired evidence;
+  - an ACTIVE vendor;
+  - an existing source signal of the same vendor;
+  - every media reference pointing at that vendor's asset, with an AVAILABLE primary image.
+
+  Media is optional.
+- **Evidence is never edited:** the signal, its messages and MediaAssets stay as they were. A rejected signal is not re-drafted when it gains late photos.
+- **Duplicate refresh:** it also recognises a listing by its source signal's original product, variant and price. A corrected listing is therefore refreshed (freshness only) instead of duplicated, and the correction stays.
+
+```sql
+-- What happened to a listing
+SELECT action, previous_value, new_value, created_at FROM audit_logs WHERE entity_id = '<listing id>' ORDER BY created_at;
+SELECT event_type, payload, created_at FROM events WHERE entity_id = '<listing id>' ORDER BY created_at;
+```
+
+E2E: `scripts/e2e/listing_curation.py` drives the real dashboard with headless Chromium (Playwright) against the real backend. Its docstring lists the environment variables.

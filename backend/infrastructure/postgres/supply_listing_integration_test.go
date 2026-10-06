@@ -6,6 +6,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,34 @@ func newListingEnv(t *testing.T) *listingEnv {
 	e.svc.SetDraftJobs(s.jobs, 5)
 	s.intake.SetSignalListener(e.svc)
 	return e
+}
+
+// send is supplyEnv.send plus one more wait: a text handled on the routing
+// fast path becomes a signal inside the asynchronous webhook runner, and the
+// SUPPLY_LISTING_DRAFT job is enqueued just after the signal commits. Wait
+// for that job so a following drain cannot finish in between (a test
+// harness race seen under -race load; production picks the job up later).
+func (e *listingEnv) send(from, wamid string, at time.Time, kind, body string) {
+	e.t.Helper()
+	e.supplyEnv.send(from, wamid, at, kind, body)
+	if kind != "text" {
+		return
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var sig sql.NullString
+		_ = e.db.QueryRow(`SELECT ss.supply_signal_id::text FROM supply_signal_sources ss JOIN messages m ON m.id = ss.message_id
+			WHERE m.external_message_id = $1`, wamid).Scan(&sig)
+		if !sig.Valid {
+			return // not (yet) a signal source: a deferred grouping job or a reply; drain covers it
+		}
+		if e.count(`SELECT count(*) FROM jobs WHERE job_type = $1 AND idempotency_key LIKE $2`,
+			supply.JobTypeListingDraft, sig.String+":%") > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	e.t.Fatalf("no listing draft job for the signal of %s", wamid)
 }
 
 // worker runs media download, grouping and listing drafts, as the server does.
@@ -344,7 +373,7 @@ func TestIntegration_Listing_DuplicateRefreshAdvancesFreshnessOnly(t *testing.T)
 	}
 	// Operator corrections (with the existing audit trail).
 	desc, cond, loc := "Sealed, with receipt", "new", "GRA, Benin City"
-	if _, err := e.svc.Correct(ctx, l.ID, supply.ListingFields{Description: &desc, Condition: &cond, Location: &loc}, nil); err != nil {
+	if _, err := e.svc.Edit(ctx, l.ID, supply.ListingEdit{Description: &desc, Condition: &cond, Location: &loc}, nil); err != nil {
 		t.Fatal(err)
 	}
 	newer := e.signal(v, "iPhone 13", 620000, "Lagos", func(s *supply.Signal) { s.Variant = strPtr("128GB") })
@@ -388,7 +417,10 @@ func TestIntegration_Listing_SearchNormalizationAndStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		if status != supply.ListingDraft {
-			if l, err = e.listings.Update(ctx, l.ID, supply.ListingFields{Status: &status}); err != nil {
+			// Status fixtures are set directly: ListingFields has no status
+			// (transitions only go through Publish/Reject since Step 4).
+			mustExec(t, e.db, `UPDATE supply_listings SET status = $2 WHERE id = $1`, l.ID, string(status))
+			if l, err = e.listings.FindByID(ctx, l.ID); err != nil {
 				t.Fatal(err)
 			}
 		}

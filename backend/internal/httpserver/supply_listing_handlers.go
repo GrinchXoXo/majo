@@ -1,22 +1,30 @@
 package httpserver
 
 import (
-	"encoding/json"
-	"errors"
+	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/middleman/backend/infrastructure/storage"
 	"github.com/middleman/backend/internal/supply"
 )
 
-// SupplyListingHandlers implements the marketplace supply/discovery API
-// from PRD 3 §6/§14/§30.
+// SupplyListingHandlers implements the marketplace supply API (PRD 3
+// §6/§14/§30) and, since Phase 4A Step 4, operator curation: detail with
+// provenance, explicit-field edit, publish, reject and media preview.
+// Every write and the media preview require operator authorization.
 type SupplyListingHandlers struct {
 	listings supply.ListingRepository
 	service  *supply.ListingService
+	curation supply.CurationReader
+	store    storage.Provider
+	auth     *OperatorAuth
+	logger   *slog.Logger
 }
 
-func NewSupplyListingHandlers(listings supply.ListingRepository, service *supply.ListingService) *SupplyListingHandlers {
-	return &SupplyListingHandlers{listings: listings, service: service}
+func NewSupplyListingHandlers(listings supply.ListingRepository, service *supply.ListingService,
+	curation supply.CurationReader, store storage.Provider, auth *OperatorAuth, logger *slog.Logger) *SupplyListingHandlers {
+	return &SupplyListingHandlers{listings: listings, service: service, curation: curation, store: store, auth: auth, logger: logger}
 }
 
 type mediaRefDTO struct {
@@ -24,6 +32,7 @@ type mediaRefDTO struct {
 	StorageKey string `json:"storage_key,omitempty"`
 	URL        string `json:"url,omitempty"`
 	AssetID    string `json:"asset_id,omitempty"`
+	Role       string `json:"role,omitempty"`
 }
 
 type listingDTO struct {
@@ -48,6 +57,12 @@ type listingDTO struct {
 	LastVerifiedAt    *string       `json:"last_verified_at"`
 	ExpiresAt         string        `json:"expires_at"`
 	CreatedAt         string        `json:"created_at"`
+	// UpdatedAt is full precision: send it back as expected_updated_at to
+	// get stale-edit protection.
+	UpdatedAt            string  `json:"updated_at"`
+	RejectedAt           *string `json:"rejected_at"`
+	RejectionReason      *string `json:"rejection_reason"`
+	PrimaryMediaAssetID  *string `json:"primary_media_asset_id"`
 }
 
 func toListingDTO(l *supply.Listing) listingDTO {
@@ -72,114 +87,21 @@ func toListingDTO(l *supply.Listing) listingDTO {
 		dto.LastVerifiedAt = &s
 	}
 	dto.PublicReference = l.PublicReference
+	dto.UpdatedAt = l.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	if l.RejectedAt != nil {
+		s := l.RejectedAt.Format(timeFormat)
+		dto.RejectedAt = &s
+	}
+	dto.RejectionReason = l.RejectionReason
+	if p := supply.PrimaryMedia(l.MediaReferences); p != nil && p.AssetID != "" {
+		id := p.AssetID
+		dto.PrimaryMediaAssetID = &id
+	}
 	dto.MediaReferences = make([]mediaRefDTO, 0, len(l.MediaReferences))
 	for _, m := range l.MediaReferences {
-		dto.MediaReferences = append(dto.MediaReferences, mediaRefDTO{Type: m.Type, StorageKey: m.StorageKey, URL: m.URL, AssetID: m.AssetID})
+		dto.MediaReferences = append(dto.MediaReferences, mediaRefDTO{Type: m.Type, StorageKey: m.StorageKey, URL: m.URL, AssetID: m.AssetID, Role: m.Role})
 	}
 	return dto
-}
-
-type publishListingBody struct {
-	SupplySignalID string `json:"supply_signal_id"`
-}
-
-// Publish handles POST /api/supply-listings — operator-driven publish of
-// a SupplySignal into durable marketplace supply (PRD 3 §5-6).
-func (h *SupplyListingHandlers) Publish(w http.ResponseWriter, r *http.Request) {
-	var body publishListingBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	signalID, err := parseUUID(body.SupplySignalID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid supply_signal_id")
-		return
-	}
-
-	listing, err := h.service.PublishFromSignal(r.Context(), signalID, nil)
-	var inel supply.ErrIneligible
-	switch {
-	case errors.As(err, &inel):
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	case errors.Is(err, supply.ErrSignalNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	case err != nil:
-		writeError(w, http.StatusInternalServerError, "failed to create listing: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, toListingDTO(listing))
-}
-
-// Activate handles POST /api/supply-listings/:id/activate
-func (h *SupplyListingHandlers) Activate(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseUUIDParam(w, r)
-	if !ok {
-		return
-	}
-	listing, err := h.service.Activate(r.Context(), id, nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to activate listing: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, toListingDTO(listing))
-}
-
-type patchListingBody struct {
-	Product     *string `json:"product"`
-	Variant     *string `json:"variant"`
-	Condition   *string `json:"condition"`
-	Price       *int64  `json:"price"`
-	Quantity    *int    `json:"quantity"`
-	Location    *string `json:"location"`
-	Description *string `json:"description"`
-	Status      *string `json:"status"`
-}
-
-// Patch handles PATCH /api/supply-listings/:id — operator correction
-// (PRD 3 §12), following the Phase 2.1 correction philosophy.
-func (h *SupplyListingHandlers) Patch(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseUUIDParam(w, r)
-	if !ok {
-		return
-	}
-	var body patchListingBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	fields := supply.ListingFields{
-		Product: body.Product, Variant: body.Variant, Condition: body.Condition,
-		Price: body.Price, Quantity: body.Quantity, Location: body.Location, Description: body.Description,
-	}
-	if body.Status != nil {
-		st := supply.ListingStatus(*body.Status)
-		fields.Status = &st
-	}
-
-	updated, err := h.service.Correct(r.Context(), id, fields, nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "correction failed: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, toListingDTO(updated))
-}
-
-// Get handles GET /api/supply-listings/:id
-func (h *SupplyListingHandlers) Get(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseUUIDParam(w, r)
-	if !ok {
-		return
-	}
-	l, err := h.listings.FindByID(r.Context(), id)
-	if err != nil || l == nil {
-		writeError(w, http.StatusNotFound, "listing not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, toListingDTO(l))
 }
 
 // Search handles GET /api/supply-listings?category=&product=&price_min=&price_max=&location=&condition=

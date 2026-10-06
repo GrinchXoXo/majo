@@ -1,31 +1,40 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { searchSupplyListings, activateListing, type SupplyListingDTO } from "@/lib/api";
+import { searchSupplyListings, listVendors, type SupplyListingDTO } from "@/lib/api";
+import ListingMedia from "@/components/ListingMedia";
+import OperatorToken from "@/components/OperatorToken";
+import { STATUS_COLORS, formatDate, formatPrice } from "@/lib/listing";
 
-// Marketplace discovery foundation (PRD 3 §14/§33): browse structured
-// supply directly, independent of any specific BuyerRequest.
+// Supply listing curation queue (Phase 4A Step 4). By default it shows the
+// work: DRAFT listings, newest first. Other statuses are separate filters,
+// so published or rejected listings never look like new drafts.
 
-const STATUS_COLORS: Record<string, string> = {
-  DRAFT: "#6b7280",
-  ACTIVE: "#15803d",
-  PAUSED: "#b45309",
-  SOLD: "#7c3aed",
-  UNAVAILABLE: "#dc2626",
-  EXPIRED: "#9ca3af",
-  ARCHIVED: "#9ca3af",
-};
+function thumbOf(l: SupplyListingDTO) {
+  const refs = l.media_references ?? [];
+  const primary = refs.find((m) => m.asset_id && m.asset_id === l.primary_media_asset_id);
+  return primary ?? refs.find((m) => m.type === "image" && m.asset_id) ?? null;
+}
+
+const FILTERS: { value: string; label: string }[] = [
+  { value: "DRAFT", label: "Needs review (DRAFT)" },
+  { value: "ACTIVE", label: "Published (ACTIVE)" },
+  { value: "ARCHIVED", label: "Rejected / archived" },
+  { value: "PAUSED", label: "PAUSED" },
+  { value: "SOLD", label: "SOLD" },
+  { value: "UNAVAILABLE", label: "UNAVAILABLE" },
+];
 
 export default function SupplyListingsPage() {
-  const [listings, setListings] = useState<SupplyListingDTO[]>([]);
-  const [statusFilter, setStatusFilter] = useState("");
+  const [listings, setListings] = useState<SupplyListingDTO[] | null>(null);
+  const [vendors, setVendors] = useState<Record<string, string>>({});
+  const [statusFilter, setStatusFilter] = useState("DRAFT");
   const [error, setError] = useState<string | null>(null);
+  const [tokenTick, setTokenTick] = useState(0);
 
   const load = useCallback(async () => {
     try {
-      const params: Record<string, string> = {};
-      if (statusFilter) params.status = statusFilter;
-      setListings(await searchSupplyListings(params));
+      setListings(await searchSupplyListings({ status: statusFilter }));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load listings");
@@ -36,72 +45,117 @@ export default function SupplyListingsPage() {
     load();
   }, [load]);
 
-  const handleActivate = async (id: string) => {
-    await activateListing(id);
-    await load();
-  };
+  useEffect(() => {
+    listVendors()
+      .then((vs) => setVendors(Object.fromEntries(vs.map((v) => [v.id, v.business_name]))))
+      .catch(() => setVendors({}));
+  }, []);
+
+  const th: React.CSSProperties = { padding: "8px 4px" };
+  const td: React.CSSProperties = { padding: "6px 4px", verticalAlign: "middle" };
 
   return (
     <div>
-      <h1>Supply Listings</h1>
-      <p style={{ color: "#666" }}>
-        Durable marketplace supply — distinct from raw vendor SupplySignals. Discoverable
-        independent of any specific buyer request.
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h1 style={{ margin: "8px 0" }}>Supply Listings</h1>
+        <OperatorToken onChange={() => setTokenTick((t) => t + 1)} />
+      </div>
+      <p style={{ color: "#666", marginTop: 0 }}>
+        Listings are created as DRAFT from vendor supply. Open one to check it, correct it, and publish or reject it. Nothing
+        is shown to buyers until an operator publishes it.
       </p>
 
       <div style={{ marginBottom: 12 }}>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ padding: "5px 8px" }}>
-          <option value="">All statuses</option>
-          <option value="DRAFT">DRAFT</option>
-          <option value="ACTIVE">ACTIVE</option>
-          <option value="PAUSED">PAUSED</option>
-          <option value="SOLD">SOLD</option>
-          <option value="UNAVAILABLE">UNAVAILABLE</option>
-          <option value="EXPIRED">EXPIRED</option>
-        </select>
+        <label>
+          Show{" "}
+          <select
+            aria-label="Status filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{ padding: "5px 8px" }}
+          >
+            {FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>{" "}
+        <button onClick={load}>Refresh</button>
       </div>
 
       {error && <p style={{ color: "crimson" }}>{error}</p>}
 
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd", fontSize: "0.85em" }}>
-            <th style={{ padding: "8px 4px" }}>Status</th>
-            <th style={{ padding: "8px 4px" }}>Product</th>
-            <th style={{ padding: "8px 4px" }}>Variant</th>
-            <th style={{ padding: "8px 4px" }}>Price</th>
-            <th style={{ padding: "8px 4px" }}>Location</th>
-            <th style={{ padding: "8px 4px" }}>Confidence</th>
-            <th style={{ padding: "8px 4px" }}>Expires</th>
-            <th style={{ padding: "8px 4px" }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {listings.map((l) => (
-            <tr key={l.id} style={{ borderBottom: "1px solid #eee", fontSize: "0.9em" }}>
-              <td style={{ padding: "8px 4px" }}>
-                <span style={{ color: STATUS_COLORS[l.status], fontWeight: 600, fontSize: "0.85em" }}>{l.status}</span>
-              </td>
-              <td style={{ padding: "8px 4px" }}>{l.product ?? "—"}</td>
-              <td style={{ padding: "8px 4px" }}>{l.variant ?? "—"}</td>
-              <td style={{ padding: "8px 4px" }}>{l.price ? `₦${l.price.toLocaleString()}` : "—"}</td>
-              <td style={{ padding: "8px 4px" }}>{l.location ?? "—"}</td>
-              <td style={{ padding: "8px 4px" }}>{(l.confidence * 100).toFixed(0)}%</td>
-              <td style={{ padding: "8px 4px", color: "#666", fontSize: "0.85em" }}>{new Date(l.expires_at).toLocaleDateString()}</td>
-              <td style={{ padding: "8px 4px" }}>
-                {l.status === "DRAFT" && (
-                  <button onClick={() => handleActivate(l.id)} style={{ padding: "4px 10px", fontSize: "0.85em", cursor: "pointer" }}>
-                    Activate
-                  </button>
-                )}
-              </td>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }} data-testid="listing-queue">
+          <thead>
+            <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd", fontSize: "0.85em" }}>
+              <th style={th}></th>
+              <th style={th}>Ref</th>
+              <th style={th}>Product</th>
+              <th style={th}>Category</th>
+              <th style={th}>Price</th>
+              <th style={th}>Vendor</th>
+              <th style={th}>Location</th>
+              <th style={th}>Condition</th>
+              <th style={th}>Media</th>
+              <th style={th}>Created</th>
+              <th style={th}>Verified</th>
+              <th style={th}>Status</th>
             </tr>
-          ))}
-          {listings.length === 0 && (
-            <tr><td colSpan={8} style={{ color: "#666", padding: 16 }}>No listings yet.</td></tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {(listings ?? []).map((l) => {
+              const thumb = thumbOf(l);
+              const mediaCount = (l.media_references ?? []).length;
+              return (
+                <tr key={l.id} style={{ borderBottom: "1px solid #eee", fontSize: "0.9em" }} data-testid="listing-row">
+                  <td style={td}>
+                    {thumb?.asset_id ? (
+                      <a href={`/offers/${l.id}`}>
+                        <ListingMedia listingId={l.id} assetId={thumb.asset_id} type={thumb.type} size={48} reloadKey={tokenTick} />
+                      </a>
+                    ) : (
+                      <div style={{ width: 48, height: 48, background: "#f9fafb", border: "1px dashed #d1d5db", fontSize: "0.65em", color: "#9ca3af", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        No image
+                      </div>
+                    )}
+                  </td>
+                  <td style={td}>
+                    <a href={`/offers/${l.id}`} style={{ fontFamily: "monospace" }}>
+                      {l.public_reference}
+                    </a>
+                  </td>
+                  <td style={td}>
+                    <a href={`/offers/${l.id}`}>{l.product ?? "—"}</a>
+                    {l.variant ? <span style={{ color: "#666" }}> · {l.variant}</span> : null}
+                  </td>
+                  <td style={td}>{l.category ?? "—"}</td>
+                  <td style={td}>{formatPrice(l.price, l.currency)}</td>
+                  <td style={td}>{vendors[l.vendor_id] ?? l.vendor_id.slice(0, 8)}</td>
+                  <td style={td}>{l.location ?? "—"}</td>
+                  <td style={td}>{l.condition ?? "—"}</td>
+                  <td style={td}>{mediaCount === 0 ? "none" : mediaCount}</td>
+                  <td style={{ ...td, color: "#666", fontSize: "0.85em" }}>{formatDate(l.created_at)}</td>
+                  <td style={{ ...td, color: "#666", fontSize: "0.85em" }}>{formatDate(l.last_verified_at)}</td>
+                  <td style={td}>
+                    <span style={{ color: STATUS_COLORS[l.status], fontWeight: 600, fontSize: "0.85em" }}>
+                      {l.status === "ARCHIVED" && l.rejected_at ? "REJECTED" : l.status}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+            {listings !== null && listings.length === 0 && (
+              <tr>
+                <td colSpan={12} style={{ color: "#666", padding: 16 }} data-testid="queue-empty">
+                  {statusFilter === "DRAFT" ? "No drafts waiting for review." : "No listings with this status."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

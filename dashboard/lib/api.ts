@@ -317,10 +317,19 @@ export async function getVendorOwnRequests(vendorId: string): Promise<VendorRequ
 
 // --- Phase 3: Supply listings, offers, transactions ---
 
+export type ListingStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "SOLD" | "UNAVAILABLE" | "EXPIRED" | "ARCHIVED";
+
+export type ListingMediaRefDTO = {
+  type: string;
+  asset_id?: string;
+  role?: string; // "PRIMARY" on the operator-chosen primary image
+};
+
 export type SupplyListingDTO = {
   id: string;
   vendor_id: string;
   supply_signal_id: string | null;
+  public_reference: string;
   category: string | null;
   product: string | null;
   variant: string | null;
@@ -330,12 +339,18 @@ export type SupplyListingDTO = {
   quantity: number | null;
   location: string | null;
   description: string | null;
-  status: "DRAFT" | "ACTIVE" | "PAUSED" | "SOLD" | "UNAVAILABLE" | "EXPIRED" | "ARCHIVED";
+  media_references: ListingMediaRefDTO[] | null;
+  status: ListingStatus;
   extraction_method: string;
   confidence: number;
   published_at: string | null;
+  last_verified_at: string | null;
   expires_at: string;
   created_at: string;
+  updated_at: string; // full precision; send back as expected_updated_at
+  rejected_at: string | null;
+  rejection_reason: string | null;
+  primary_media_asset_id: string | null;
 };
 
 export async function searchSupplyListings(params?: Record<string, string>): Promise<SupplyListingDTO[]> {
@@ -345,10 +360,161 @@ export async function searchSupplyListings(params?: Record<string, string>): Pro
   return (await res.json()) ?? [];
 }
 
-export async function activateListing(id: string): Promise<SupplyListingDTO> {
-  const res = await fetch(`${API_URL}/api/supply-listings/${id}/activate`, { method: "POST" });
-  if (!res.ok) throw new Error(`failed to activate listing: ${res.status}`);
-  return res.json();
+// --- Phase 4A Step 4: listing curation (operator-only actions) ---
+
+// The operator token is entered once per browser session and kept in
+// sessionStorage; it is never part of the build (NEXT_PUBLIC_* would ship
+// it to every visitor).
+const TOKEN_KEY = "majo.operatorToken";
+
+export function getOperatorToken(): string {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setOperatorToken(token: string): void {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // storage unavailable: the token lives only for this page view
+  }
+}
+
+function operatorHeaders(json = true): HeadersInit {
+  const h: Record<string, string> = {};
+  if (json) h["Content-Type"] = "application/json";
+  const t = getOperatorToken();
+  if (t) h["Authorization"] = `Bearer ${t}`;
+  return h;
+}
+
+export type FieldProblem = { field: string; message: string };
+
+// ApiError carries the backend's stable error code (UNAUTHORIZED, STALE,
+// VALIDATION, NOT_PUBLISHABLE, INVALID_TRANSITION, NOT_FOUND, ...).
+export class ApiError extends Error {
+  constructor(public status: number, public code: string, message: string, public problems: FieldProblem[] = []) {
+    super(message);
+  }
+}
+
+async function curationCall<T>(path: string, init: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { cache: "no-store", ...init });
+  } catch {
+    throw new ApiError(0, "NETWORK", "Could not reach the backend.");
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(res.status, body.code ?? "ERROR", body.error ?? `request failed: ${res.status}`, body.problems ?? []);
+  }
+  return body as T;
+}
+
+export type ListingDetailDTO = SupplyListingDTO & {
+  vendor: { id: string; business_name: string; status: string; primary_location: string } | null;
+  source_signal: {
+    id: string;
+    category: string | null;
+    product: string | null;
+    variant: string | null;
+    condition: string | null;
+    price: number | null;
+    currency: string;
+    quantity: number | null;
+    location: string | null;
+    availability_status: string;
+    raw_message: string;
+    confidence: number;
+    created_at: string;
+    expires_at: string;
+  } | null;
+  source_messages: {
+    position: number;
+    message_id: string;
+    external_message_id: string | null;
+    message_type: string;
+    text: string | null;
+    media_asset_id: string | null;
+    received_at: string;
+  }[];
+  media: {
+    order: number;
+    asset_id: string;
+    type: string;
+    role?: string;
+    primary: boolean;
+    status: string; // AVAILABLE | REMOVED | MISSING
+    available: boolean;
+    mime_type?: string;
+    size_bytes?: number;
+    preview_path?: string;
+  }[];
+  published: boolean;
+  rejected: boolean;
+  publish_blockers: FieldProblem[];
+};
+
+export async function getListingDetail(id: string): Promise<ListingDetailDTO> {
+  return curationCall<ListingDetailDTO>(`/api/supply-listings/${id}`, { method: "GET" });
+}
+
+export type ListingEditBody = {
+  category?: string;
+  product?: string;
+  variant?: string;
+  condition?: string;
+  price?: number;
+  currency?: string;
+  quantity?: number;
+  location?: string;
+  description?: string;
+  media_order?: string[];
+  primary_media_asset_id?: string;
+  expected_updated_at?: string;
+};
+
+export async function patchListing(id: string, body: ListingEditBody): Promise<SupplyListingDTO> {
+  return curationCall(`/api/supply-listings/${id}`, { method: "PATCH", headers: operatorHeaders(), body: JSON.stringify(body) });
+}
+
+export async function publishListing(id: string, expectedUpdatedAt?: string): Promise<SupplyListingDTO> {
+  return curationCall(`/api/supply-listings/${id}/publish`, {
+    method: "POST",
+    headers: operatorHeaders(),
+    body: JSON.stringify(expectedUpdatedAt ? { expected_updated_at: expectedUpdatedAt } : {}),
+  });
+}
+
+export async function rejectListing(id: string, reason: string, expectedUpdatedAt?: string): Promise<SupplyListingDTO> {
+  const body: Record<string, string> = {};
+  if (reason.trim()) body.reason = reason.trim();
+  if (expectedUpdatedAt) body.expected_updated_at = expectedUpdatedAt;
+  return curationCall(`/api/supply-listings/${id}/reject`, { method: "POST", headers: operatorHeaders(), body: JSON.stringify(body) });
+}
+
+// fetchListingMedia returns an object URL for one of a listing's media
+// (revoke it when done), or throws ApiError (e.g. MEDIA_UNAVAILABLE).
+export async function fetchListingMedia(listingId: string, assetId: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/api/supply-listings/${listingId}/media/${assetId}`, {
+      cache: "no-store",
+      headers: operatorHeaders(false),
+    });
+  } catch {
+    throw new ApiError(0, "NETWORK", "Could not reach the backend.");
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, body.code ?? "ERROR", body.error ?? "media unavailable");
+  }
+  return URL.createObjectURL(await res.blob());
 }
 
 export type OfferDTO = {

@@ -32,6 +32,15 @@ type Config struct {
 
 	DashboardURL string
 
+	// OperatorAPIToken (Phase 4A Step 4) is the shared secret that protects
+	// operator curation actions (listing edit/publish/reject and listing
+	// media previews): callers must send "Authorization: Bearer <token>".
+	// Required outside development. There is no per-operator identity.
+	OperatorAPIToken string
+	// AllowUnauthenticatedOperator is true ONLY when APP_ENV=development
+	// and no OperatorAPIToken is configured (local work).
+	AllowUnauthenticatedOperator bool
+
 	// --- Phase 4A.1: durable media ingestion ---
 	// MediaStorageDir is the root of the local storage.Provider. Must be a
 	// persistent volume in any deployed environment.
@@ -75,6 +84,7 @@ func Load() (*Config, error) {
 		WhatsAppAppSecret:     os.Getenv("WHATSAPP_APP_SECRET"),
 		DashboardURL:          getEnv("DASHBOARD_URL", "http://localhost:3000"),
 		MediaStorageDir:       getEnv("MEDIA_STORAGE_DIR", "data/media"),
+		OperatorAPIToken:      os.Getenv("OPERATOR_API_TOKEN"),
 	}
 
 	var err error
@@ -126,6 +136,15 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("WHATSAPP_APP_SECRET is required when APP_ENV=%s (webhook signatures must be verified)", cfg.AppEnv)
 		}
 		cfg.AllowUnsignedWebhooks = true
+	}
+
+	if cfg.OperatorAPIToken == "" {
+		if cfg.AppEnv != "development" {
+			return nil, fmt.Errorf("OPERATOR_API_TOKEN is required when APP_ENV=%s (listing publication must not be publicly callable)", cfg.AppEnv)
+		}
+		cfg.AllowUnauthenticatedOperator = true
+	} else if len(cfg.OperatorAPIToken) < 16 {
+		return nil, fmt.Errorf("OPERATOR_API_TOKEN must be at least 16 characters")
 	}
 
 	return cfg, nil

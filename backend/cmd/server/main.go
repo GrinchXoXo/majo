@@ -211,12 +211,21 @@ func main() {
 	mux.HandleFunc("POST /api/vendor-responses/{id}/associate", routingHandlers.AssociateResponse)
 	mux.HandleFunc("GET /api/vendors/{id}/vendor-requests", routingHandlers.VendorRequestsForVendor)
 
-	supplyListingHandlers := httpserver.NewSupplyListingHandlers(listingRepo, listingService)
-	mux.HandleFunc("POST /api/supply-listings", supplyListingHandlers.Publish)
+	// Phase 4A Step 4: listing writes and media previews are operator-only.
+	operatorAuth := httpserver.NewOperatorAuth(cfg.OperatorAPIToken)
+	if cfg.AllowUnauthenticatedOperator {
+		logger.Warn("OPERATOR_API_TOKEN is not set: listing curation (edit/publish/reject) is UNAUTHENTICATED. Development only.")
+	}
+	supplyListingHandlers := httpserver.NewSupplyListingHandlers(listingRepo, listingService, listingRepo, mediaStore, operatorAuth, logger)
+	mux.HandleFunc("POST /api/supply-listings", operatorAuth.Require(supplyListingHandlers.CreateFromSignal))
 	mux.HandleFunc("GET /api/supply-listings", supplyListingHandlers.Search)
 	mux.HandleFunc("GET /api/supply-listings/{id}", supplyListingHandlers.Get)
-	mux.HandleFunc("PATCH /api/supply-listings/{id}", supplyListingHandlers.Patch)
-	mux.HandleFunc("POST /api/supply-listings/{id}/activate", supplyListingHandlers.Activate)
+	mux.HandleFunc("PATCH /api/supply-listings/{id}", operatorAuth.Require(supplyListingHandlers.Patch))
+	mux.HandleFunc("POST /api/supply-listings/{id}/publish", operatorAuth.Require(supplyListingHandlers.PublishListing))
+	// Legacy alias kept for existing callers: the same publication gate.
+	mux.HandleFunc("POST /api/supply-listings/{id}/activate", operatorAuth.Require(supplyListingHandlers.PublishListing))
+	mux.HandleFunc("POST /api/supply-listings/{id}/reject", operatorAuth.Require(supplyListingHandlers.Reject))
+	mux.HandleFunc("GET /api/supply-listings/{id}/media/{asset}", operatorAuth.Require(supplyListingHandlers.Media))
 	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", supplyListingHandlers.ListByVendor)
 
 	offerHandlers := httpserver.NewOfferHandlers(offerRepo, requestRepo, txService, txRepo, offerDelivery)

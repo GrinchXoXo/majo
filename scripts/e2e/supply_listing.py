@@ -12,7 +12,8 @@ the stored media in order -> location (vendor fallback, and explicit
 location winning) -> L-reference -> last_verified_at -> found by
 normalized product and location search -> 'hello' gets no listing.
 
-Env: BASE, APP_SECRET, DATABASE_URL (psql for read-only checks), MEDIA_DIR.
+Env: BASE, APP_SECRET, DATABASE_URL (psql for read-only checks), MEDIA_DIR,
+OPERATOR_TOKEN (when the backend has OPERATOR_API_TOKEN set; Phase 4A Step 4).
 """
 import hashlib
 import hmac
@@ -48,8 +49,11 @@ def sql(q):
 
 
 def api(method, path, body=None):
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get("OPERATOR_TOKEN"):
+        headers["Authorization"] = "Bearer " + os.environ["OPERATOR_TOKEN"]
     req = urllib.request.Request(BASE + path, data=json.dumps(body).encode() if body is not None else None,
-                                 method=method, headers={"Content-Type": "application/json"})
+                                 method=method, headers=headers)
     try:
         with urllib.request.urlopen(req) as r:
             return r.status, json.loads(r.read() or b"null")

@@ -66,6 +66,12 @@ const (
 	SupplyListingUpdated            Type = "SUPPLY_LISTING_UPDATED"
 	SupplyListingExpired            Type = "SUPPLY_LISTING_EXPIRED"
 	SupplyListingDuplicateRefreshed Type = "SUPPLY_LISTING_DUPLICATE_REFRESHED"
+	// Phase 4A Step 4 (Architecture Lock V2): the operator publication gate.
+	// PUBLISHED = the listing crossed DRAFT -> ACTIVE (emitted once per real
+	// transition, never for creation or edits). REJECTED = an operator
+	// archived it (DRAFT/ACTIVE -> ARCHIVED, with an optional reason).
+	SupplyListingPublished Type = "SUPPLY_LISTING_PUBLISHED"
+	SupplyListingRejected  Type = "SUPPLY_LISTING_REJECTED"
 
 	OfferReviewed Type = "OFFER_REVIEWED"
 	OfferSent     Type = "OFFER_SENT"

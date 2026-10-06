@@ -38,6 +38,10 @@ func TestConfigLoadRequiresAppSecretOutsideDevelopment(t *testing.T) {
 	os.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/middleman")
 	os.Setenv("APP_ENV", "production")
 	os.Unsetenv("WHATSAPP_APP_SECRET")
+	// Phase 4A Step 4: production also requires the operator token; set it
+	// so this test isolates the webhook-secret rule.
+	os.Setenv("OPERATOR_API_TOKEN", "a-long-enough-operator-token")
+	defer os.Unsetenv("OPERATOR_API_TOKEN")
 	defer os.Unsetenv("DATABASE_URL")
 	defer os.Unsetenv("APP_ENV")
 

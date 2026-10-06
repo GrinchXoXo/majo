@@ -99,6 +99,29 @@ type MediaReference struct {
 	// AssetID is the MediaAsset this reference points at (Phase 4A.3).
 	// The asset stays the single stored copy; the listing only refers to it.
 	AssetID string `json:"asset_id,omitempty"`
+	// Role is MediaRolePrimary on the operator-chosen primary image (Phase
+	// 4A Step 4), empty otherwise. With no PRIMARY reference the first
+	// image is the primary (Architecture Lock V2). Order = array order.
+	Role string `json:"role,omitempty"`
+}
+
+// MediaRolePrimary marks the listing's primary image.
+const MediaRolePrimary = "PRIMARY"
+
+// PrimaryMedia returns the effective primary image: the reference marked
+// PRIMARY, else the first image, else nil.
+func PrimaryMedia(refs []MediaReference) *MediaReference {
+	for i := range refs {
+		if refs[i].Role == MediaRolePrimary {
+			return &refs[i]
+		}
+	}
+	for i := range refs {
+		if refs[i].Type == "image" {
+			return &refs[i]
+		}
+	}
+	return nil
 }
 
 type Listing struct {
@@ -133,20 +156,28 @@ type Listing struct {
 	ExpiresAt      time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+
+	// RejectedAt/RejectionReason (Phase 4A Step 4) are set when an operator
+	// rejected the listing; a rejected listing is ARCHIVED.
+	RejectedAt      *time.Time
+	RejectionReason *string
 }
 
-// ListingFields supports partial updates (operator correction, status
-// transitions). Nil means "leave unchanged".
+// ListingFields supports partial updates of marketplace fields. Nil means
+// "leave unchanged". There is deliberately no Status here (Phase 4A Step
+// 4): state transitions only happen through the dedicated curation
+// operations (ListingService.Publish / Reject), never a field update.
 type ListingFields struct {
-	Category    *string
-	Product     *string
-	Variant     *string
-	Condition   *string
-	Price       *int64
-	Quantity    *int
-	Location    *string
-	Description *string
-	Status      *ListingStatus
+	Category        *string
+	Product         *string
+	Variant         *string
+	Condition       *string
+	Price           *int64
+	Currency        *string
+	Quantity        *int
+	Location        *string
+	Description     *string
+	MediaReferences *[]MediaReference
 }
 
 // ListingQuery supports the discovery/search foundation from PRD 3 §14.
@@ -192,6 +223,12 @@ type ListingRepository interface {
 	//     (ListingCreated).
 	// The matching event callback is written in the same transaction.
 	CreateFromSignal(ctx context.Context, w ListingWrite) (*Listing, ListingOutcome, error)
+	// Curate (Phase 4A Step 4) is the only write path for operator
+	// curation. In ONE transaction it locks the listing row, passes the
+	// current row to decide, and applies the returned change (nil = no-op)
+	// together with its audit entry and event. Returns ErrListingNotFound
+	// for an unknown listing, and decide's error unchanged.
+	Curate(ctx context.Context, id uuid.UUID, decide CurationDecision) (*Listing, error)
 }
 
 // ListingOutcome says what CreateFromSignal did.
