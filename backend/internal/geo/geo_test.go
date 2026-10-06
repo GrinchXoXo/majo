@@ -25,3 +25,33 @@ func TestCompact(t *testing.T) {
 		t.Fatal(Compact("Port-Harcourt "))
 	}
 }
+
+func TestWithin(t *testing.T) {
+	r := NewStaticResolver(NigeriaPilot)
+	cases := []struct {
+		origin, viewer string
+		level          Level
+		ok             bool
+	}{
+		{"GRA, Benin City", "GRA, Benin City", LevelExactArea, true},
+		{"GRA, Benin City", "G.R.A., Benin", LevelCommunity, true}, // same community, other spelling/alias
+		{"GRA, Benin City", "Ugbowo, Benin City", LevelCity, true},
+		{"GRA, Benin City", "Benin City", LevelCity, true}, // less precise viewer: never assumed inside GRA
+		{"Benin City", "Ugbowo, Benin City", LevelExactArea, true},
+		{"Benin City", "Edo", LevelState, true},
+		{"GRA, Benin City", "Edo State", LevelState, true},
+		{"GRA, Benin City", "Warri", LevelRegion, true},
+		{"GRA, Benin City", "Rumuola, Port Harcourt", LevelRegion, true},
+		{"GRA, Benin City", "Lagos", LevelCountry, true},
+		{"Edo", "Benin City", LevelExactArea, true},
+		{"Ogbomoso market", "Ogbomoso market", LevelExactArea, true},
+		{"Ogbomoso market", "Benin City", "", false},
+		{"GRA, Benin City", "", "", false},
+	}
+	for _, c := range cases {
+		lv, ok := Within(r.Resolve(c.origin), r.Resolve(c.viewer))
+		if lv != c.level || ok != c.ok {
+			t.Errorf("Within(%q, %q) = %s,%v want %s,%v", c.origin, c.viewer, lv, ok, c.level, c.ok)
+		}
+	}
+}

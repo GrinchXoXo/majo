@@ -24,6 +24,19 @@ type InboundMessage struct {
 	// ProfileName is the sender's own WhatsApp profile name from the
 	// webhook's contacts[] block, when Meta supplies it.
 	ProfileName string
+
+	// Interaction is set when the message is a tap on a reply button, a
+	// list row or a template quick reply (Phase 4B). Its ID is the
+	// structured interaction ID Majo put on that button; Text carries the
+	// visible title.
+	Interaction *Interaction
+}
+
+// Interaction is a parsed interactive reply.
+type Interaction struct {
+	Kind  string // "button_reply" | "list_reply" | "quick_reply"
+	ID    string // the button/row id or the template quick-reply payload
+	Title string
 }
 
 // Media is the WhatsApp-side description of an inbound media attachment.

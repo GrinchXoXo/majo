@@ -58,3 +58,19 @@ required. Majo does not send templates yet. Consequences today:
 Business verification can take several days. Start this process in
 parallel with development — it should never become a blocker at the end
 (Middleman_Technical_Spec_v1 §1).
+
+## Discovery messages (Phase 4B)
+
+Discovery uses outbound interactive messages (reply buttons with an optional
+image header, list messages), video, and one approved template. The
+channel-neutral model in `internal/channel` is validated against WhatsApp
+limits (button title 20, list row title 24, ≤10 rows, ≤3 buttons) and rendered
+by `infrastructure/whatsapp`. Media is uploaded once via `POST /{phone-id}/media`
+and the returned id reused (re-uploaded after `DISCOVERY_OUTBOUND_MEDIA_TTL`).
+
+Inbound taps are parsed from `interactive.button_reply`, `interactive.list_reply`
+and template `button` (quick reply) payloads. A structured id always takes
+precedence over offer ordinals and free text. Outside the 24-hour window only an
+approved template may be sent; with no template configured, discovery fails
+closed. **Template delivery has not been tested against real Meta.** Staff-only
+(`DISCOVERY_MODE=INTERNAL`): see `docs/architecture/discovery-distribution.md`.

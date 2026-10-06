@@ -232,3 +232,29 @@ func (r *MediaAssetRepository) UnlinkedVendorMedia(ctx context.Context, since ti
 	}
 	return out, rows.Err()
 }
+
+// OutboundRef returns the cached outbound provider media ID of an asset
+// (Phase 4B media reuse), "" if none.
+func (r *MediaAssetRepository) OutboundRef(ctx context.Context, id uuid.UUID) (string, *time.Time, error) {
+	var ref sql.NullString
+	var exp sql.NullTime
+	err := r.db.QueryRowContext(ctx, `SELECT outbound_provider_ref, outbound_ref_expires_at FROM media_assets WHERE id = $1`, id.String()).Scan(&ref, &exp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	if !exp.Valid {
+		return ref.String, nil, nil
+	}
+	t := exp.Time
+	return ref.String, &t, nil
+}
+
+// SetOutboundRef caches the provider media ID an asset was uploaded as.
+func (r *MediaAssetRepository) SetOutboundRef(ctx context.Context, id uuid.UUID, ref string, expiresAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE media_assets SET outbound_provider_ref = $2, outbound_ref_expires_at = $3 WHERE id = $1`,
+		id.String(), ref, expiresAt)
+	return err
+}

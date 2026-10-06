@@ -174,6 +174,7 @@ type vendorRequestDTO struct {
 	SentAt          *string            `json:"sent_at"`
 	SendError       *string            `json:"send_error"`
 	SendFailedAt    *string            `json:"send_failed_at"`
+	SupplyListingID *string            `json:"supply_listing_id"` // Phase 4B: listing re-confirmation
 	Response        *vendorResponseDTO `json:"response,omitempty"`
 }
 
@@ -183,6 +184,7 @@ func toVendorRequestDTOs(vrs []*routing.VendorRequest) []vendorRequestDTO {
 		dto := vendorRequestDTO{
 			ID: vr.ID.String(), VendorID: vr.VendorID.String(), PublicReference: vr.PublicReference,
 			Status: string(vr.Status), MatchScore: vr.MatchScore, CreatedAt: vr.CreatedAt.Format(timeFormat),
+			SupplyListingID: idString(vr.SupplyListingID),
 		}
 		if vr.SentAt != nil {
 			s := vr.SentAt.Format(timeFormat)

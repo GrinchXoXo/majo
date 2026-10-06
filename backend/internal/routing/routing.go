@@ -42,6 +42,10 @@ type VendorRequest struct {
 	SentAt          *time.Time
 	SendError       *string
 	SendFailedAt    *time.Time
+	// SupplyListingID (Phase 4B) is set when this request asks the vendor to
+	// re-confirm a specific listing (listing-origin demand). Offers built
+	// from the reply carry the listing as provenance.
+	SupplyListingID *uuid.UUID
 }
 
 // Sentinel errors (Phase 3.1).

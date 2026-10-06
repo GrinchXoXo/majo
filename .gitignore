@@ -29,3 +29,5 @@ ai/.venv/
 # IDE
 .vscode/
 .idea/
+dashboard/tsconfig.tsbuildinfo
+__pycache__/

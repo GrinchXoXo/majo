@@ -684,3 +684,13 @@ export async function selectOffer(requestId: string, offerId: string, buyerId: s
   if (!res.ok) throw new Error(await errorText(res, "failed to select offer"));
   return res.json();
 }
+
+// operatorCall is the authenticated JSON call used by operator-only pages
+// (Phase 4B discovery). Errors are ApiError with the backend's code.
+export async function operatorCall<T>(path: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<T> {
+  return curationCall<T>(path, {
+    method,
+    headers: operatorHeaders(method !== "GET"),
+    body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
+  });
+}

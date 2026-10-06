@@ -2,8 +2,8 @@ package request
 
 import (
 	"context"
-	"log/slog"
 	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/google/uuid"
@@ -311,4 +311,8 @@ func TestServiceClarify_SendsQuestionAndRecordsEvent(t *testing.T) {
 	if !found {
 		t.Error("expected a CLARIFICATION_SENT event")
 	}
+}
+
+func (r *fakeRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*BuyerRequest, error) {
+	return nil, nil
 }

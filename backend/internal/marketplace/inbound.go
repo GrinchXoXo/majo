@@ -10,10 +10,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/middleman/backend/internal/conversation"
+	"github.com/middleman/backend/internal/distribution"
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/offer"
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
+	"github.com/middleman/backend/internal/structid"
 	"github.com/middleman/backend/internal/transaction"
 )
 
@@ -33,6 +35,16 @@ type InboundBuyerMessage struct {
 	Type           string // "text", "audio", "image", ...
 	Text           string
 	Media          *conversation.MediaRef
+	// InteractionID is the structured ID of a tapped reply button, list row
+	// or template quick reply (Phase 4B); "" for ordinary messages.
+	InteractionID string
+}
+
+// DiscoveryInteractions handles structured discovery interactions and the
+// STOP keyword (distribution.Service implements it).
+type DiscoveryInteractions interface {
+	HandleStructured(ctx context.Context, in distribution.Inbound)
+	HandleStopKeyword(ctx context.Context, in distribution.Inbound) (handled bool)
 }
 
 // Buyer-facing copy. Kept together so wording can be reviewed in one place.
@@ -58,7 +70,11 @@ type BuyerInbound struct {
 	events    event.Writer
 	jobs      JobEnqueuer
 	logger    *slog.Logger
+	discovery DiscoveryInteractions // Phase 4B; nil = not wired
 }
+
+// SetDiscovery wires structured discovery interactions (Phase 4B).
+func (b *BuyerInbound) SetDiscovery(d DiscoveryInteractions) { b.discovery = d }
 
 func NewBuyerInbound(
 	resolver *ContextResolver,
@@ -79,7 +95,31 @@ func NewBuyerInbound(
 }
 
 // Handle processes one inbound buyer message.
+//
+// Precedence (Architecture Lock V2 §H): a structured interaction ID always
+// wins; then the free-text offer ordinal; then the normal new-request
+// pipeline. A structured ID never falls through to free text, so a tap can
+// never create an unrelated BuyerRequest.
 func (b *BuyerInbound) Handle(ctx context.Context, m InboundBuyerMessage) {
+	if m.InteractionID != "" || structid.Looks(m.Text) || m.Type == "interactive" || m.Type == "button" {
+		raw := m.InteractionID
+		if raw == "" {
+			raw = strings.TrimSpace(m.Text)
+		}
+		in := distribution.Inbound{BuyerID: m.BuyerID, ConversationID: m.ConversationID, MessageID: m.MessageID,
+			ReplyTo: m.ReplyTo, RawID: raw, Tapped: m.InteractionID != ""}
+		if b.discovery != nil {
+			b.discovery.HandleStructured(ctx, in)
+			return
+		}
+		b.unresolved(ctx, m, Resolution{}, "structured_interaction_unavailable")
+		return
+	}
+	if m.Type == "text" && b.discovery != nil && distribution.IsStopKeyword(m.Text) &&
+		b.discovery.HandleStopKeyword(ctx, distribution.Inbound{BuyerID: m.BuyerID, ConversationID: m.ConversationID,
+			MessageID: m.MessageID, ReplyTo: m.ReplyTo, RawID: "keyword:stop"}) {
+		return
+	}
 	if m.Type != "text" || strings.TrimSpace(m.Text) == "" {
 		// Phase 3.1 input foundation: media is persisted (MediaRef in the
 		// message content) but not processed. Reply instead of silence.

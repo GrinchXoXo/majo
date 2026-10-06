@@ -61,6 +61,28 @@ type Service struct {
 	// eligibility is the canonical supply-eligibility policy (Phase 4A.5):
 	// matching only uses listings it says are eligible right now.
 	eligibility *supply.EligibilityPolicy
+
+	// Phase 4B listing-origin demand: listings looks up the listing a
+	// discovery request is about; reconfirmer records the vendor's
+	// re-confirmation as freshness evidence. nil = not wired.
+	listings    ListingLookup
+	reconfirmer ListingReconfirmer
+}
+
+// ListingLookup reads a listing (supply.ListingRepository implements it).
+type ListingLookup interface {
+	FindByID(ctx context.Context, id uuid.UUID) (*supply.Listing, error)
+}
+
+// ListingReconfirmer records a vendor's re-confirmation of a listing
+// (supply.ListingService implements it).
+type ListingReconfirmer interface {
+	ReconfirmFromVendor(ctx context.Context, listingID, vendorID, vendorResponseID uuid.UUID) (*supply.Listing, error)
+}
+
+// SetListingOrigin wires listing-origin routing (Phase 4B, Lock §E).
+func (s *Service) SetListingOrigin(l ListingLookup, r ListingReconfirmer) {
+	s.listings, s.reconfirmer = l, r
 }
 
 // SetListingEvidence makes matching use operator-published listings as
@@ -258,11 +280,25 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 		}
 		breakdown := breakdowns[vendorID]
 
+		// Listing-origin demand (Phase 4B): the listing's own vendor is asked
+		// to RE-CONFIRM that listing, and the request keeps it as provenance.
+		var listing *supply.Listing
+		if req.ListingID != nil && s.listings != nil {
+			if l, err := s.listings.FindByID(ctx, *req.ListingID); err == nil && l != nil && l.VendorID == vendorID {
+				listing = l
+			}
+		}
+		var listingID *uuid.UUID
+		if listing != nil {
+			listingID = &listing.ID
+		}
+
 		vr, err := s.createVendorRequestWithReference(ctx, &VendorRequest{
-			BuyerRequestID: req.ID,
-			VendorID:       vendorID,
-			MatchScore:     scorePtr,
-			MatchBreakdown: breakdown,
+			BuyerRequestID:  req.ID,
+			VendorID:        vendorID,
+			MatchScore:      scorePtr,
+			MatchBreakdown:  breakdown,
+			SupplyListingID: listingID,
 		})
 		if err != nil {
 			// ErrDuplicateVendorRequest: PRD 2 §47 unique pair — this
@@ -273,10 +309,15 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 		ref := vr.PublicReference
 
 		message := buildVendorRequestMessage(ref, req)
+		extra := map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vendorID.String(), "reference": ref}
+		if listing != nil {
+			message = buildListingReconfirmationMessage(ref, listing)
+			extra["supply_listing_id"] = listing.ID.String()
+			extra["listing_reference"] = listing.PublicReference
+		}
 		vrID := vr.ID
 		sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
-			Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID,
-			Extra: map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vendorID.String(), "reference": ref},
+			Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID, Extra: extra,
 		})
 		if err := s.messaging.SendText(sendCtx, v.WhatsAppExternalID, message); err != nil {
 			s.logger.Error("sending vendor request via whatsapp", "vendor_id", vendorID, "error", err)
@@ -319,6 +360,7 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 			Payload: event.Merge(req.FunnelDims(), map[string]any{
 				"vendor_request_id": vr.ID.String(), "vendor_id": vendorID.String(), "reference": ref,
 				"match_score": scorePtr, "channel": "whatsapp", "outcome": outcome,
+				"listing_reconfirmation": listing != nil,
 			}),
 		}); err != nil {
 			s.logger.Error("writing VENDORS_ROUTED event", "error", err)
@@ -758,6 +800,9 @@ func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor,
 	}
 
 	_ = s.vendors.RecordResponseActivity(ctx, v.ID)
+	if vr != nil {
+		s.maybeReconfirmListing(ctx, vr, resp)
+	}
 
 	entityID := resp.ID
 	payload := event.Merge(map[string]any{
@@ -847,6 +892,11 @@ func (s *Service) CorrectResponse(ctx context.Context, responseID uuid.UUID, fie
 
 	// A correction can make a response newly eligible for an Offer (e.g.
 	// UNCLASSIFIED -> AVAILABLE) or ineligible (-> UNAVAILABLE).
+	if after != nil && after.VendorRequestID != nil {
+		if vr, err := s.routing.FindVendorRequestByID(ctx, *after.VendorRequestID); err == nil {
+			s.maybeReconfirmListing(ctx, vr, after)
+		}
+	}
 	s.notifyResponseChanged(ctx, after)
 	return after, nil
 }
@@ -1058,6 +1108,38 @@ func (s *Service) createVendorRequestWithReference(ctx context.Context, vr *Vend
 		return created, err
 	}
 	return nil, fmt.Errorf("could not allocate a unique public reference after %d attempts", maxReferenceAttempts)
+}
+
+// maybeReconfirmListing: a reviewed AVAILABLE reply to a listing
+// re-confirmation request is fresh availability evidence for that listing
+// (stale -> reconfirmed -> fresh). Failures are logged, never fatal.
+func (s *Service) maybeReconfirmListing(ctx context.Context, vr *VendorRequest, resp *VendorResponse) {
+	if s.reconfirmer == nil || vr == nil || vr.SupplyListingID == nil || resp == nil {
+		return
+	}
+	if resp.Status != ResponseAvailable || resp.ReviewState == ReviewNeedsReview || resp.VendorID != vr.VendorID {
+		return
+	}
+	if _, err := s.reconfirmer.ReconfirmFromVendor(ctx, *vr.SupplyListingID, vr.VendorID, resp.ID); err != nil {
+		s.logger.Warn("listing re-confirmation not recorded", "supply_listing_id", *vr.SupplyListingID, "error", err)
+	}
+}
+
+// buildListingReconfirmationMessage asks a vendor to re-confirm their own
+// published listing for a buyer who asked about it (Phase 4B).
+func buildListingReconfirmationMessage(ref string, l *supply.Listing) string {
+	msg := fmt.Sprintf("Majo Request #%s\n\nA buyer is asking about your listing %s:\n\n%s", ref, l.PublicReference, derefStr(l.Product))
+	if l.Variant != nil {
+		msg += "\n" + *l.Variant
+	}
+	if l.Condition != nil {
+		msg += "\n" + *l.Condition
+	}
+	if l.Price != nil {
+		msg += fmt.Sprintf("\nListed at ₦%d", *l.Price)
+	}
+	msg += "\n\nIs it still available at this price? (Available + price / Unavailable)"
+	return msg
 }
 
 func buildVendorRequestMessage(ref string, req *request.BuyerRequest) string {

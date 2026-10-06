@@ -32,9 +32,26 @@ MEDIA_DIR = os.environ.get("MEDIA_DIR", "")
 TOKEN = os.environ.get("ACCESS_TOKEN", "")
 
 
+UPLOAD_LOG = os.environ.get("UPLOAD_LOG", "uploads.jsonl")
+FAIL_UPLOADS = os.environ.get("FAIL_UPLOADS", "") == "1"
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))))
+        raw = self.rfile.read(int(self.headers.get("content-length", 0)))
+        # Phase 4B: POST /{phone}/media (multipart) uploads outbound media and
+        # returns a provider media id, which Majo caches and reuses.
+        if self.path.split("?")[0].rstrip("/").endswith("/media"):
+            if TOKEN and self.headers.get("authorization") != "Bearer " + TOKEN:
+                return self._json(401, {"error": {"message": "Invalid OAuth access token", "code": 190}})
+            if FAIL_UPLOADS:
+                return self._json(500, {"error": {"message": "scripted upload failure", "code": 1}})
+            media_id = "up." + uuid.uuid4().hex[:16]
+            with open(UPLOAD_LOG, "a") as f:
+                f.write(json.dumps({"path": self.path, "media_id": media_id, "bytes": len(raw),
+                                    "content_type": self.headers.get("content-type", "")}) + "\n")
+            return self._json(200, {"id": media_id})
+        body = json.loads(raw)
         to = body.get("to", "")
         failed = to in FAIL
         wamid = "" if failed else "wamid.fake." + uuid.uuid4().hex

@@ -3,6 +3,7 @@ package request
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -57,43 +58,100 @@ func NewService(
 	}
 }
 
-// CreateFromMessage creates a new EXTRACTING BuyerRequest from an inbound
-// WhatsApp message. Extraction itself happens separately (see RunExtraction)
-// so this can be called synchronously from the webhook handler while
-// extraction runs in the background (PRD 1 §12).
-func (s *Service) CreateFromMessage(ctx context.Context, conversationID, buyerID, messageID uuid.UUID, rawText string) (*BuyerRequest, error) {
-	req := &BuyerRequest{
-		ConversationID:  conversationID,
-		BuyerID:         buyerID,
-		OriginMessageID: &messageID,
-		Status:          StatusExtracting,
-		RawMessage:      rawText,
-		Currency:        "NGN",
+// NewRequest is the single entry point for demand (Architecture Lock V2
+// §E: Request.Create(origin, buyer, structured_fields?, raw_text?,
+// listing_id?, discovery_delivery_id?)).
+type NewRequest struct {
+	Origin          Origin
+	ConversationID  uuid.UUID
+	BuyerID         uuid.UUID
+	OriginMessageID *uuid.UUID
+	RawText         string
+	// Fields are structured fields known at creation (listing-origin demand
+	// copies them from a curated listing, so no extraction runs).
+	Fields *Fields
+	// ListingID / DiscoveryDeliveryID attribute listing-origin demand.
+	ListingID           *uuid.UUID
+	DiscoveryDeliveryID *uuid.UUID
+	// ExtractedData records where the structured fields came from.
+	ExtractedData map[string]any
+	// EventExtra is merged into the REQUEST_CREATED payload (attribution).
+	EventExtra map[string]any
+}
+
+// Create creates a BuyerRequest for any origin. Message-origin demand
+// starts EXTRACTING (extraction runs separately); listing-origin demand
+// arrives with structured fields and starts NEEDS_REVIEW. Confirmation is
+// never implied: only Confirm makes a request CONFIRMED.
+//
+// Listing-origin creation is idempotent per (delivery, listing): a repeat
+// returns the existing request with created=false and writes no event.
+func (s *Service) Create(ctx context.Context, n NewRequest) (req *BuyerRequest, created bool, err error) {
+	if n.Origin == "" {
+		n.Origin = OriginMessage
+	}
+	r := &BuyerRequest{
+		ConversationID: n.ConversationID, BuyerID: n.BuyerID, OriginMessageID: n.OriginMessageID,
+		Origin: n.Origin, ListingID: n.ListingID, DiscoveryDeliveryID: n.DiscoveryDeliveryID,
+		Status: StatusExtracting, RawMessage: n.RawText, Currency: "NGN", ExtractedData: n.ExtractedData,
+	}
+	if n.Origin != OriginMessage {
+		if n.ListingID == nil || n.Fields == nil {
+			return nil, false, fmt.Errorf("listing-origin request needs a listing and its fields")
+		}
+		f := n.Fields
+		r.Category, r.Product, r.Variant, r.Condition = f.Category, f.Product, f.Variant, f.Condition
+		r.BudgetMin, r.BudgetMax, r.Location, r.Quantity = f.BudgetMin, f.BudgetMax, f.Location, f.Quantity
+		r.Status = StatusNeedsReview
+		r.Confidence = 1
+		r.Completeness = r.CalculateCompleteness()
 	}
 
-	created, err := s.requests.Create(ctx, req)
+	saved, err := s.requests.Create(ctx, r)
+	if errors.Is(err, ErrDuplicate) && n.DiscoveryDeliveryID != nil && n.ListingID != nil {
+		existing, ferr := s.requests.FindDiscoveryAsk(ctx, *n.DiscoveryDeliveryID, *n.ListingID)
+		if ferr != nil || existing == nil {
+			return nil, false, fmt.Errorf("loading existing discovery request: %v", ferr)
+		}
+		return existing, false, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("creating buyer request: %w", err)
+		return nil, false, fmt.Errorf("creating buyer request: %w", err)
 	}
 
 	channel := ""
-	if conv, err := s.convRepo.FindByID(ctx, conversationID); err == nil && conv != nil {
+	if conv, err := s.convRepo.FindByID(ctx, n.ConversationID); err == nil && conv != nil {
 		channel = conv.Channel
 	}
+	payload := event.Merge(saved.FunnelDims(), map[string]any{"raw_message": n.RawText, "channel": channel}, n.EventExtra)
+	if n.OriginMessageID != nil {
+		payload["origin_message_id"] = n.OriginMessageID.String()
+	}
+	buyerID := n.BuyerID
 	if err := s.events.Write(ctx, &event.Event{
-		EventType:  event.RequestCreated,
-		EntityType: "buyer_request",
-		EntityID:   &created.ID,
-		ActorType:  event.ActorBuyer,
-		ActorID:    &buyerID,
-		Payload: event.Merge(created.FunnelDims(), map[string]any{
-			"raw_message": rawText, "channel": channel, "origin_message_id": messageID.String(),
-		}),
+		EventType: event.RequestCreated, EntityType: "buyer_request", EntityID: &saved.ID,
+		ActorType: event.ActorBuyer, ActorID: &buyerID, Payload: payload,
 	}); err != nil {
 		s.logger.Error("writing REQUEST_CREATED event", "error", err)
 	}
+	return saved, true, nil
+}
 
-	return created, nil
+// CreateFromMessage creates a new EXTRACTING BuyerRequest from an inbound
+// WhatsApp message (a thin wrapper over Create since Phase 4B). Extraction
+// itself happens separately (see RunExtraction) so this can be called
+// synchronously from the webhook handler (PRD 1 §12).
+func (s *Service) CreateFromMessage(ctx context.Context, conversationID, buyerID, messageID uuid.UUID, rawText string) (*BuyerRequest, error) {
+	created, _, err := s.Create(ctx, NewRequest{
+		Origin: OriginMessage, ConversationID: conversationID, BuyerID: buyerID, OriginMessageID: &messageID, RawText: rawText,
+	})
+	return created, err
+}
+
+// ConfirmAs is Confirm with an explicit actor (the system auto-confirms
+// listing-origin demand when DISCOVERY_ENQUIRY_CONFIRMATION=auto, Lock §O-1).
+func (s *Service) ConfirmAs(ctx context.Context, requestID uuid.UUID, actor event.ActorType, reason string) (*BuyerRequest, error) {
+	return s.confirm(ctx, requestID, nil, actor, reason)
 }
 
 // RunExtraction calls the AI service and persists the result. Designed to
@@ -228,6 +286,10 @@ func (s *Service) Correct(ctx context.Context, requestID uuid.UUID, patch Fields
 // Confirm marks a request as CONFIRMED — the signal that Phase 2's vendor
 // matching is allowed to consume it (PRD 1 §6/§49).
 func (s *Service) Confirm(ctx context.Context, requestID uuid.UUID, operatorID *uuid.UUID) (*BuyerRequest, error) {
+	return s.confirm(ctx, requestID, operatorID, event.ActorOperator, "")
+}
+
+func (s *Service) confirm(ctx context.Context, requestID uuid.UUID, operatorID *uuid.UUID, actor event.ActorType, reason string) (*BuyerRequest, error) {
 	before, err := s.requests.FindByID(ctx, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("loading request: %w", err)
@@ -244,9 +306,10 @@ func (s *Service) Confirm(ctx context.Context, requestID uuid.UUID, operatorID *
 		EventType:  event.RequestConfirmed,
 		EntityType: "buyer_request",
 		EntityID:   &requestID,
-		ActorType:  event.ActorOperator,
+		ActorType:  actor,
 		ActorID:    operatorID,
-		Payload:    event.Merge(confirmed.FunnelDims(), map[string]any{"completeness": string(confirmed.Completeness)}),
+		Payload: event.Merge(confirmed.FunnelDims(), map[string]any{"completeness": string(confirmed.Completeness)},
+			map[string]any{"confirmation": reasonOr(reason, "operator")}),
 	}); err != nil {
 		s.logger.Error("writing REQUEST_CONFIRMED event", "error", err)
 	}
@@ -294,6 +357,13 @@ func (s *Service) Clarify(ctx context.Context, requestID uuid.UUID, question str
 }
 
 // --- helpers ---
+
+func reasonOr(r, def string) string {
+	if r == "" {
+		return def
+	}
+	return r
+}
 
 func extractionResultToMap(r *ai.ExtractionResult) map[string]any {
 	b, err := json.Marshal(r)

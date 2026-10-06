@@ -130,6 +130,22 @@ const (
 	// message and any stored media remain for operator review. Mirrors
 	// BUYER_REPLY_UNRESOLVED.
 	VendorMessageUnresolved Type = "VENDOR_MESSAGE_UNRESOLVED"
+
+	// --- Phase 4B: Discovery & Distribution (Lock §K.1) ---
+	// Only real actions produce events: consent changes, batch creation and
+	// send, each delivery send/failure/skip, each buyer interaction.
+	DiscoveryOptedIn               Type = "DISCOVERY_OPTED_IN"
+	DiscoveryOptedOut              Type = "DISCOVERY_OPTED_OUT"
+	DiscoveryPreferenceUpdated     Type = "DISCOVERY_PREFERENCE_UPDATED"
+	DiscoveryBatchCreated          Type = "DISCOVERY_BATCH_CREATED"
+	DiscoveryBatchSent             Type = "DISCOVERY_BATCH_SENT"
+	DiscoveryDeliverySent          Type = "DISCOVERY_DELIVERY_SENT"
+	DiscoveryDeliveryFailed        Type = "DISCOVERY_DELIVERY_FAILED"
+	DiscoveryDeliverySkipped       Type = "DISCOVERY_DELIVERY_SKIPPED"
+	DiscoveryInteraction           Type = "DISCOVERY_INTERACTION"
+	DiscoveryInteractionUnresolved Type = "DISCOVERY_INTERACTION_UNRESOLVED"
+	// ListingEnquiry: "Ask about it" created (or re-found) a discovery-origin BuyerRequest.
+	ListingEnquiry Type = "LISTING_ENQUIRY"
 )
 
 // ActorType identifies who/what caused an event.

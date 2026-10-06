@@ -56,31 +56,38 @@ type requestDTO struct {
 	CreatedAt      string         `json:"created_at"`
 	UpdatedAt      string         `json:"updated_at"`
 	ConfirmedAt    *string        `json:"confirmed_at"`
+	// Phase 4B demand bridge (attribution).
+	Origin              string  `json:"origin"`
+	ListingID           *string `json:"listing_id"`
+	DiscoveryDeliveryID *string `json:"discovery_delivery_id"`
 }
 
 func toDTO(r *request.BuyerRequest) requestDTO {
 	dto := requestDTO{
-		ID:             r.ID.String(),
-		ConversationID: r.ConversationID.String(),
-		BuyerID:        r.BuyerID.String(),
-		Status:         string(r.Status),
-		Category:       r.Category,
-		Product:        r.Product,
-		Variant:        r.Variant,
-		BudgetMin:      r.BudgetMin,
-		BudgetMax:      r.BudgetMax,
-		Currency:       r.Currency,
-		Location:       r.Location,
-		Condition:      r.Condition,
-		Quantity:       r.Quantity,
-		Urgency:        r.Urgency,
-		Preferences:    r.Preferences,
-		RawMessage:     r.RawMessage,
-		ExtractedData:  r.ExtractedData,
-		Confidence:     r.Confidence,
-		Completeness:   string(r.Completeness),
-		CreatedAt:      r.CreatedAt.Format(timeFormat),
-		UpdatedAt:      r.UpdatedAt.Format(timeFormat),
+		Origin:              string(r.Origin),
+		ListingID:           idString(r.ListingID),
+		DiscoveryDeliveryID: idString(r.DiscoveryDeliveryID),
+		ID:                  r.ID.String(),
+		ConversationID:      r.ConversationID.String(),
+		BuyerID:             r.BuyerID.String(),
+		Status:              string(r.Status),
+		Category:            r.Category,
+		Product:             r.Product,
+		Variant:             r.Variant,
+		BudgetMin:           r.BudgetMin,
+		BudgetMax:           r.BudgetMax,
+		Currency:            r.Currency,
+		Location:            r.Location,
+		Condition:           r.Condition,
+		Quantity:            r.Quantity,
+		Urgency:             r.Urgency,
+		Preferences:         r.Preferences,
+		RawMessage:          r.RawMessage,
+		ExtractedData:       r.ExtractedData,
+		Confidence:          r.Confidence,
+		Completeness:        string(r.Completeness),
+		CreatedAt:           r.CreatedAt.Format(timeFormat),
+		UpdatedAt:           r.UpdatedAt.Format(timeFormat),
 	}
 	if r.ConfirmedAt != nil {
 		s := r.ConfirmedAt.Format(timeFormat)
@@ -279,4 +286,12 @@ func parseInt64(s string) (int64, error) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func idString(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	s := id.String()
+	return &s
 }

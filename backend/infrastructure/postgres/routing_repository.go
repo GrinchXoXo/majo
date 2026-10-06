@@ -25,7 +25,7 @@ func NewRoutingRepository(db *sql.DB) *RoutingRepository {
 
 const vendorRequestColumns = `
 	id, buyer_request_id, vendor_id, public_reference, status, match_score, match_breakdown, created_at, sent_at,
-	send_error, send_failed_at
+	send_error, send_failed_at, supply_listing_id
 `
 
 func scanVendorRequestRow(scanner interface{ Scan(dest ...any) error }) (*routing.VendorRequest, error) {
@@ -37,10 +37,11 @@ func scanVendorRequestRow(scanner interface{ Scan(dest ...any) error }) (*routin
 		sentAt                      sql.NullTime
 		sendError                   sql.NullString
 		sendFailedAt                sql.NullTime
+		listingID                   sql.NullString
 	)
 
 	err := scanner.Scan(&idStr, &brIDStr, &vendorIDStr, &vr.PublicReference, &vr.Status, &matchScore, &breakdownBytes, &vr.CreatedAt, &sentAt,
-		&sendError, &sendFailedAt)
+		&sendError, &sendFailedAt, &listingID)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +66,11 @@ func scanVendorRequestRow(scanner interface{ Scan(dest ...any) error }) (*routin
 	if sendFailedAt.Valid {
 		vr.SendFailedAt = &sendFailedAt.Time
 	}
+	if listingID.Valid {
+		if id, err := uuid.Parse(listingID.String); err == nil {
+			vr.SupplyListingID = &id
+		}
+	}
 
 	return &vr, nil
 }
@@ -82,10 +88,11 @@ func (r *RoutingRepository) CreateVendorRequest(ctx context.Context, vr *routing
 	breakdownBytes, _ := json.Marshal(vr.MatchBreakdown)
 
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO vendor_requests (id, buyer_request_id, vendor_id, public_reference, status, match_score, match_breakdown)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		INSERT INTO vendor_requests (id, buyer_request_id, vendor_id, public_reference, status, match_score, match_breakdown, supply_listing_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		RETURNING `+vendorRequestColumns,
 		vr.ID.String(), vr.BuyerRequestID.String(), vr.VendorID.String(), vr.PublicReference, vr.Status, vr.MatchScore, breakdownBytes,
+		listingIDArg(vr.SupplyListingID),
 	)
 	created, err := scanVendorRequestRow(row)
 	if err != nil {
@@ -468,4 +475,11 @@ func (r *RoutingRepository) UpdateAssociation(ctx context.Context, responseID uu
 	}
 
 	return previous, updated, nil
+}
+
+func listingIDArg(id *uuid.UUID) any {
+	if id == nil {
+		return nil
+	}
+	return id.String()
 }

@@ -22,12 +22,15 @@ import (
 	"github.com/middleman/backend/infrastructure/whatsapp"
 	"github.com/middleman/backend/internal/config"
 	"github.com/middleman/backend/internal/conversation"
+	"github.com/middleman/backend/internal/discovery"
+	"github.com/middleman/backend/internal/distribution"
 	"github.com/middleman/backend/internal/httpserver"
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/logging"
 	"github.com/middleman/backend/internal/marketplace"
 	"github.com/middleman/backend/internal/media"
 	"github.com/middleman/backend/internal/offer"
+	"github.com/middleman/backend/internal/presentation"
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/supply"
@@ -124,6 +127,9 @@ func main() {
 	listingService := supply.NewListingService(supplyRepo, listingRepo, vendorRepo, listingRepo, eventWriter, auditWriter, logger)
 	listingService.SetEligibilityPolicy(supplyPolicy)
 	routingService.SetListingEvidence(listingRepo, supplyPolicy) // Phase 4A: matching reads eligible listings
+	// Phase 4B: listing-origin demand asks the listing's vendor to re-confirm
+	// it; an AVAILABLE reply is fresh verification of that listing.
+	routingService.SetListingOrigin(listingRepo, listingService)
 	offerService := offer.NewService(offerRepo, routingRepo, requestRepo, eventWriter, auditWriter, logger)
 	txService := transaction.NewService(txRepo, offerRepo, requestRepo, eventWriter, auditWriter, logger)
 
@@ -202,6 +208,49 @@ func main() {
 	mux.HandleFunc("GET /health", httpserver.HealthHandler)
 	mux.HandleFunc("GET /ready", httpserver.ReadyHandler(pool, aiProvider))
 
+	// --- Phase 4B: Discovery & Distribution (staff-only foundation) ---
+	// Discovery is pure over the canonical policy; Distribution owns
+	// consent, caps, dedupe, windows, batches, presentation and sending.
+	discoveryRepo := postgres.NewDiscoveryRepository(pool)
+	discoveryService := discovery.NewService(discovery.NewEngine(supplyPolicy), discoveryRepo)
+	weights, err := discovery.ParseWeights(cfg.DiscoveryRankingWeights, discovery.DefaultWeights())
+	if err != nil {
+		logger.Error("invalid discovery ranking weights", "error", err)
+		os.Exit(1)
+	}
+	window, err := distribution.ParseWindow(cfg.DiscoveryDeliveryWindow, cfg.DiscoveryTimezone)
+	if err != nil {
+		logger.Error("invalid discovery delivery window", "error", err)
+		os.Exit(1)
+	}
+	internal := map[string]bool{}
+	for _, r := range cfg.DiscoveryInternalRecipients {
+		internal[r] = true
+	}
+	var arms []presentation.Arm
+	for _, a := range cfg.DiscoveryArms {
+		arms = append(arms, presentation.Arm(a))
+	}
+	distCfg := distribution.Config{
+		Mode: distribution.Mode(cfg.DiscoveryMode), InternalRecipients: internal, Arms: arms,
+		MaxDeliveriesPerBuyer: cfg.DiscoveryMaxDeliveriesPerBuyer, CapPeriod: cfg.DiscoveryCapPeriod,
+		ExposureWindow: cfg.DiscoveryExposureWindow, ListingsPerDelivery: cfg.DiscoveryListingsPerDelivery,
+		Window: window, InteractionTTL: cfg.DiscoveryInteractionTTL, NegativeWindow: cfg.DiscoveryNegativeWindow,
+		Template:       presentation.TemplateConfig{Name: cfg.DiscoveryTemplateName, Language: cfg.DiscoveryTemplateLanguage},
+		ConsentWording: cfg.DiscoveryConsentWording, EnquiryConfirmation: cfg.DiscoveryEnquiryConfirmation,
+		Ranking: discovery.RankingParams{Weights: weights}, OutboundMediaTTL: cfg.DiscoveryOutboundMediaTTL,
+	}
+	if err := distCfg.Validate(); err != nil {
+		logger.Error("invalid discovery configuration", "error", err)
+		os.Exit(1)
+	}
+	mediaPublisher := distribution.NewMediaPublisher(postgres.NewMediaAssetRepository(pool), mediaStore, whatsappProvider, cfg.DiscoveryOutboundMediaTTL)
+	distributionService := distribution.NewService(distCfg, discoveryRepo, discoveryService, outbound, mediaPublisher, requestService, eventWriter, logger)
+	buyerInbound.SetDiscovery(distributionService)
+	logger.Info("discovery distribution", "mode", distCfg.Mode, "internal_recipients", len(internal), "arms", cfg.DiscoveryArms,
+		"window", window.Raw, "template_configured", distCfg.Template.Name != "", "ranking_version",
+		distCfg.Ranking.Version(supplyPolicy.Config()), "enquiry_confirmation", distCfg.EnquiryConfirmation)
+
 	webhookHandler := httpserver.NewWhatsAppWebhookHandler(
 		whatsappProvider, convRepo, convRepo, buyerRepo, vendorRepo, eventWriter, buyerInbound, routingService, jobRunner,
 		cfg.WhatsAppVerifyToken, cfg.AllowUnsignedWebhooks, logger,
@@ -265,6 +314,21 @@ func main() {
 	funnelHandlers := httpserver.NewFunnelHandlers(postgres.NewFunnelRepository(pool))
 	funnelHandlers.SetListingFreshness(supplyPolicy.Config().FreshnessWindow) // §K.2 stale rate uses the canonical freshness [PARAM]
 	mux.HandleFunc("GET /api/metrics/funnel", funnelHandlers.Get)
+
+	// Phase 4B: every discovery route is operator-only; there is no consumer endpoint.
+	discoveryHandlers := httpserver.NewDiscoveryHandlers(distributionService, discoveryService, logger)
+	mux.HandleFunc("GET /api/discovery/settings", operatorAuth.Require(discoveryHandlers.Settings))
+	mux.HandleFunc("GET /api/discovery/candidates", operatorAuth.Require(discoveryHandlers.Candidates))
+	mux.HandleFunc("GET /api/discovery/preferences", operatorAuth.Require(discoveryHandlers.Preferences))
+	mux.HandleFunc("POST /api/discovery/preferences", operatorAuth.Require(discoveryHandlers.SetPreference))
+	mux.HandleFunc("POST /api/discovery/consent/invite", operatorAuth.Require(discoveryHandlers.Invite))
+	mux.HandleFunc("POST /api/discovery/preview", operatorAuth.Require(discoveryHandlers.Preview))
+	mux.HandleFunc("POST /api/discovery/batches", operatorAuth.Require(discoveryHandlers.CreateBatch))
+	mux.HandleFunc("GET /api/discovery/batches", operatorAuth.Require(discoveryHandlers.Batches))
+	mux.HandleFunc("GET /api/discovery/batches/{id}", operatorAuth.Require(discoveryHandlers.Batch))
+	mux.HandleFunc("POST /api/discovery/batches/{id}/send", operatorAuth.Require(discoveryHandlers.Send))
+	mux.HandleFunc("GET /api/discovery/deliveries/{id}", operatorAuth.Require(discoveryHandlers.Delivery))
+	mux.HandleFunc("GET /api/discovery/funnel", operatorAuth.Require(discoveryHandlers.Funnel))
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)
 	mux.HandleFunc("GET /api/transactions/{id}", transactionHandlers.Get)

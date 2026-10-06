@@ -222,9 +222,29 @@ type FreshnessPolicy interface {
 	Freshness(f ListingFacts, now time.Time) FreshnessView
 }
 
-// GeographicExpansionPolicy decides the geographic scope at a lifecycle point.
+// GeographicExpansionPolicy decides the geographic scope at a lifecycle point
+// and (Phase 4B) whether that scope reaches a given viewer location. Both
+// answers come from the same policy so Discovery never re-implements
+// geographic expansion.
 type GeographicExpansionPolicy interface {
 	Scope(f ListingFacts, lc LifecycleView, now time.Time) GeoScope
+	Reach(f ListingFacts, lc LifecycleView, scope GeoScope, viewerLocation string) ViewerReach
+}
+
+// ViewerReach is the canonical answer to "does this listing's current
+// geographic scope reach this viewer?" (Phase 4B). Pure.
+type ViewerReach struct {
+	Reachable bool `json:"reachable"`
+	// Known is false when the viewer gave no usable location.
+	Known  bool      `json:"known"`
+	Viewer geo.Place `json:"viewer"`
+	// Level is the narrowest level relating viewer and origin ("" = none).
+	Level geo.Level `json:"level,omitempty"`
+	// RequiredStage is the first stage whose scope includes Level ("" if
+	// no stage ever reaches the viewer); ReachableFrom is when it starts.
+	RequiredStage GeoStage   `json:"required_stage,omitempty"`
+	ReachableFrom *time.Time `json:"reachable_from,omitempty"`
+	Reason        string     `json:"reason"`
 }
 
 // EligibilityPolicy composes the three. It is the one entry point.
@@ -328,6 +348,13 @@ func (p *EligibilityPolicy) Evaluate(f ListingFacts, now time.Time) Eligibility 
 		e.Notes = append(e.Notes, "origin_unresolved")
 	}
 	return e
+}
+
+// EvaluateForViewer is Evaluate plus the canonical viewer reach (Phase 4B).
+// A listing is usable for this viewer only when both say so.
+func (p *EligibilityPolicy) EvaluateForViewer(f ListingFacts, viewerLocation string, now time.Time) (Eligibility, ViewerReach) {
+	e := p.Evaluate(f, now)
+	return e, p.geography.Reach(f, e.Lifecycle, e.Geography, viewerLocation)
 }
 
 // EvaluateListing is Evaluate over a listing.
@@ -476,4 +503,93 @@ func (s *StagedExpansion) Scope(f ListingFacts, lc LifecycleView, now time.Time)
 		g.Reason += "; origin location not resolved (scope applies to the raw location text)"
 	}
 	return g
+}
+
+// Reach: the viewer is reachable when the narrowest level relating the
+// viewer to the listing's origin (geo.Within) is one of the levels of the
+// current stage. Stages are cumulative, so the first stage containing that
+// level is when the viewer becomes reachable.
+func (s *StagedExpansion) Reach(f ListingFacts, lc LifecycleView, scope GeoScope, viewerLocation string) ViewerReach {
+	r := ViewerReach{Viewer: s.Resolver.Resolve(viewerLocation)}
+	r.Known = r.Viewer.Raw != ""
+	if !r.Known {
+		r.Reason = "viewer location unknown"
+		return r
+	}
+	level, related := geo.Within(scope.Origin, r.Viewer)
+	if !related {
+		if !scope.Origin.Resolved || !r.Viewer.Resolved {
+			r.Reason = "viewer location cannot be compared with the listing origin (unresolved place)"
+		} else {
+			r.Reason = "viewer is outside every expansion stage of this listing"
+		}
+		return r
+	}
+	r.Level = level
+	for _, st := range s.Stages {
+		if containsLevel(st.Levels, level) {
+			r.RequiredStage = st.Stage
+			if lc.StartedAt != nil {
+				at := lc.StartedAt.Add(st.After)
+				r.ReachableFrom = &at
+			}
+			break
+		}
+	}
+	where := describeLevel(level, scope.Origin, r.Viewer)
+	switch {
+	case scope.Stage == GeoNone || scope.Stage == GeoExpired || scope.Stage == GeoPending:
+		r.Reason = fmt.Sprintf("%s, but the listing has no geographic scope now (%s)", where, scope.Stage)
+	case containsLevel(scope.Levels, level):
+		r.Reachable = true
+		r.Reason = fmt.Sprintf("%s; within current scope %s (%s)", where, scope.Stage, scope.Reason)
+	case r.RequiredStage == "":
+		r.Reason = fmt.Sprintf("%s; no expansion stage reaches it", where)
+	default:
+		r.Reason = fmt.Sprintf("%s; reached at stage %s (day %d), listing is at %s (day %d)", where,
+			r.RequiredStage, stageDay(s.Stages, r.RequiredStage), scope.Stage, lc.Day)
+	}
+	return r
+}
+
+func containsLevel(levels []geo.Level, l geo.Level) bool {
+	for _, x := range levels {
+		if x == l {
+			return true
+		}
+	}
+	return false
+}
+
+func stageDay(stages []ExpansionStage, st GeoStage) int {
+	for _, x := range stages {
+		if x.Stage == st {
+			return int(x.After / day)
+		}
+	}
+	return -1
+}
+
+func describeLevel(l geo.Level, origin, viewer geo.Place) string {
+	switch l {
+	case geo.LevelExactArea, geo.LevelCommunity, geo.LevelLGA:
+		return "viewer is in the listing's origin area"
+	case geo.LevelCity:
+		return "viewer is elsewhere in " + origin.City
+	case geo.LevelState:
+		return "viewer is elsewhere in " + origin.State + " state"
+	case geo.LevelRegion:
+		return "viewer is in the " + origin.Region + " region (" + firstNonEmpty(viewer.City, viewer.State) + ")"
+	default:
+		return "viewer is in the same country, outside the listing's region"
+	}
+}
+
+func firstNonEmpty(xs ...string) string {
+	for _, x := range xs {
+		if x != "" {
+			return x
+		}
+	}
+	return ""
 }

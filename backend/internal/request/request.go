@@ -56,6 +56,15 @@ func (r *BuyerRequest) FunnelDims() map[string]any {
 		"conversation_id":  r.ConversationID.String(),
 		"request_status":   string(r.Status),
 	}
+	if r.Origin != "" {
+		d["origin"] = string(r.Origin)
+	}
+	if r.ListingID != nil {
+		d["supply_listing_id"] = r.ListingID.String()
+	}
+	if r.DiscoveryDeliveryID != nil {
+		d["discovery_delivery_id"] = r.DiscoveryDeliveryID.String()
+	}
 	if r.Category != nil && *r.Category != "" {
 		d["category"] = *r.Category
 	}
@@ -82,12 +91,34 @@ const (
 	CompletenessInsufficient Completeness = "insufficient"
 )
 
+// Origin is how demand entered Majo (Architecture Lock V2 §E). One
+// BuyerRequest model serves every origin; origin and listing link are
+// attributes of the same demand object, not separate objects.
+type Origin string
+
+const (
+	OriginMessage     Origin = "message"      // WhatsApp free text (extraction)
+	OriginDiscovery   Origin = "discovery"    // "Ask about it" on a discovery card
+	OriginListingLink Origin = "listing_link" // a shared L- reference (reserved)
+)
+
+// ErrDuplicate is returned by Repository.Create when the same listing-origin
+// demand already exists (e.g. the same "Ask about it" tap delivered twice).
+var ErrDuplicate = errors.New("buyer request already exists for this origin")
+
 // BuyerRequest represents the buyer's current procurement need.
 type BuyerRequest struct {
 	ID              uuid.UUID
 	ConversationID  uuid.UUID
 	BuyerID         uuid.UUID
 	OriginMessageID *uuid.UUID
+
+	// Phase 4B demand bridge. Origin defaults to OriginMessage. ListingID
+	// and DiscoveryDeliveryID attribute listing-origin demand to the
+	// SupplyListing and the DiscoveryDelivery it came from.
+	Origin              Origin
+	ListingID           *uuid.UUID
+	DiscoveryDeliveryID *uuid.UUID
 
 	Status Status
 
@@ -160,6 +191,9 @@ type Repository interface {
 	UpdateExtraction(ctx context.Context, id uuid.UUID, fields Fields, extractedData map[string]any, confidence float64, newStatus Status) (*BuyerRequest, error)
 	UpdateFields(ctx context.Context, id uuid.UUID, fields Fields) (*BuyerRequest, error)
 	Confirm(ctx context.Context, id uuid.UUID) (*BuyerRequest, error)
+	// FindDiscoveryAsk returns the discovery-origin request for this
+	// (delivery, listing), or nil (idempotent "Ask about it").
+	FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*BuyerRequest, error)
 	// FindLatestOpenByConversation supports the clarification flow (PRD 1 §28):
 	// a follow-up buyer message should continue the same request rather than
 	// always starting a new one, if one is still open (not yet confirmed).

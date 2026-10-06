@@ -161,3 +161,31 @@ If the supply rows cannot be computed, the report still returns the stages, with
 
 Rejection reasons are in `supply_listings.rejection_reason`. Two §K.2 rows wait for Phase 4B: vendor re-confirmation rate,
 and discovery-eligible supply volume.
+
+## Discovery side (Phase 4B, Architecture Lock V2 §K.1)
+
+Source: `GET /api/discovery/funnel[?batch_id=]` (operator-only) and the
+`/discovery` dashboard page. Counts are computed from the delivery chain, not
+from raw taps. Staff/INTERNAL traffic only in Phase 4B.
+
+| Stage | Meaning |
+|---|---|
+| opted_in / opted_out | current consent records |
+| eligible_audience / eligible_listings | what a plan found (permitted + consented + under cap; policy-eligible and reachable) |
+| deliveries planned → attempted → sent / failed / skipped | `skipped` carries a reason (`opted_out`, `outside_session_no_template`, `frequency_cap`, …) |
+| delivered / read | provider receipts for the delivery's messages |
+| interacted / listing_viewed | any tap / a card or video opened |
+| **asked** | distinct (delivery, listing) "Ask about it" — a repeated tap is not a second ask |
+| requests_created / requests_confirmed | discovery-origin BuyerRequests, and those an operator confirmed |
+| offers / selections / transactions | attributed through `supply_listing_id` and the delivery id |
+| opt_outs_from_discovery | STOPs from a discovery delivery |
+| unresolved_interactions | malformed/unknown/foreign/expired/gone taps (persisted, mutated nothing) |
+
+Breakdowns: by presentation arm (ARM_A/ARM_B), by exclusion reason. Attribution
+chain: delivery → message(s) → interaction → BuyerRequest(`origin=discovery`,
+`listing_id`, `discovery_delivery_id`) → VendorRequest/Offer(`supply_listing_id`)
+→ BuyerSelection → Transaction.
+
+Known limits: delivered/read depend on Meta status callbacks; with the fake
+Graph API they are not produced. Arm comparisons need far more volume than a
+staff proof can give; Phase 4B proves the measurement exists, not that an arm wins.

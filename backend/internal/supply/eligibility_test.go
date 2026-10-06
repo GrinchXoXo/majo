@@ -290,11 +290,64 @@ func (nationwideImmediately) Scope(f ListingFacts, lc LifecycleView, now time.Ti
 		Origin: geo.Place{Resolved: true}}
 }
 
+func (nationwideImmediately) Reach(f ListingFacts, lc LifecycleView, s GeoScope, viewer string) ViewerReach {
+	return ViewerReach{Reachable: viewer != "", Known: viewer != "", Reason: "nationwide"}
+}
+
 func TestEligibility_PoliciesArePluggable(t *testing.T) {
 	p := MustDefaultPolicy().WithParts(nil, nil, nationwideImmediately{})
 	e := p.Evaluate(published(pubT0), pubT0)
 	if e.Geography.Scope != "COUNTRY" || !e.Eligible {
 		t.Fatalf("custom geographic policy: %+v", e.Geography)
+	}
+	// Viewer reach comes from the same pluggable policy (Discovery never
+	// reimplements it): a Lagos buyer is reached on day 0.
+	if _, r := p.EvaluateForViewer(published(pubT0), "Lagos", pubT0); !r.Reachable {
+		t.Fatalf("custom reach: %+v", r)
+	}
+}
+
+// Phase 4B: the canonical viewer reach. Origin "GRA, Benin City"; buyers in
+// the origin area, elsewhere in the city, elsewhere in Edo, in the region,
+// and outside it, at every configured boundary.
+func TestEligibility_ViewerReachAcrossStages(t *testing.T) {
+	p := MustDefaultPolicy()
+	cfg := p.Config()
+	at := func(d time.Duration) time.Time { return pubT0.Add(d) }
+	viewers := []string{"GRA, Benin City", "Ugbowo, Benin City", "Edo", "Warri", "Lagos"}
+	cases := []struct {
+		at   time.Time
+		want []bool
+	}{
+		{at(0), []bool{true, false, false, false, false}},
+		{at(cfg.GeoNearbyAfter - time.Second), []bool{true, false, false, false, false}},
+		{at(cfg.GeoNearbyAfter), []bool{true, true, false, false, false}},
+		{at(cfg.GeoStateAfter - time.Second), []bool{true, true, false, false, false}},
+		{at(cfg.GeoStateAfter), []bool{true, true, true, false, false}},
+		{at(cfg.GeoRegionAfter), []bool{true, true, true, true, false}},
+		{at(cfg.MaxLifecycle - time.Second), []bool{true, true, true, true, false}},
+		{at(cfg.MaxLifecycle), []bool{false, false, false, false, false}},
+	}
+	for _, c := range cases {
+		for i, v := range viewers {
+			e, r := p.EvaluateForViewer(published(pubT0), v, c.at)
+			got := e.Eligible && r.Reachable
+			if got != c.want[i] {
+				t.Errorf("day %.2f viewer %q: eligible=%v reach=%+v want %v", c.at.Sub(pubT0).Hours()/24, v, e.Eligible, r, c.want[i])
+			}
+		}
+	}
+	// Explainable: the required stage and when it starts.
+	_, r := p.EvaluateForViewer(published(pubT0), "Edo", at(23*24*time.Hour))
+	if r.Reachable || r.RequiredStage != GeoState || r.ReachableFrom == nil || !r.ReachableFrom.Equal(at(cfg.GeoStateAfter)) ||
+		!strings.Contains(r.Reason, "reached at stage STATE") {
+		t.Fatalf("not-yet reach must explain itself: %+v", r)
+	}
+	if _, r := p.EvaluateForViewer(published(pubT0), "", pubT0); r.Known || r.Reachable {
+		t.Fatalf("unknown viewer: %+v", r)
+	}
+	if _, r := p.EvaluateForViewer(published(pubT0), "Ogbomoso market", pubT0); r.Reachable || r.Level != "" {
+		t.Fatalf("unresolved viewer: %+v", r)
 	}
 }
 

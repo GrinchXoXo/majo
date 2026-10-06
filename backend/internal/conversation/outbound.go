@@ -2,10 +2,13 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/middleman/backend/internal/channel"
 )
 
 // OutboundPurpose describes WHY Majo sent a message, so delivery receipts
@@ -69,11 +72,38 @@ func (r *RecordingSender) SendText(ctx context.Context, to, body string) error {
 	return nil
 }
 
+// ErrRichUnsupported: the wrapped provider cannot send rich messages.
+var ErrRichUnsupported = errors.New("channel provider does not support rich messages")
+
+// SendRecorded sends a rendered channel message (text, image, video,
+// buttons, list, template — Phase 4B) through the provider and persists it
+// like SendText does, returning the persisted message ID and the provider
+// message ID. Every discovery message goes through here (Lock §G).
+func (r *RecordingSender) SendRecorded(ctx context.Context, to string, m channel.Message) (*uuid.UUID, string, error) {
+	rich, ok := r.sender.(channel.Sender)
+	if !ok {
+		return nil, "", ErrRichUnsupported
+	}
+	externalID, err := rich.SendMessage(ctx, to, m)
+	if err != nil {
+		return nil, "", err
+	}
+	saved := r.save(ctx, to, string(m.Kind), map[string]any{"text": m.Summary(), "rich": m}, externalID)
+	if saved == nil {
+		return nil, externalID, nil
+	}
+	return &saved.ID, externalID, nil
+}
+
 func (r *RecordingSender) record(ctx context.Context, to, body, externalID string) {
+	r.save(ctx, to, "text", map[string]any{"text": body}, externalID)
+}
+
+func (r *RecordingSender) save(ctx context.Context, to, messageType string, content map[string]any, externalID string) *Message {
 	conv, err := r.repo.FindOrCreateByExternalID(ctx, r.channel, to)
 	if err != nil || conv == nil {
 		r.logger.Error("recording outbound message: resolving conversation", "error", err)
-		return
+		return nil
 	}
 	meta := map[string]any{}
 	if p, ok := OutboundPurposeFrom(ctx); ok {
@@ -86,16 +116,19 @@ func (r *RecordingSender) record(ctx context.Context, to, body, externalID strin
 			meta[k] = v
 		}
 	}
-	if _, err := r.repo.SaveMessage(ctx, &Message{
+	saved, err := r.repo.SaveMessage(ctx, &Message{
 		ConversationID:    conv.ID,
 		Direction:         DirectionOutbound,
 		ExternalMessageID: externalID,
-		MessageType:       "text",
-		Content:           map[string]any{"text": body},
+		MessageType:       messageType,
+		Content:           content,
 		Metadata:          meta,
-	}); err != nil {
+	})
+	if err != nil {
 		r.logger.Error("recording outbound message", "external_message_id", externalID, "error", err)
+		return nil
 	}
+	return saved
 }
 
 // Delivery statuses from the channel provider (Meta: sent/delivered/read/failed).

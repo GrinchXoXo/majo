@@ -33,6 +33,8 @@ func scanRequestRow(scanner interface {
 		prefsBytes                   []byte
 		extractedBytes               []byte
 		confirmedAt                  sql.NullTime
+		origin                       string
+		listingID, deliveryID        sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -44,6 +46,7 @@ func scanRequestRow(scanner interface {
 		&r.RawMessage, &extractedBytes, &r.Confidence,
 		&r.Completeness,
 		&r.CreatedAt, &r.UpdatedAt, &confirmedAt,
+		&origin, &listingID, &deliveryID,
 	)
 	if err != nil {
 		return nil, err
@@ -67,6 +70,17 @@ func scanRequestRow(scanner interface {
 		}
 	}
 
+	r.Origin = request.Origin(origin)
+	if listingID.Valid {
+		if id, err := uuid.Parse(listingID.String); err == nil {
+			r.ListingID = &id
+		}
+	}
+	if deliveryID.Valid {
+		if id, err := uuid.Parse(deliveryID.String); err == nil {
+			r.DiscoveryDeliveryID = &id
+		}
+	}
 	if category.Valid {
 		r.Category = &category.String
 	}
@@ -119,7 +133,8 @@ const requestColumns = `
 	location, condition, quantity, urgency, preferences,
 	raw_message, extracted_data, confidence,
 	completeness,
-	created_at, updated_at, confirmed_at
+	created_at, updated_at, confirmed_at,
+	origin, listing_id, discovery_delivery_id
 `
 
 func (r *RequestRepository) Create(ctx context.Context, req *request.BuyerRequest) (*request.BuyerRequest, error) {
@@ -143,20 +158,47 @@ func (r *RequestRepository) Create(ctx context.Context, req *request.BuyerReques
 	if req.OriginMessageID != nil {
 		originID = req.OriginMessageID.String()
 	}
+	if req.Origin == "" {
+		req.Origin = request.OriginMessage
+	}
+	uuidOrNil := func(id *uuid.UUID) any {
+		if id == nil {
+			return nil
+		}
+		return id.String()
+	}
 
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO buyer_requests (
 			id, conversation_id, buyer_id, origin_message_id, status,
 			raw_message, extracted_data, confidence, completeness, currency,
-			preferences
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			preferences, origin, listing_id, discovery_delivery_id,
+			category, product, variant, budget_min, budget_max, location, condition, quantity
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+		ON CONFLICT (discovery_delivery_id, listing_id) WHERE origin = 'discovery' DO NOTHING
 		RETURNING `+requestColumns,
 		req.ID.String(), req.ConversationID.String(), req.BuyerID.String(), originID, req.Status,
 		req.RawMessage, extractedBytes, req.Confidence, req.Completeness, req.Currency,
-		prefsBytes,
+		prefsBytes, string(req.Origin), uuidOrNil(req.ListingID), uuidOrNil(req.DiscoveryDeliveryID),
+		req.Category, req.Product, req.Variant, req.BudgetMin, req.BudgetMax, req.Location, req.Condition, req.Quantity,
 	)
 
-	return scanRequestRow(row)
+	created, err := scanRequestRow(row)
+	if err == sql.ErrNoRows {
+		return nil, request.ErrDuplicate
+	}
+	return created, err
+}
+
+// FindDiscoveryAsk implements request.Repository.
+func (r *RequestRepository) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+requestColumns+` FROM buyer_requests
+		WHERE origin = 'discovery' AND discovery_delivery_id = $1 AND listing_id = $2`, deliveryID.String(), listingID.String())
+	req, err := scanRequestRow(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return req, err
 }
 
 func (r *RequestRepository) FindByID(ctx context.Context, id uuid.UUID) (*request.BuyerRequest, error) {

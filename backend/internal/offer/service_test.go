@@ -365,3 +365,7 @@ func strings_Contains(s, substr string) bool {
 		return false
 	})()
 }
+
+func (r *fakeRequestRepoForOffers) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
+	return nil, nil
+}

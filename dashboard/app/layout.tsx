@@ -20,6 +20,7 @@ export default function RootLayout({
           <a href="/vendors">Vendors</a>
           <a href="/unmatched-responses">Unmatched Responses</a>
           <a href="/offers">Supply Listings</a>
+          <a href="/discovery">Discovery</a>
           <a href="/events">Events</a>
         </nav>
         <main style={{ padding: "20px" }}>{children}</main>

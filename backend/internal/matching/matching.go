@@ -460,3 +460,31 @@ func deref(s *string) string {
 	}
 	return *s
 }
+
+// CategoriesCompatible is the exported category-family rule, reused by
+// Discovery (Phase 4B) so relevance uses the same category semantics as
+// matching instead of a second, incompatible scheme.
+func CategoriesCompatible(a, b string) bool { return categoriesCompatible(a, b) }
+
+// ProductRelevance compares a wanted product with a listing's product names
+// using the same compact search form and exact/family rule scoreListings
+// uses (Phase 4B reuse; no embeddings).
+func ProductRelevance(want string, names ...string) (exact, family bool) {
+	w := supply.NormalizeSearch(want)
+	if w == "" {
+		return false, false
+	}
+	for _, n := range names {
+		n = supply.NormalizeSearch(n)
+		if n == "" {
+			continue
+		}
+		if n == w {
+			return true, false
+		}
+		if strings.Contains(n, w) || strings.Contains(w, n) {
+			family = true
+		}
+	}
+	return false, family
+}

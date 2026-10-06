@@ -756,3 +756,7 @@ func TestRouteToVendors_RetriesOnReferenceCollisionAndUsesSixDigits(t *testing.T
 		t.Fatal("legacy 4-digit references must still be recognized")
 	}
 }
+
+func (r *fakeRequestRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
+	return nil, nil
+}

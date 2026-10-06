@@ -132,7 +132,11 @@ func (s *Service) buildForRequest(ctx context.Context, req *request.BuyerRequest
 		score, reasons, exactMatch := rankOffer(req, resp)
 
 		o := &Offer{
-			BuyerRequestID: buyerRequestID, VendorRequestID: &vr.ID, VendorResponseID: &resp.ID,
+			// Listing provenance (Phase 4B): a reply to a listing
+			// re-confirmation request is an offer for that listing. Origin is
+			// derived from these relationships, never stored separately.
+			SupplyListingID: vr.SupplyListingID,
+			BuyerRequestID:  buyerRequestID, VendorRequestID: &vr.ID, VendorResponseID: &resp.ID,
 			VendorID: vr.VendorID, Type: offerType(resp.Status, exactMatch), Status: StatusReviewed,
 			Product: resp.Product, Variant: resp.Variant, Condition: resp.Condition,
 			Price: resp.Price, Quantity: resp.Quantity, Location: resp.Location, Notes: resp.Notes,
@@ -154,7 +158,7 @@ func (s *Service) buildForRequest(ctx context.Context, req *request.BuyerRequest
 			Payload: event.Merge(req.FunnelDims(), map[string]any{
 				"offer_id": created.ID.String(), "vendor_response_id": resp.ID.String(), "vendor_request_id": vr.ID.String(),
 				"vendor_id": vr.VendorID.String(), "offer_type": string(created.Type), "price": created.Price,
-				"score": score, "origin": "vendor_response",
+				"score": score, "origin": "vendor_response", "supply_listing_id": idOrNil(vr.SupplyListingID),
 			}),
 		}); err != nil {
 			s.logger.Error("writing OFFER_CREATED event", "error", err)
@@ -391,3 +395,10 @@ func availabilityLabel(t Type) string {
 // FormatNaira exposes the existing naira formatter to the buyer-facing
 // messaging in other packages (selection confirmation).
 func FormatNaira(amount int64) string { return formatNaira(amount) }
+
+func idOrNil(id *uuid.UUID) any {
+	if id == nil {
+		return nil
+	}
+	return id.String()
+}

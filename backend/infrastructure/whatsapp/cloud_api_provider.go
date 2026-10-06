@@ -9,9 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
+
+	"github.com/middleman/backend/internal/channel"
 )
 
 // CloudAPIProvider implements MessagingProvider against the Meta WhatsApp
@@ -86,6 +90,157 @@ func (p *CloudAPIProvider) SendInteractive(ctx context.Context, to string, inter
 	}
 	_, err := p.send(ctx, payload)
 	return err
+}
+
+// SendMessage implements channel.Sender (Phase 4B): it maps a
+// channel-neutral message onto the Cloud API payload for text, image,
+// video, reply buttons (optionally with an image header), lists and
+// templates. Media must already carry a provider media ID (see
+// UploadMedia); nothing is downloaded or re-encoded here.
+func (p *CloudAPIProvider) SendMessage(ctx context.Context, to string, m channel.Message) (string, error) {
+	if err := m.Validate(); err != nil {
+		return "", err
+	}
+	payload, err := cloudPayload(to, m)
+	if err != nil {
+		return "", err
+	}
+	return p.send(ctx, payload)
+}
+
+func mediaObject(ref *channel.MediaRef, caption string) (map[string]any, error) {
+	if ref == nil || ref.ProviderRef == "" {
+		return nil, fmt.Errorf("%w: media has no provider reference", channel.ErrInvalidMessage)
+	}
+	obj := map[string]any{"id": ref.ProviderRef}
+	if caption != "" {
+		obj["caption"] = caption
+	}
+	return obj, nil
+}
+
+func cloudPayload(to string, m channel.Message) (map[string]any, error) {
+	payload := map[string]any{"messaging_product": "whatsapp", "recipient_type": "individual", "to": to}
+	switch m.Kind {
+	case channel.KindText:
+		payload["type"] = "text"
+		payload["text"] = map[string]any{"body": m.Body}
+	case channel.KindImage, channel.KindVideo:
+		obj, err := mediaObject(m.Media, m.Body)
+		if err != nil {
+			return nil, err
+		}
+		payload["type"] = string(m.Kind)
+		payload[string(m.Kind)] = obj
+	case channel.KindButtons:
+		buttons := make([]map[string]any, len(m.Buttons))
+		for i, b := range m.Buttons {
+			buttons[i] = map[string]any{"type": "reply", "reply": map[string]string{"id": b.ID, "title": b.Title}}
+		}
+		inter := map[string]any{"type": "button", "body": map[string]string{"text": m.Body}, "action": map[string]any{"buttons": buttons}}
+		if m.Header != nil {
+			obj, err := mediaObject(m.Header, "")
+			if err != nil {
+				return nil, err
+			}
+			inter["header"] = map[string]any{"type": "image", "image": obj}
+		}
+		if m.Footer != "" {
+			inter["footer"] = map[string]string{"text": m.Footer}
+		}
+		payload["type"] = "interactive"
+		payload["interactive"] = inter
+	case channel.KindList:
+		rows := make([]map[string]string, len(m.Rows))
+		for i, r := range m.Rows {
+			row := map[string]string{"id": r.ID, "title": r.Title}
+			if r.Description != "" {
+				row["description"] = r.Description
+			}
+			rows[i] = row
+		}
+		section := map[string]any{"rows": rows}
+		if m.Section != "" {
+			section["title"] = m.Section
+		}
+		inter := map[string]any{"type": "list", "body": map[string]string{"text": m.Body},
+			"action": map[string]any{"button": m.ListButton, "sections": []any{section}}}
+		if m.Footer != "" {
+			inter["footer"] = map[string]string{"text": m.Footer}
+		}
+		payload["type"] = "interactive"
+		payload["interactive"] = inter
+	case channel.KindTemplate:
+		t := m.Template
+		var components []map[string]any
+		if len(t.BodyParams) > 0 {
+			params := make([]map[string]string, len(t.BodyParams))
+			for i, v := range t.BodyParams {
+				params[i] = map[string]string{"type": "text", "text": v}
+			}
+			components = append(components, map[string]any{"type": "body", "parameters": params})
+		}
+		for i, pl := range t.QuickReplyPayloads {
+			components = append(components, map[string]any{
+				"type": "button", "sub_type": "quick_reply", "index": fmt.Sprint(i),
+				"parameters": []map[string]string{{"type": "payload", "payload": pl}},
+			})
+		}
+		tpl := map[string]any{"name": t.Name, "language": map[string]string{"code": t.Language}}
+		if len(components) > 0 {
+			tpl["components"] = components
+		}
+		payload["type"] = "template"
+		payload["template"] = tpl
+	default:
+		return nil, fmt.Errorf("%w: unknown kind %q", channel.ErrInvalidMessage, m.Kind)
+	}
+	return payload, nil
+}
+
+// UploadMedia implements channel.MediaUploader: POST /{phone-number-id}/media
+// (multipart) returns a media ID usable in outbound messages. Majo uploads a
+// stored MediaAsset once and reuses the ID (see the media publisher).
+func (p *CloudAPIProvider) UploadMedia(ctx context.Context, data []byte, mimeType, filename string) (string, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	_ = w.WriteField("messaging_product", "whatsapp")
+	_ = w.WriteField("type", mimeType)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename=%q`, filename))
+	h.Set("Content-Type", mimeType)
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", err
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/%s/media", p.apiURL, p.phoneNumberID), &buf)
+	if err != nil {
+		return "", fmt.Errorf("building whatsapp media upload: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.accessToken)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := p.mediaClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("uploading whatsapp media: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("whatsapp media upload returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&out); err != nil || out.ID == "" {
+		return "", fmt.Errorf("whatsapp media upload: no media id in response")
+	}
+	return out.ID, nil
 }
 
 // send posts a message and returns the wamid from Meta's response
@@ -192,6 +347,21 @@ func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage
 						Text      struct {
 							Body string `json:"body"`
 						} `json:"text"`
+						Interactive struct {
+							Type        string `json:"type"`
+							ButtonReply *struct {
+								ID    string `json:"id"`
+								Title string `json:"title"`
+							} `json:"button_reply"`
+							ListReply *struct {
+								ID    string `json:"id"`
+								Title string `json:"title"`
+							} `json:"list_reply"`
+						} `json:"interactive"`
+						Button *struct {
+							Payload string `json:"payload"`
+							Text    string `json:"text"`
+						} `json:"button"`
 						Image    *mediaPayload `json:"image"`
 						Audio    *mediaPayload `json:"audio"`
 						Video    *mediaPayload `json:"video"`
@@ -222,6 +392,17 @@ func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage
 					Text:              m.Text.Body,
 					Timestamp:         m.Timestamp,
 					ProfileName:       profileNames[m.From],
+				}
+				switch {
+				case m.Type == "interactive" && m.Interactive.ButtonReply != nil:
+					msg.Interaction = &Interaction{Kind: "button_reply", ID: m.Interactive.ButtonReply.ID, Title: m.Interactive.ButtonReply.Title}
+				case m.Type == "interactive" && m.Interactive.ListReply != nil:
+					msg.Interaction = &Interaction{Kind: "list_reply", ID: m.Interactive.ListReply.ID, Title: m.Interactive.ListReply.Title}
+				case m.Type == "button" && m.Button != nil:
+					msg.Interaction = &Interaction{Kind: "quick_reply", ID: m.Button.Payload, Title: m.Button.Text}
+				}
+				if msg.Interaction != nil {
+					msg.Text = msg.Interaction.Title
 				}
 				for kind, mp := range map[string]*mediaPayload{
 					"image": m.Image, "audio": m.Audio, "video": m.Video, "document": m.Document, "sticker": m.Sticker,

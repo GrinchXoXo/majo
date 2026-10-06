@@ -247,6 +247,13 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 	if mediaRef != nil {
 		content["media"] = mediaRef
 	}
+	interactionID := ""
+	if msg.Interaction != nil {
+		// Phase 4B: the structured interaction ID is persisted with the
+		// message before any business decision (classified, then handed off).
+		interactionID = msg.Interaction.ID
+		content["interaction"] = map[string]any{"kind": msg.Interaction.Kind, "id": msg.Interaction.ID, "title": msg.Interaction.Title}
+	}
 	metadata := map[string]any{}
 	if msg.ProfileName != "" {
 		metadata["profile_name"] = msg.ProfileName
@@ -353,6 +360,7 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 		Type:           msg.Type,
 		Text:           msg.Text,
 		Media:          mediaRef,
+		InteractionID:  interactionID,
 	})
 }
 

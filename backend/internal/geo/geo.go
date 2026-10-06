@@ -128,3 +128,59 @@ var NigeriaPilot = []Entry{
 	{Aliases: []string{"Rivers", "Rivers State"}, State: "Rivers", Region: "South-South", Country: "NG"},
 	{Aliases: []string{"Delta", "Delta State"}, State: "Delta", Region: "South-South", Country: "NG"},
 }
+
+// Within reports the narrowest level at which the viewer lies inside the
+// origin's area, and false when the two places cannot be related (different
+// countries, or an unresolved place whose raw text differs). Pure.
+//
+// The origin's area is the narrowest level the origin was given at: an
+// origin "GRA, Benin City" has the community GRA as its area; an origin
+// "Benin City" has the whole city as its area; "Edo" the whole state. A
+// viewer inside that area is at EXACT_AREA (or COMMUNITY). A viewer described
+// less precisely than the origin (e.g. only "Benin City" against an origin
+// "GRA, Benin City") is never assumed to be inside the narrower area: it is
+// related at the narrowest level both places state (CITY here).
+func Within(origin, viewer Place) (Level, bool) {
+	if origin.Raw != "" && Compact(origin.Raw) == Compact(viewer.Raw) {
+		return LevelExactArea, true
+	}
+	if !origin.Resolved || !viewer.Resolved {
+		return "", false
+	}
+	same := func(a, b string) bool { return a != "" && b != "" && Compact(a) == Compact(b) }
+	sameParent := same(origin.City, viewer.City) || (origin.City == "" && viewer.City == "" && same(origin.State, viewer.State))
+	switch {
+	case origin.Community != "":
+		if same(origin.Community, viewer.Community) && sameParent {
+			return LevelCommunity, true
+		}
+	case origin.LGA != "":
+		if same(origin.LGA, viewer.LGA) && same(origin.State, viewer.State) {
+			return LevelLGA, true
+		}
+	case origin.City != "":
+		if same(origin.City, viewer.City) {
+			return LevelExactArea, true // the origin area IS the city
+		}
+	case origin.State != "":
+		if same(origin.State, viewer.State) {
+			return LevelExactArea, true // the origin area IS the state
+		}
+	}
+	if same(origin.LGA, viewer.LGA) && same(origin.State, viewer.State) {
+		return LevelLGA, true
+	}
+	if same(origin.City, viewer.City) {
+		return LevelCity, true
+	}
+	if same(origin.State, viewer.State) {
+		return LevelState, true
+	}
+	if same(origin.Region, viewer.Region) {
+		return LevelRegion, true
+	}
+	if same(origin.Country, viewer.Country) {
+		return LevelCountry, true
+	}
+	return "", false
+}

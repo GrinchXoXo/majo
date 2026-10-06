@@ -981,3 +981,7 @@ func TestFunnel_UnknownDimensionsAreOmittedNotGuessed(t *testing.T) {
 		}
 	}
 }
+
+func (r reqRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
+	return nil, nil
+}

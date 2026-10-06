@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -81,6 +82,43 @@ type Config struct {
 	SupplyGeoNearbyDays int
 	SupplyGeoStateDays  int
 	SupplyGeoRegionDays int
+
+	// --- Phase 4B: Discovery & Distribution (all [PARAM]; validated by
+	// distribution.Config.Validate at startup) ---
+	//
+	// DiscoveryMode is the feature gate: OFF (default) or INTERNAL (staff
+	// test recipients only). CONTROLLED_PILOT and ON are Phase 4C+ and are
+	// refused at startup.
+	DiscoveryMode string
+	// DiscoveryInternalRecipients: the only channel addresses (wa_ids) that
+	// may receive discovery while INTERNAL. Comma-separated.
+	DiscoveryInternalRecipients []string
+	DiscoveryArms               []string
+	// Frequency caps and dedupe.
+	DiscoveryMaxDeliveriesPerBuyer int
+	DiscoveryCapPeriod             time.Duration
+	DiscoveryExposureWindow        time.Duration
+	DiscoveryListingsPerDelivery   int
+	// DiscoveryDeliveryWindow "HH:MM-HH:MM" in DiscoveryTimezone ("" = any time).
+	DiscoveryDeliveryWindow string
+	DiscoveryTimezone       string
+	// DiscoveryInteractionTTL: taps on a delivery older than this are expired.
+	DiscoveryInteractionTTL time.Duration
+	// DiscoveryNegativeWindow: how long "not interested" suppresses a category.
+	DiscoveryNegativeWindow time.Duration
+	// Approved template for buyers outside the 24h window ("" = none).
+	DiscoveryTemplateName     string
+	DiscoveryTemplateLanguage string
+	// DiscoveryConsentWording is the current opt-in wording version.
+	DiscoveryConsentWording string
+	// DiscoveryEnquiryConfirmation: how "Ask about it" requests become
+	// CONFIRMED (Lock §O-1): "operator" (default) or "auto".
+	DiscoveryEnquiryConfirmation string
+	// DiscoveryRankingWeights overrides discovery weights ("key=value,...").
+	DiscoveryRankingWeights string
+	// DiscoveryOutboundMediaTTL: how long an uploaded outbound media ID is
+	// reused before re-uploading the stored asset.
+	DiscoveryOutboundMediaTTL time.Duration
 }
 
 // Load reads configuration from environment variables.
@@ -150,6 +188,41 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 	}
+
+	cfg.DiscoveryMode = getEnv("DISCOVERY_MODE", "OFF")
+	cfg.DiscoveryInternalRecipients = splitList(os.Getenv("DISCOVERY_INTERNAL_RECIPIENTS"))
+	cfg.DiscoveryArms = splitList(getEnv("DISCOVERY_ARMS", "ARM_A,ARM_B"))
+	cfg.DiscoveryDeliveryWindow = os.Getenv("DISCOVERY_DELIVERY_WINDOW")
+	cfg.DiscoveryTimezone = getEnv("DISCOVERY_TIMEZONE", "Africa/Lagos")
+	cfg.DiscoveryTemplateName = os.Getenv("DISCOVERY_TEMPLATE_NAME")
+	cfg.DiscoveryTemplateLanguage = getEnv("DISCOVERY_TEMPLATE_LANGUAGE", "en")
+	cfg.DiscoveryConsentWording = getEnv("DISCOVERY_CONSENT_WORDING", "v1")
+	cfg.DiscoveryEnquiryConfirmation = getEnv("DISCOVERY_ENQUIRY_CONFIRMATION", "operator")
+	cfg.DiscoveryRankingWeights = os.Getenv("DISCOVERY_RANKING_WEIGHTS")
+	discoveryDurs := []struct {
+		key  string
+		def  time.Duration
+		dest *time.Duration
+	}{
+		{"DISCOVERY_CAP_PERIOD", 72 * time.Hour, &cfg.DiscoveryCapPeriod},
+		{"DISCOVERY_EXPOSURE_WINDOW", 14 * 24 * time.Hour, &cfg.DiscoveryExposureWindow},
+		{"DISCOVERY_INTERACTION_TTL", 7 * 24 * time.Hour, &cfg.DiscoveryInteractionTTL},
+		{"DISCOVERY_NEGATIVE_WINDOW", 30 * 24 * time.Hour, &cfg.DiscoveryNegativeWindow},
+		{"DISCOVERY_OUTBOUND_MEDIA_TTL", 25 * 24 * time.Hour, &cfg.DiscoveryOutboundMediaTTL},
+	}
+	for _, d := range discoveryDurs {
+		if *d.dest, err = getDuration(d.key, d.def); err != nil {
+			return nil, err
+		}
+	}
+	var perBuyer, perDelivery int64
+	if perBuyer, err = getInt("DISCOVERY_MAX_DELIVERIES_PER_BUYER", 1); err != nil {
+		return nil, err
+	}
+	if perDelivery, err = getInt("DISCOVERY_LISTINGS_PER_DELIVERY", 3); err != nil {
+		return nil, err
+	}
+	cfg.DiscoveryMaxDeliveriesPerBuyer, cfg.DiscoveryListingsPerDelivery = int(perBuyer), int(perDelivery)
 
 	days := []struct {
 		key  string
@@ -229,6 +302,17 @@ func getDuration(key string, fallback time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a positive duration like 30s or 5m, got %q", key, v)
 	}
 	return d, nil
+}
+
+// splitList parses a comma-separated list, dropping blanks.
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func getEnv(key, fallback string) string {

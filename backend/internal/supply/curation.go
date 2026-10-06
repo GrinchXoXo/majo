@@ -730,3 +730,46 @@ func (s *ListingService) Verify(ctx context.Context, listingID uuid.UUID, note *
 		}, nil
 	})
 }
+
+// ReconfirmFromVendor records that the listing's vendor re-confirmed
+// availability in reply to a listing-origin VendorRequest (Phase 4B): the
+// freshness reference (last_verified_at) moves; the lifecycle ceiling never
+// does, and an expired, closed or another vendor's listing is never touched.
+// This is the reconfirmation path stale -> reconfirmed -> fresh.
+func (s *ListingService) ReconfirmFromVendor(ctx context.Context, listingID, vendorID, vendorResponseID uuid.UUID) (*Listing, error) {
+	return s.listings.Curate(ctx, listingID, func(cur *Listing) (*CurationChange, error) {
+		if cur.VendorID != vendorID {
+			return nil, ErrInvalidTransition{Op: "reconfirm (other vendor)", From: cur.Status}
+		}
+		if cur.Status != ListingActive && cur.Status != ListingPaused {
+			return nil, ErrInvalidTransition{Op: "reconfirm", From: cur.Status}
+		}
+		at := time.Now().UTC().Truncate(time.Microsecond)
+		if !at.Before(cur.ExpiresAt) {
+			return nil, ErrLifecycleExpired
+		}
+		id := cur.ID
+		prev := map[string]any{"last_verified_at": nil}
+		if cur.LastVerifiedAt != nil {
+			prev["last_verified_at"] = cur.LastVerifiedAt.UTC().Format(time.RFC3339Nano)
+		}
+		vid := vendorID
+		return &CurationChange{
+			Verify: true, At: at,
+			Audit: &audit.Entry{
+				ActorType: "VENDOR", ActorID: &vid, Action: "SUPPLY_LISTING_VERIFIED",
+				EntityType: "supply_listing", EntityID: &id, PreviousValue: prev,
+				NewValue: map[string]any{"last_verified_at": at.Format(time.RFC3339Nano), "source": "vendor_reconfirmation",
+					"vendor_response_id": vendorResponseID.String()},
+				Metadata: map[string]any{"public_reference": cur.PublicReference, "status": string(cur.Status)},
+			},
+			Event: &event.Event{
+				EventType: event.SupplyListingVerified, EntityType: "supply_listing", EntityID: &id,
+				ActorType: event.ActorVendor, ActorID: &vid,
+				Payload: map[string]any{"public_reference": cur.PublicReference, "source": "vendor_reconfirmation",
+					"verification": "vendor_reconfirmation", "vendor_response_id": vendorResponseID.String(),
+					"verified_at": at.Format(time.RFC3339), "lifecycle_expires_at": cur.ExpiresAt.UTC().Format(time.RFC3339)},
+			},
+		}, nil
+	})
+}

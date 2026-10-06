@@ -176,3 +176,7 @@ func TestReplyContext_FollowUpsAfterAReplyAreNotSupply(t *testing.T) {
 		t.Fatalf("10 minutes later a photo is proactive supply, got %v %s", ok, reason)
 	}
 }
+
+func (r *productRequestRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
+	return nil, nil
+}
