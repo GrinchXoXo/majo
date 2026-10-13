@@ -156,3 +156,24 @@ type DeliveryRecorder interface {
 	// (e.g. sent before §23A).
 	ApplyDeliveryStatus(ctx context.Context, externalMessageID, status string, at time.Time, errDetail string) (*DeliveryTransition, error)
 }
+
+// OutboundFailure is a delivery failure the provider reported AFTER it had
+// accepted the message (delivery-status webhook, Phase 4C hardening). The
+// runtime classifies it like a synchronous rejection.
+type OutboundFailure struct {
+	MessageID      uuid.UUID
+	ConversationID uuid.UUID
+	Kind           string // OutboundPurpose.Kind
+	EntityType     string
+	EntityID       *uuid.UUID
+	Metadata       map[string]any
+	Text           string // the message text, when it was a text message
+	Code           int    // provider error code (0 = none given)
+	Title          string
+	At             time.Time
+}
+
+// OutboundFailureListener is told about OutboundFailures.
+type OutboundFailureListener interface {
+	OutboundFailed(ctx context.Context, f OutboundFailure)
+}

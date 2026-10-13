@@ -36,6 +36,8 @@ UPLOAD_LOG = os.environ.get("UPLOAD_LOG", "uploads.jsonl")
 # Phase 4C correction: scripted transient failures. FAIL_PLAN is a JSON file
 # {"<recipient>": [503, 503]}: each send to that recipient pops one status
 # and fails with it (an empty list = succeed). Used to prove automatic retry.
+# Phase 4C hardening: an entry may be "400:131047" (HTTP status : Meta error
+# code) to script a specific provider error, e.g. the 24h window.
 FAIL_PLAN = os.environ.get("FAIL_PLAN", "")
 
 
@@ -52,7 +54,10 @@ def planned_failure(to):
     code = codes.pop(0)
     plan[to] = codes
     json.dump(plan, open(FAIL_PLAN, "w"))
-    return int(code)
+    if isinstance(code, str) and ":" in code:
+        st, meta = code.split(":", 1)
+        return (int(st), int(meta))
+    return (int(code), 1)
 FAIL_UPLOADS = os.environ.get("FAIL_UPLOADS", "") == "1"
 
 
@@ -75,9 +80,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         to = body.get("to", "")
         planned = planned_failure(to)
         if planned:
+            status, meta_code = planned
             with open(LOG, "a") as f:
-                f.write(json.dumps({"path": self.path, "to": to, "failed": True, "planned": planned, "wamid": "", "body": body}) + "\n")
-            return self._json(planned, {"error": {"message": "scripted transient failure", "code": 1}})
+                f.write(json.dumps({"path": self.path, "to": to, "failed": True, "planned": status, "code": meta_code, "wamid": "", "body": body}) + "\n")
+            return self._json(status, {"error": {"message": f"(#{meta_code}) scripted failure", "code": meta_code}})
         failed = to in FAIL
         wamid = "" if failed else "wamid.fake." + uuid.uuid4().hex
         with open(LOG, "a") as f:

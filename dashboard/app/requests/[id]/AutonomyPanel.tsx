@@ -1,23 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { getRequestAutonomy, type RequestAutonomy } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { getRequestAutonomy, pauseRequest, resumeRequest, type RequestAutonomy } from "@/lib/api";
 
-// Phase 4C correction: what Majo decided for this request and why (typed
-// decision -> policy -> outcome), the questions it asked, and any exception
-// that needs the control plane. Read-only; needs the operator token.
+// Phase 4C correction + hardening: what Majo decided for this request and
+// why (typed decision -> policy -> outcome), the questions it asked, what it
+// sent (and whether it was delivered, failed, or is waiting for a compliant
+// route), any exception that needs the control plane, and the operator's
+// pause / resume. Needs the operator token.
 export default function AutonomyPanel({ requestId, refreshKey }: { requestId: string; refreshKey?: number }) {
   const [data, setData] = useState<RequestAutonomy | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [actionErr, setActionErr] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     getRequestAutonomy(requestId)
       .then((d) => {
         setData(d);
         setErr(null);
       })
       .catch((e) => setErr(e instanceof Error ? e.message : "could not load decisions"));
-  }, [requestId, refreshKey]);
+  }, [requestId]);
+
+  useEffect(() => {
+    load();
+  }, [load, refreshKey]);
 
   const box: React.CSSProperties = { border: "1px solid #c7d2fe", background: "#eef2ff", borderRadius: 8, padding: 12, marginBottom: 20 };
   if (err) {
@@ -30,15 +38,80 @@ export default function AutonomyPanel({ requestId, refreshKey }: { requestId: st
   }
   if (!data) return null;
   const open = data.exceptions.filter((e) => e.status === "OPEN");
+  const activeHold = (data.holds ?? []).find((h) => !h.released_at);
+  const pending = (data.pending_notices ?? []).filter((n) => n.status === "PENDING");
+
+  const act = async (pause: boolean) => {
+    setActionErr(null);
+    if (!reason.trim()) {
+      setActionErr("A reason is required (it is audited).");
+      return;
+    }
+    try {
+      if (pause) await pauseRequest(requestId, reason.trim());
+      else await resumeRequest(requestId, reason.trim());
+      setReason("");
+      load();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : "failed");
+    }
+  };
+
   return (
     <section style={box} aria-label="Majo decisions">
-      <strong style={{ fontSize: "0.85em", color: "#3730a3" }}>MAJO (AUTONOMOUS) — decisions, questions, exceptions</strong>
-      {open.length > 0 ? (
+      <strong style={{ fontSize: "0.85em", color: "#3730a3" }}>MAJO (AUTONOMOUS) — decisions, messages, questions, exceptions</strong>
+      {activeHold ? (
+        <p style={{ color: "#b45309", fontSize: "0.9em", margin: "6px 0" }} data-testid="hold-status">
+          PAUSED by {activeHold.held_by}: {activeHold.reason}. Majo takes no automatic step for this request until it is resumed.
+        </p>
+      ) : open.length > 0 ? (
         <p style={{ color: "crimson", fontSize: "0.9em", margin: "6px 0" }}>
           {open.length} open exception(s) need the control plane: {open.map((e) => `${e.class} · ${e.reason}`).join("; ")}
         </p>
       ) : (
         <p style={{ color: "#15803d", fontSize: "0.9em", margin: "6px 0" }}>No exception: Majo handles this request without an operator.</p>
+      )}
+      <div style={{ display: "flex", gap: 8, margin: "6px 0" }}>
+        <input
+          aria-label="Pause or resume reason"
+          placeholder="Reason (required)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          style={{ flex: 1, padding: 6 }}
+        />
+        {activeHold ? (
+          <button onClick={() => act(false)} style={{ padding: "6px 12px" }}>
+            Resume automation
+          </button>
+        ) : (
+          <button onClick={() => act(true)} style={{ padding: "6px 12px" }}>
+            Pause automation
+          </button>
+        )}
+      </div>
+      {actionErr && <p style={{ color: "crimson", fontSize: "0.85em" }}>{actionErr}</p>}
+      {pending.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: "0.8em", color: "#555", fontWeight: 600 }}>WAITING TO BE DELIVERED</div>
+          {pending.map((n) => (
+            <div key={n.id} style={{ fontSize: "0.85em", margin: "4px 0" }}>
+              {n.kind} · blocked by {n.failure_class}
+              {n.failure_code ? ` (${n.failure_code})` : ""} · {n.attempts} attempt(s) — goes out when the buyer next writes
+            </div>
+          ))}
+        </div>
+      )}
+      {(data.messages ?? []).length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: "0.8em", color: "#555", fontWeight: 600 }}>MESSAGES SENT</div>
+          {(data.messages ?? []).map((m) => (
+            <div key={m.message_id} style={{ fontSize: "0.85em", margin: "4px 0" }}>
+              <code>{new Date(m.sent_at).toLocaleTimeString()}</code> {m.kind} →{" "}
+              <strong style={{ color: m.delivery_status === "failed" ? "crimson" : "#111" }}>{m.delivery_status}</strong>
+              {m.error ? ` · ${m.error}` : ""}
+            </div>
+          ))}
+        </div>
       )}
       {data.clarifications.length > 0 && (
         <div style={{ marginTop: 8 }}>

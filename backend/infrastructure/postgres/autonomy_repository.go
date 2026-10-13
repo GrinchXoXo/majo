@@ -556,6 +556,9 @@ func (r *AutonomyRepository) Metrics(ctx context.Context, since *time.Time) (*au
 		}); err != nil {
 		return nil, err
 	}
+	if err := r.hardeningMetrics(ctx, m, from); err != nil {
+		return nil, err
+	}
 	return m, nil
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/middleman/backend/infrastructure/postgres"
 	"github.com/middleman/backend/infrastructure/storage"
 	"github.com/middleman/backend/infrastructure/whatsapp"
+	"github.com/middleman/backend/internal/autonomy"
 	"github.com/middleman/backend/internal/config"
 	"github.com/middleman/backend/internal/conversation"
 	"github.com/middleman/backend/internal/discovery"
@@ -188,12 +189,17 @@ func main() {
 		Store: autonomyRepo, Context: workflowRepo, Requests: requestService, ReqRepo: requestRepo, Router: routingService,
 		Routes: routingRepo, Listings: listingRepo, Vendors: vendorRepo, Extractor: aiProvider, Messenger: outbound, Convs: convRepo,
 		Policy: supplyPolicy, Jobs: jobStore, Events: eventWriter, Logger: logger, Async: jobRunner.Enqueue,
+		// Phase 4C hardening: vendor-request deadlines and recovery, queued
+		// buyer notices, operator holds, provider-reported failures.
+		VendorRequests: routingRepo, Recovery: workflowRepo, Notices: autonomyRepo, Holds: autonomyRepo, OfferReverter: offerRepo,
 	})
 	requestService.SetListener(engine)
 	routingService.SetAutonomy(&routing.VendorAutonomy{Flags: cfg.AutonomyFlags, Params: cfg.AutonomyParams, Store: autonomyRepo,
 		Repo: routingRepo, Quoted: convRepo})
 	routingService.SetSendFailureListener(engine)
+	routingService.SetLifecycleListener(engine)
 	offerDelivery.SetFailureListener(engine)
+	offerDelivery.SetAutomationHooks(engine)
 	engine.SetOfferDeliverer(func(ctx context.Context, id uuid.UUID) error {
 		_, err := offerDelivery.DeliverPendingOffers(ctx, id)
 		return err
@@ -229,7 +235,8 @@ func main() {
 	} else if n > 0 {
 		logger.Info("media backfill enqueued downloads", "count", n)
 	}
-	engine.Recover(ctx) // requests left mid-flow by a restart continue
+	engine.Recover(ctx)         // requests left mid-flow by a restart continue
+	engine.RecoverTimeouts(ctx) // vendor-request deadlines missing or passed while down
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
@@ -294,6 +301,7 @@ func main() {
 		cfg.WhatsAppVerifyToken, cfg.AllowUnsignedWebhooks, logger,
 	)
 	webhookHandler.SetMediaIngestion(mediaIngestor)
+	webhookHandler.SetOutboundFailureListener(engine) // provider-reported failures are classified and recovered
 	mux.Handle("/webhooks/whatsapp", webhookHandler)
 
 	// Phase 4C correction: every operator override of the autonomous loop
@@ -378,11 +386,14 @@ func main() {
 
 	autonomyHandlers := httpserver.NewAutonomyHandlers(cfg.AutonomyFlags, cfg.AutonomyParams, autonomyRepo, autonomyRepo, eventWriter, logger)
 	autonomyHandlers.SetReadvancer(engine)
+	autonomyHandlers.SetControl(engine, messageTrail{workflowRepo, autonomyRepo})
 	mux.HandleFunc("GET /api/autonomy/settings", operatorAuth.Require(autonomyHandlers.Settings))
 	mux.HandleFunc("GET /api/autonomy/metrics", operatorAuth.Require(autonomyHandlers.Metrics))
 	mux.HandleFunc("GET /api/autonomy/exceptions", operatorAuth.Require(autonomyHandlers.Exceptions))
 	mux.HandleFunc("POST /api/autonomy/exceptions/{id}/resolve", operatorAuth.Require(autonomyHandlers.ResolveException))
 	mux.HandleFunc("GET /api/requests/{id}/autonomy", operatorAuth.Require(autonomyHandlers.Request))
+	mux.HandleFunc("POST /api/requests/{id}/pause", operatorAuth.Require(autonomyHandlers.Pause))
+	mux.HandleFunc("POST /api/requests/{id}/resume", operatorAuth.Require(autonomyHandlers.Resume))
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)
 	mux.HandleFunc("GET /api/transactions/{id}", transactionHandlers.Get)
@@ -437,4 +448,19 @@ type listingPublisher struct {
 
 func (p listingPublisher) VendorTrust(ctx context.Context, vendorID uuid.UUID) (workflow.VendorTrust, error) {
 	return p.trust.VendorTrust(ctx, vendorID)
+}
+
+// messageTrail joins the request's message trail (workflow repository) with
+// its holds and queued notices (autonomy repository) for the operator view.
+type messageTrail struct {
+	*postgres.WorkflowRepository
+	autonomy *postgres.AutonomyRepository
+}
+
+func (t messageTrail) Holds(ctx context.Context, id uuid.UUID) ([]*autonomy.Hold, error) {
+	return t.autonomy.Holds(ctx, id)
+}
+
+func (t messageTrail) NoticesForRequest(ctx context.Context, id uuid.UUID) ([]*autonomy.Notice, error) {
+	return t.autonomy.NoticesForRequest(ctx, id)
 }

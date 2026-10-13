@@ -175,6 +175,20 @@ const (
 	// WorkflowExceptionRaised / Resolved: the operator exception queue.
 	WorkflowExceptionRaised   Type = "WORKFLOW_EXCEPTION_RAISED"
 	WorkflowExceptionResolved Type = "WORKFLOW_EXCEPTION_RESOLVED"
+	// Phase 4C hardening.
+	// RequestRecovered: every contacted vendor went quiet / could not be
+	// reached / declined; payload says what Majo did (re-route, ask, tell).
+	RequestRecovered Type = "REQUEST_RECOVERY_DECIDED"
+	// BuyerNoticeQueued / BuyerNoticeSent: a buyer update that could not be
+	// delivered was kept for a compliant later route, then delivered.
+	BuyerNoticeQueued Type = "BUYER_NOTICE_QUEUED"
+	BuyerNoticeSent   Type = "BUYER_NOTICE_SENT"
+	// OutboundDeliveryFailed: the provider reported an accepted message as
+	// failed (delivery-status webhook), classified.
+	OutboundDeliveryFailed Type = "OUTBOUND_DELIVERY_FAILED_CLASSIFIED"
+	// WorkflowHeld / WorkflowResumed: operator pause of one request.
+	WorkflowHeld    Type = "WORKFLOW_HELD"
+	WorkflowResumed Type = "WORKFLOW_RESUMED"
 )
 
 // ActorType identifies who/what caused an event.

@@ -716,6 +716,50 @@ export type AutonomyMetrics = {
   open_exceptions: number;
   exceptions_by_reason: Record<string, number>;
   decisions: Record<string, number>;
+  // Phase 4C hardening: one level each, explicit denominators.
+  workflow?: {
+    started: number;
+    completed: Rate;
+    completed_autonomously: Rate;
+    requiring_clarification: Rate;
+    escalated_to_operator: Rate;
+    operator_performed_step: Rate;
+    held: Rate;
+    ended_without_offer: Rate;
+    abandoned: Rate;
+    pending: Rate;
+  };
+  questions?: {
+    delivered: number;
+    messages_sent: number;
+    answered: Rate;
+    resolved: Rate;
+    re_asked: Rate;
+    expired_or_gave_up: Rate;
+    superseded: Rate;
+    open: number;
+    undelivered_closed: number;
+  };
+  recovery?: {
+    delivery_retries: Rate;
+    delivery_retries_failed: number;
+    vendor_requests_expired: number;
+    recovery_decisions: Record<string, number>;
+    rerouted: number;
+    reroute_led_to_offer: Rate;
+    duplicate_actions_prevented: number;
+  };
+  delivery?: {
+    policy_blocked: number;
+    notices_queued: number;
+    notices_delivered: number;
+    notices_pending: number;
+    notices_cancelled: number;
+    provider_failures_reported_async: number;
+    system_exceptions: number;
+    safety_exceptions: number;
+  };
+  definitions?: Record<string, string>;
 };
 
 export type AutonomySettings = {
@@ -768,7 +812,49 @@ export type Clarification = {
   resolved_at: string | null;
 };
 
-export type RequestAutonomy = { decisions: WorkflowDecision[]; clarifications: Clarification[]; exceptions: WorkflowException[] };
+export type WorkflowHold = {
+  id: string;
+  held_by: string;
+  reason: string;
+  held_at: string;
+  released_by?: string;
+  release_reason?: string;
+  released_at: string | null;
+};
+
+export type PendingNotice = {
+  id: string;
+  kind: string;
+  body: string;
+  status: string;
+  failure_class: string;
+  failure_code: number;
+  attempts: number;
+  created_at: string;
+  sent_at: string | null;
+};
+
+export type TrailMessage = {
+  message_id: string;
+  kind: string;
+  entity_type: string;
+  delivery_status: string;
+  sent_at: string;
+  delivered_at: string | null;
+  read_at: string | null;
+  failed_at: string | null;
+  error: string;
+  text: string;
+};
+
+export type RequestAutonomy = {
+  decisions: WorkflowDecision[];
+  clarifications: Clarification[];
+  exceptions: WorkflowException[];
+  messages?: TrailMessage[];
+  holds?: WorkflowHold[];
+  pending_notices?: PendingNotice[];
+};
 
 export const getAutonomySettings = () => operatorCall<AutonomySettings>("/api/autonomy/settings");
 export const getAutonomyMetrics = () => operatorCall<AutonomyMetrics>("/api/autonomy/metrics");
@@ -776,3 +862,7 @@ export const getExceptions = (status = "OPEN") => operatorCall<WorkflowException
 export const resolveException = (id: string, resolution: string) =>
   operatorCall<{ resolved: boolean }>(`/api/autonomy/exceptions/${id}/resolve`, "POST", { resolution });
 export const getRequestAutonomy = (id: string) => operatorCall<RequestAutonomy>(`/api/requests/${id}/autonomy`);
+export const pauseRequest = (id: string, reason: string) =>
+  operatorCall<{ held: boolean; already_held: boolean }>(`/api/requests/${id}/pause`, "POST", { reason });
+export const resumeRequest = (id: string, reason: string) =>
+  operatorCall<{ resumed: boolean }>(`/api/requests/${id}/resume`, "POST", { reason });

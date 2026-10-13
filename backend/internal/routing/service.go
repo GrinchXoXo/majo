@@ -72,6 +72,7 @@ type Service struct {
 	// behaviour) and the send-failure hook used for automatic retry.
 	auto         *VendorAutonomy
 	sendFailures SendFailureListener
+	lifecycle    LifecycleListener
 }
 
 // SendFailureListener is told when a VendorRequest message is rejected by
@@ -83,6 +84,18 @@ type SendFailureListener interface {
 
 // SetSendFailureListener wires automatic delivery recovery.
 func (s *Service) SetSendFailureListener(l SendFailureListener) { s.sendFailures = l }
+
+// LifecycleListener is told when a vendor request starts awaiting a reply
+// (it was sent) and when it stopped awaiting one because it expired
+// (Phase 4C hardening: the autonomous runtime schedules the deadline and
+// recovers the buyer's request; recording an expiry alone does nothing).
+type LifecycleListener interface {
+	VendorRequestSent(ctx context.Context, vr *VendorRequest)
+	VendorRequestExpired(ctx context.Context, vr *VendorRequest)
+}
+
+// SetLifecycleListener wires vendor-request deadlines.
+func (s *Service) SetLifecycleListener(l LifecycleListener) { s.lifecycle = l }
 
 // ListingLookup reads a listing (supply.ListingRepository implements it).
 type ListingLookup interface {
@@ -362,6 +375,9 @@ func (s *Service) RouteAs(ctx context.Context, req *request.BuyerRequest, vendor
 			}
 			vr.Status = VendorRequestSent
 			_ = s.vendors.RecordRequestSent(ctx, vendorID)
+			if s.lifecycle != nil {
+				s.lifecycle.VendorRequestSent(ctx, vr)
+			}
 		}
 
 		// Funnel: one VENDORS_ROUTED per VendorRequest created; outcome

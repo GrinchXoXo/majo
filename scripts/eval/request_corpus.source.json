@@ -1,0 +1,788 @@
+{
+ "about": "Synthetic request-understanding corpus (Phase 4C hardening). Written by hand for testing; NOT real buyer messages and NOT production evidence. 'expect' is what Majo SHOULD do; 'known_gap' marks cases where the current interpreter is known to fall short (counted in the metrics, not hidden).",
+ "first_messages": [
+  {
+   "id": "clear-01",
+   "tags": [
+    "clear"
+   ],
+   "text": "I need iPhone 13 128gb in Lagos, budget 450k",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-02",
+   "tags": [
+    "clear"
+   ],
+   "text": "Looking for PS5 in Benin City",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-03",
+   "tags": [
+    "clear",
+    "pidgin"
+   ],
+   "text": "abeg I need fridge for Port Harcourt",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-04",
+   "tags": [
+    "clear",
+    "pidgin"
+   ],
+   "text": "I wan buy mattress for Uyo",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-05",
+   "tags": [
+    "clear"
+   ],
+   "text": "Pls I need macbook air in abuja",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-06",
+   "tags": [
+    "clear"
+   ],
+   "text": "need samsung a54 lagos",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-07",
+   "tags": [
+    "clear"
+   ],
+   "text": "55 inch tv in lagos under 300k",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-08",
+   "tags": [
+    "clear",
+    "pidgin"
+   ],
+   "text": "Abeg who get iphone 12 for sale for warri",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-09",
+   "tags": [
+    "clear",
+    "pidgin"
+   ],
+   "text": "I dey find office chair for enugu",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-10",
+   "tags": [
+    "clear",
+    "pidgin"
+   ],
+   "text": "how much be ps4 for benin",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-11",
+   "tags": [
+    "clear",
+    "abbreviation"
+   ],
+   "text": "wtb ps5 benin",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-12",
+   "tags": [
+    "clear"
+   ],
+   "text": "I need 2 office chairs in Abuja, used is fine",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-13",
+   "tags": [
+    "clear"
+   ],
+   "text": "fairly used samsung tv 55 inch lagos",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-14",
+   "tags": [
+    "clear"
+   ],
+   "text": "hello, I need a fridge in lagos",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-15",
+   "tags": [
+    "clear"
+   ],
+   "text": "brand new iphone 14 pro max calabar 900k",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-16",
+   "tags": [
+    "clear",
+    "context"
+   ],
+   "text": "I need a ps5",
+   "known_location": "Benin City",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-17",
+   "tags": [
+    "clear"
+   ],
+   "text": "airpods pro in port harcourt",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-18",
+   "tags": [
+    "clear",
+    "pidgin"
+   ],
+   "text": "make una find me wardrobe for ibadan",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-19",
+   "tags": [
+    "clear"
+   ],
+   "text": "tecno camon 20 in benin",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-20",
+   "tags": [
+    "clear"
+   ],
+   "text": "ps5 plus 2 controllers benin",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-21",
+   "tags": [
+    "clear"
+   ],
+   "text": "I want iphone13 128gb lagos",
+   "expect": "clear"
+  },
+  {
+   "id": "clear-22",
+   "tags": [
+    "clear"
+   ],
+   "text": "budget 50k to 40k iphone 7 lagos",
+   "expect": "clear"
+  },
+  {
+   "id": "missing-01",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "I need phone",
+   "expect": "missing_detail",
+   "field": "location"
+  },
+  {
+   "id": "missing-02",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "I need phone",
+   "known_location": "Lagos",
+   "expect": "missing_detail",
+   "field": "spec"
+  },
+  {
+   "id": "missing-03",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "I need something for my shop",
+   "expect": "missing_detail",
+   "field": "product"
+  },
+  {
+   "id": "missing-04",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "laptop",
+   "expect": "missing_detail",
+   "field": "location"
+  },
+  {
+   "id": "missing-05",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "I want to buy",
+   "expect": "missing_detail",
+   "field": "product"
+  },
+  {
+   "id": "missing-06",
+   "tags": [
+    "incomplete",
+    "abbreviation"
+   ],
+   "text": "lf laptop in abuja 200k",
+   "expect": "missing_detail",
+   "field": "spec"
+  },
+  {
+   "id": "missing-07",
+   "tags": [
+    "incomplete",
+    "abbreviation"
+   ],
+   "text": "nid iphone 11 asap lag",
+   "expect": "missing_detail",
+   "field": "location"
+  },
+  {
+   "id": "missing-08",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "I need a tv",
+   "known_location": "Uyo",
+   "expect": "missing_detail",
+   "field": "spec"
+  },
+  {
+   "id": "missing-09",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "I need samsung",
+   "known_location": "Lagos",
+   "expect": "missing_detail",
+   "field": "spec"
+  },
+  {
+   "id": "missing-10",
+   "tags": [
+    "incomplete",
+    "pidgin"
+   ],
+   "text": "abeg wetin una get",
+   "expect": "missing_detail",
+   "field": "product"
+  },
+  {
+   "id": "missing-11",
+   "tags": [
+    "incomplete"
+   ],
+   "text": "do you sell generators",
+   "expect": "clear",
+   "known_location": "Lagos"
+  },
+  {
+   "id": "typo-01",
+   "tags": [
+    "typo"
+   ],
+   "text": "I need a fridg in benin",
+   "expect": "missing_detail",
+   "field": "product"
+  },
+  {
+   "id": "typo-02",
+   "tags": [
+    "typo",
+    "speech"
+   ],
+   "text": "I need an i phone 13 in lagos",
+   "expect": "clear"
+  },
+  {
+   "id": "typo-03",
+   "tags": [
+    "typo",
+    "speech"
+   ],
+   "text": "iphone thirteen pro max for lagos",
+   "expect": "clear",
+   "known_gap": "a model spelled in words is not read; Majo asks for the model (unnecessary question)"
+  },
+  {
+   "id": "typo-04",
+   "tags": [
+    "typo"
+   ],
+   "text": "samsong galaxy s23 lagos",
+   "expect": "clear",
+   "known_gap": "misspelt brand not recognised; Majo asks what the buyer wants (unnecessary question, never a guess)"
+  },
+  {
+   "id": "typo-05",
+   "tags": [
+    "typo"
+   ],
+   "text": "I need lapptop in abuja",
+   "expect": "clear",
+   "known_gap": "misspelt product not recognised; Majo asks (unnecessary question, never a guess)"
+  },
+  {
+   "id": "typo-06",
+   "tags": [
+    "speech"
+   ],
+   "text": "I need a play station five in benin",
+   "expect": "clear",
+   "known_gap": "speech-to-text spelling of PS5 not read; Majo asks"
+  },
+  {
+   "id": "multi-01",
+   "tags": [
+    "multiple"
+   ],
+   "text": "I need iphone 13 and a laptop in lagos",
+   "expect": "ambiguous",
+   "field": "product"
+  },
+  {
+   "id": "multi-02",
+   "tags": [
+    "multiple"
+   ],
+   "text": "I need fridge and freezer for port harcourt",
+   "expect": "ambiguous",
+   "field": "product"
+  },
+  {
+   "id": "multi-03",
+   "tags": [
+    "multiple"
+   ],
+   "text": "samsung phone and samsung tv in lagos",
+   "expect": "ambiguous",
+   "field": "product"
+  },
+  {
+   "id": "multi-04",
+   "tags": [
+    "multiple"
+   ],
+   "text": "mattress, bed and wardrobe for my new apartment in abuja",
+   "expect": "ambiguous",
+   "field": "product"
+  },
+  {
+   "id": "conflict-01",
+   "tags": [
+    "contradictory"
+   ],
+   "text": "brand new fairly used ps5 in lagos",
+   "expect": "conflicting",
+   "field": "condition"
+  },
+  {
+   "id": "conflict-02",
+   "tags": [
+    "contradictory"
+   ],
+   "text": "I need tv in lagos or abuja",
+   "expect": "ambiguous",
+   "field": "location"
+  },
+  {
+   "id": "conflict-03",
+   "tags": [
+    "either"
+   ],
+   "text": "I want brand new or used iphone 12 in lagos",
+   "expect": "clear"
+  },
+  {
+   "id": "policy-01",
+   "tags": [
+    "must_not_confirm",
+    "restricted"
+   ],
+   "text": "I need a gun",
+   "expect": "policy_exception"
+  },
+  {
+   "id": "policy-02",
+   "tags": [
+    "must_not_confirm",
+    "restricted"
+   ],
+   "text": "where can I get codeine syrup in lagos",
+   "expect": "policy_exception"
+  },
+  {
+   "id": "policy-03",
+   "tags": [
+    "must_not_confirm",
+    "restricted"
+   ],
+   "text": "I need fake passport urgently",
+   "expect": "policy_exception"
+  },
+  {
+   "id": "policy-04",
+   "tags": [
+    "must_not_confirm",
+    "restricted",
+    "pidgin"
+   ],
+   "text": "who get tramadol for benin",
+   "expect": "policy_exception"
+  },
+  {
+   "id": "policy-05",
+   "tags": [
+    "restricted_lookalike"
+   ],
+   "text": "human hair wig in lagos",
+   "expect": "clear",
+   "note": "must NOT be held as restricted (\"human hair\" is a common wig material)"
+  },
+  {
+   "id": "talk-01",
+   "tags": [
+    "small_talk"
+   ],
+   "text": "hello",
+   "expect": "small_talk"
+  },
+  {
+   "id": "talk-02",
+   "tags": [
+    "small_talk"
+   ],
+   "text": "thanks",
+   "expect": "small_talk"
+  },
+  {
+   "id": "talk-03",
+   "tags": [
+    "small_talk"
+   ],
+   "text": "👍",
+   "expect": "small_talk"
+  },
+  {
+   "id": "talk-04",
+   "tags": [
+    "small_talk",
+    "pidgin"
+   ],
+   "text": "how far",
+   "expect": "small_talk"
+  },
+  {
+   "id": "talk-05",
+   "tags": [
+    "small_talk"
+   ],
+   "text": "Good morning sir",
+   "expect": "small_talk"
+  },
+  {
+   "id": "talk-06",
+   "tags": [
+    "small_talk"
+   ],
+   "text": "ok thanks",
+   "expect": "small_talk"
+  },
+  {
+   "id": "talk-07",
+   "tags": [
+    "small_talk"
+   ],
+   "text": "noted 🙏",
+   "expect": "small_talk"
+  },
+  {
+   "id": "ack-01",
+   "tags": [
+    "ambiguous_ack"
+   ],
+   "text": "okay",
+   "expect": "selection_reply"
+  },
+  {
+   "id": "ack-02",
+   "tags": [
+    "ambiguous_ack"
+   ],
+   "text": "yes",
+   "expect": "selection_reply"
+  },
+  {
+   "id": "ack-03",
+   "tags": [
+    "ambiguous_ack"
+   ],
+   "text": "that one",
+   "expect": "selection_reply"
+  },
+  {
+   "id": "ack-04",
+   "tags": [
+    "ambiguous_ack"
+   ],
+   "text": "the first one",
+   "expect": "selection_reply"
+  },
+  {
+   "id": "ack-05",
+   "tags": [
+    "ambiguous_ack"
+   ],
+   "text": "I want that one",
+   "expect": "reference_without_context",
+   "note": "with nothing shown Majo says so; with options shown the reference resolves to them"
+  },
+  {
+   "id": "ack-06",
+   "tags": [
+    "selection"
+   ],
+   "text": "2",
+   "expect": "selection_reply"
+  },
+  {
+   "id": "ack-07",
+   "tags": [
+    "selection",
+    "pidgin"
+   ],
+   "text": "I go take number 1",
+   "expect": "selection_reply"
+  },
+  {
+   "id": "ref-01",
+   "tags": [
+    "reference",
+    "no_context"
+   ],
+   "text": "how much is it?",
+   "expect": "reference_without_context"
+  },
+  {
+   "id": "ref-02",
+   "tags": [
+    "reference",
+    "no_context"
+   ],
+   "text": "is it still available?",
+   "expect": "reference_without_context"
+  },
+  {
+   "id": "ref-03",
+   "tags": [
+    "reference"
+   ],
+   "text": "how much is the black one",
+   "expect": "missing_detail",
+   "field": "product",
+   "known_gap": "with nothing shown and no product named, 'the black one' becomes a request and Majo asks what it is"
+  }
+ ],
+ "answers": [
+  {
+   "id": "ans-01",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "spec",
+   "request": {
+    "product": "iphone"
+   },
+   "text": "128gb",
+   "expect_field": "variant",
+   "expect": "128GB"
+  },
+  {
+   "id": "ans-02",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "spec",
+   "request": {
+    "product": "iphone"
+   },
+   "text": "13 pro max",
+   "expect_field": "variant",
+   "expect": "13 pro max"
+  },
+  {
+   "id": "ans-03",
+   "tags": [
+    "follow_up",
+    "change_mind"
+   ],
+   "field": "spec",
+   "request": {
+    "product": "iphone"
+   },
+   "text": "actually make it iphone 14",
+   "expect_field": "variant",
+   "expect": "14"
+  },
+  {
+   "id": "ans-04",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "spec",
+   "request": {
+    "product": "tv"
+   },
+   "text": "55 inches",
+   "expect_field": "variant",
+   "expect": "55 inch"
+  },
+  {
+   "id": "ans-05",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "budget",
+   "request": {
+    "product": "laptop"
+   },
+   "text": "around 300k",
+   "expect_field": "budget_max",
+   "expect": "300000"
+  },
+  {
+   "id": "ans-06",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "budget",
+   "request": {
+    "product": "laptop"
+   },
+   "text": "between 200k and 250k",
+   "expect_field": "budget_max",
+   "expect": "250000"
+  },
+  {
+   "id": "ans-07",
+   "tags": [
+    "follow_up",
+    "pidgin"
+   ],
+   "field": "location",
+   "request": {
+    "product": "fridge"
+   },
+   "text": "I dey for benin",
+   "expect_field": "location",
+   "expect": "Benin City"
+  },
+  {
+   "id": "ans-08",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "location",
+   "request": {
+    "product": "fridge"
+   },
+   "text": "Lekki",
+   "expect_field": "location",
+   "expect": "Lekki"
+  },
+  {
+   "id": "ans-09",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "condition",
+   "request": {
+    "product": "ps5"
+   },
+   "text": "brand new",
+   "expect_field": "condition",
+   "expect": "new"
+  },
+  {
+   "id": "ans-10",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "condition",
+   "request": {
+    "product": "ps5"
+   },
+   "text": "fairly used is ok",
+   "expect_field": "condition",
+   "expect": "used"
+  },
+  {
+   "id": "ans-11",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "condition",
+   "request": {
+    "product": "ps5"
+   },
+   "text": "either",
+   "expect_field": "condition",
+   "expect": "used_or_new"
+  },
+  {
+   "id": "ans-12",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "spec",
+   "request": {
+    "product": "iphone"
+   },
+   "text": "I don't know, I just want something that works well for pictures",
+   "expect_field": "none",
+   "expect": ""
+  },
+  {
+   "id": "ans-13",
+   "tags": [
+    "follow_up"
+   ],
+   "field": "spec",
+   "request": {
+    "product": "phone"
+   },
+   "text": "samsung a54",
+   "expect_field": "variant",
+   "expect": "samsung a54"
+  },
+  {
+   "id": "ans-14",
+   "tags": [
+    "follow_up",
+    "volunteered"
+   ],
+   "field": "spec",
+   "request": {
+    "product": "iphone"
+   },
+   "text": "13, budget 400k",
+   "expect_field": "budget_max",
+   "expect": "400000"
+  }
+ ]
+}

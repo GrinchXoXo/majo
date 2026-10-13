@@ -37,12 +37,17 @@ type Flags struct {
 	AutoClarifyVendorResponses    bool
 	AutoRetryDelivery             bool
 	AutoPublishTrustedVendorLists bool
+	// AutoRecoverStalledRequests: when every contacted vendor went quiet
+	// (timeout), could not be reached, or declined, Majo contacts eligible
+	// alternative vendors (bounded). OFF: the buyer is still told the status
+	// (never a silent dead end), but nobody new is contacted automatically.
+	AutoRecoverStalledRequests bool
 }
 
 // AllOn is the autonomous default (auto-publish stays gated by evidence).
 func AllOn() Flags {
 	return Flags{AutoConfirmClearRequests: true, AutoRouteDiscoveryRequests: true, AutoRouteMatchedRequests: true,
-		AutoResolveVendorContext: true, AutoClarifyRequests: true, AutoClarifyVendorResponses: true, AutoRetryDelivery: true}
+		AutoResolveVendorContext: true, AutoClarifyRequests: true, AutoClarifyVendorResponses: true, AutoRetryDelivery: true, AutoRecoverStalledRequests: true}
 }
 
 // Map reports the flags by their environment names (settings/diagnostics).
@@ -52,6 +57,7 @@ func (f Flags) Map() map[string]bool {
 		"AUTO_ROUTE_MATCHED_REQUESTS": f.AutoRouteMatchedRequests, "AUTO_RESOLVE_VENDOR_CONTEXT": f.AutoResolveVendorContext,
 		"AUTO_CLARIFY_REQUESTS": f.AutoClarifyRequests, "AUTO_CLARIFY_VENDOR_RESPONSES": f.AutoClarifyVendorResponses,
 		"AUTO_RETRY_DELIVERY": f.AutoRetryDelivery, "AUTO_PUBLISH_TRUSTED_VENDOR_LISTINGS": f.AutoPublishTrustedVendorLists,
+		"AUTO_RECOVER_STALLED_REQUESTS": f.AutoRecoverStalledRequests,
 	}
 }
 
@@ -72,13 +78,29 @@ type Params struct {
 	RetryMaxAttempts int
 	// Context.
 	ContextWindow time.Duration // how far back conversation context is read
+	// Recovery (Phase 4C hardening).
+	RecoveryMaxRounds         int           // automatic re-routing rounds per request after vendors went quiet
+	MaxVendorsPerRequest      int           // total vendors ever contacted for one request (all rounds)
+	PendingNoticeTTL          time.Duration // a queued buyer notice older than this is cancelled, not sent late
+	BroadenExcludedCategories []string      // categories Majo never offers to search outside the buyer's area
+	RestrictedTerms           []string      // demand naming one of these is held for review (never auto-routed)
+	// RetryFirstDelayOverride replaces every class's first retry delay when
+	// set (AUTO_RETRY_FIRST_DELAY; 0 = per-class defaults: 5s transient,
+	// 60s rate limit / provider unavailable, 5m per-recipient rate limit).
+	RetryFirstDelayOverride time.Duration
+	// LateReplyWindow: after a vendor request expired, a reply that clearly
+	// names it is still taken as its reply for this long (the buyer's
+	// request must still be open). AUTO_LATE_REPLY_WINDOW.
+	LateReplyWindow time.Duration
 }
 
 // DefaultParams are the starting hypotheses (documented in .env.example).
 func DefaultParams() Params {
 	return Params{ConfirmMinConfidence: 0.45, MaxClarifications: 3, ClarificationTTL: 24 * time.Hour,
 		RouteMinScore: 50, RouteMaxVendors: 3, RouteVendorMaxOpen: 5,
-		VendorRequestTTL: 72 * time.Hour, VendorClarifyMaxRounds: 2, RetryMaxAttempts: 5, ContextWindow: 72 * time.Hour}
+		VendorRequestTTL: 72 * time.Hour, VendorClarifyMaxRounds: 2, RetryMaxAttempts: 5, ContextWindow: 72 * time.Hour,
+		RecoveryMaxRounds: 2, MaxVendorsPerRequest: 6, PendingNoticeTTL: 72 * time.Hour, RestrictedTerms: DefaultRestrictedTerms(),
+		LateReplyWindow: 72 * time.Hour}
 }
 
 // Validate fails clearly on nonsensical parameters.
@@ -98,6 +120,14 @@ func (p Params) Validate() error {
 		return fmt.Errorf("AUTO_ROUTE_VENDOR_MAX_OPEN must be at least 1")
 	case p.VendorClarifyMaxRounds < 1 || p.RetryMaxAttempts < 1:
 		return fmt.Errorf("autonomy retry/clarification bounds must be at least 1")
+	case p.RetryMaxAttempts > 20:
+		return fmt.Errorf("AUTO_RETRY_MAX_ATTEMPTS must be at most 20")
+	case p.RecoveryMaxRounds < 1 || p.RecoveryMaxRounds > 5:
+		return fmt.Errorf("AUTO_RECOVERY_MAX_ROUNDS must be between 1 and 5")
+	case p.MaxVendorsPerRequest < p.RouteMaxVendors || p.MaxVendorsPerRequest > 20:
+		return fmt.Errorf("AUTO_ROUTE_MAX_VENDORS_PER_REQUEST must be between AUTO_ROUTE_MAX_VENDORS and 20")
+	case p.PendingNoticeTTL <= 0 || p.LateReplyWindow <= 0:
+		return fmt.Errorf("AUTO_PENDING_NOTICE_TTL and AUTO_LATE_REPLY_WINDOW must be positive")
 	}
 	return nil
 }
@@ -414,4 +444,98 @@ type Metrics struct {
 	OpenExceptions            int             `json:"open_exceptions"`
 	ExceptionsByReason        map[string]int  `json:"exceptions_by_reason"`
 	Decisions                 map[string]int  `json:"decisions"` // decision:outcome -> count
+
+	// Phase 4C hardening: metrics with one level each (workflow, question,
+	// recovery, delivery) and explicit numerators/denominators. The legacy
+	// fields above are kept for the dashboard; see Definitions.
+	Workflow    WorkflowMetrics   `json:"workflow"`
+	Questions   QuestionMetrics   `json:"questions"`
+	Recovery    RecoveryMetrics   `json:"recovery"`
+	Delivery    DeliveryMetrics   `json:"delivery"`
+	Definitions map[string]string `json:"definitions"`
+}
+
+// WorkflowMetrics: denominator = buyer requests created in the window
+// (Started). Small talk creates no request and is not counted.
+type WorkflowMetrics struct {
+	Started                int  `json:"started"`
+	Completed              Rate `json:"completed"`               // a transaction exists / started
+	CompletedAutonomously  Rate `json:"completed_autonomously"`  // completed AND autonomous class / started
+	RequiringClarification Rate `json:"requiring_clarification"` // ≥1 question delivered (buyer or vendor) / started
+	EscalatedToOperator    Rate `json:"escalated_to_operator"`   // ≥1 operator exception raised / started
+	OperatorPerformedStep  Rate `json:"operator_performed_step"` // an operator confirmed/routed/asked/associated / started
+	Held                   Rate `json:"held"`                    // ever paused by an operator / started
+	EndedWithoutOffer      Rate `json:"ended_without_offer"`     // buyer told no match / no reply (no transaction) / started
+	Abandoned              Rate `json:"abandoned"`               // waiting on the buyer whose last question expired / started
+	Pending                Rate `json:"pending"`                 // none of the above end states yet / started
+}
+
+// QuestionMetrics: denominator = questions delivered (clarification rows
+// not CANCELLED and not closed as undelivered).
+type QuestionMetrics struct {
+	Delivered         int  `json:"delivered"`          // rows (one question, possibly re-asked)
+	MessagesSent      int  `json:"messages_sent"`      // including re-asks (sum of attempts)
+	Answered          Rate `json:"answered"`           // ANSWERED / delivered
+	Resolved          Rate `json:"resolved"`           // answered AND the same thing was not asked again / delivered
+	ReAsked           Rate `json:"re_asked"`           // asked more than once (attempts > 1, or the same field asked again later) / delivered
+	ExpiredOrGaveUp   Rate `json:"expired_or_gave_up"` // EXPIRED or EXHAUSTED / delivered
+	Superseded        Rate `json:"superseded"`         // the participant moved on / delivered
+	Open              int  `json:"open"`
+	BuyerDelivered    int  `json:"buyer_delivered"`
+	VendorDelivered   int  `json:"vendor_delivered"`
+	UndeliveredClosed int  `json:"undelivered_closed"` // closed because the provider reported it undelivered (not in the denominator)
+}
+
+// RecoveryMetrics: automatic recovery, by mechanism.
+type RecoveryMetrics struct {
+	DeliveryRetries           Rate           `json:"delivery_retries"` // recovered / retries scheduled (transient failures only)
+	DeliveryRetriesFailed     int            `json:"delivery_retries_failed"`
+	VendorRequestsExpired     int            `json:"vendor_requests_expired"` // deadline passed, or never sent
+	RecoveryDecisions         map[string]int `json:"recovery_decisions"`      // RECOVER_REQUEST outcome:reason -> count
+	Rerouted                  int            `json:"rerouted"`
+	RerouteLedToOffer         Rate           `json:"reroute_led_to_offer"` // rerouted requests with an offer since / rerouted requests
+	DuplicateActionsPrevented int            `json:"duplicate_actions_prevented"`
+}
+
+// DeliveryMetrics: outbound communication health (message level).
+type DeliveryMetrics struct {
+	PolicyBlocked    int `json:"policy_blocked"` // sends refused by a messaging policy (window, template, opt-out)
+	NoticesQueued    int `json:"notices_queued"`
+	NoticesDelivered int `json:"notices_delivered"`
+	NoticesPending   int `json:"notices_pending"`
+	NoticesCancelled int `json:"notices_cancelled"`
+	ProviderFailures int `json:"provider_failures_reported_async"`
+	SystemExceptions int `json:"system_exceptions"`
+	SafetyExceptions int `json:"safety_exceptions"`
+}
+
+// MetricDefinitions documents every reported number (served with the
+// metrics so the dashboard and reports cannot drift from the code).
+func MetricDefinitions() map[string]string {
+	return map[string]string{
+		"workflow.*":                      "denominator = buyer requests created since `since` (request level)",
+		"workflow.completed":              "requests with a transaction (UNPAID) / started",
+		"workflow.pending":                "requests not completed, not ended without offer, not abandoned / started",
+		"questions.*":                     "denominator = questions delivered: clarification rows except CANCELLED and undelivered (question level)",
+		"questions.resolved":              "ANSWERED and the same request+field (or vendor request+kind) was not asked again afterwards",
+		"questions.messages_sent":         "message level: every question message including re-asks",
+		"recovery.delivery_retries":       "recovered / retries scheduled (transient provider failures only; policy refusals are never retried and never in this denominator)",
+		"recovery.reroute_led_to_offer":   "requests re-routed after silence that later got an offer / requests re-routed",
+		"legacy.clarification_resolution": "question rows ANSWERED / rows not CANCELLED — questions answered, not ambiguity resolved (kept for compatibility; prefer questions.*)",
+		"legacy.automatic_recovery":       "same as recovery.delivery_retries",
+		"legacy.manual_routing":           "vendor-request level: VENDORS_ROUTED by an operator / all VENDORS_ROUTED",
+		"legacy.manual_confirmation":      "request level: REQUEST_CONFIRMED by an operator / all REQUEST_CONFIRMED",
+		"note":                            "test runs against the fake provider produce synthetic numbers; label them as such",
+	}
+}
+
+// DefaultRestrictedTerms is the starting restricted-items list: demand that
+// names one of these is never confirmed or routed automatically; it is held
+// for operator review (SAFETY_EXCEPTION). It is a [PARAM] safety default,
+// not a legal policy — the owner must confirm the list (see the hardening
+// report, outstanding decisions). Matching is whole-word.
+func DefaultRestrictedTerms() []string {
+	return []string{"gun", "guns", "pistol", "rifle", "ak47", "ak-47", "ammunition", "ammo", "bullets", "firearm", "firearms",
+		"cocaine", "heroin", "meth", "methamphetamine", "codeine", "tramadol", "rohypnol", "skunk", "weed", "marijuana", "cannabis", "colorado",
+		"fake id", "fake passport", "fake certificate", "counterfeit", "fake naira", "explosive", "explosives", "dynamite"}
 }

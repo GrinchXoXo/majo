@@ -14,6 +14,7 @@
 package workflow
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -23,10 +24,11 @@ import (
 
 // Fields Majo may ask a buyer about, in the order it asks.
 const (
-	FieldProduct  = "product"
-	FieldLocation = "location"
-	FieldSpec     = "spec"
-	FieldBudget   = "budget"
+	FieldProduct   = "product"
+	FieldLocation  = "location"
+	FieldSpec      = "spec"
+	FieldBudget    = "budget"
+	FieldCondition = "condition"
 )
 
 // genericProducts are products too broad to route well without one more
@@ -40,6 +42,8 @@ var genericProducts = map[string]string{
 	"iphone":     "Which iPhone model are you looking for?",
 	"samsung":    "Which Samsung model are you looking for?",
 	"laptop":     "Which laptop model (or specs) are you looking for?",
+	"tecno":      "Which Tecno model are you looking for?",
+	"infinix":    "Which Infinix model are you looking for?",
 }
 
 // History is what Majo already asked about this request.
@@ -80,14 +84,60 @@ type Assessment struct {
 	// ("Samsung A54", "55 inch TV"): used instead of asking again.
 	FillVariant string
 	Reason      string
+	// Options are the choices offered with the question (several products
+	// named, or two places offered).
+	Options []string
+	// Hold: the request names a restricted item — never confirmed or routed
+	// automatically; held for operator review (SAFETY_EXCEPTION).
+	Hold bool
+	// Outcome is the conceptual class of the decision (see Outcome* below).
+	Outcome string
 }
+
+// Request-understanding outcomes (Phase 4C hardening).
+const (
+	OutcomeClear       = "clear"            // proceed: confirm and route
+	OutcomeMissing     = "missing_detail"   // one material detail missing: ask it
+	OutcomeAmbiguous   = "ambiguous"        // several readings: ask which (context did not settle it)
+	OutcomeConflicting = "conflicting"      // contradictory details: ask the buyer to resolve
+	OutcomeUnsupported = "unanswerable"     // cannot be understood after asking: say so, offer a next step
+	OutcomePolicy      = "policy_exception" // restricted item: held for review
+)
 
 // Assess decides whether a request is understood well enough to proceed,
 // and if not, the single most useful question to ask next. Majo asks only
 // what the next action needs: a product (always), a location (unless known
 // from context), and for generic products one detail and a budget.
+//
+// The 0.45 confidence floor (AUTO_CONFIRM_MIN_CONFIDENCE) is NOT the policy:
+// with the heuristic extractor 0.45 is exactly the weight of "a product word
+// was found", so it acts as a product-present check. The decision is made by
+// the deterministic checks below (restricted items, product, several
+// products, contradictions, location, generic-product detail, budget).
 func Assess(r *request.BuyerRequest, knownLocation string, h History, p autonomy.Params) Assessment {
+	a := assess(r, knownLocation, h, p)
+	switch {
+	case a.Hold:
+		a.Outcome = OutcomePolicy
+	case a.Clear:
+		a.Outcome = OutcomeClear
+	case a.Missing == "":
+		a.Outcome = OutcomeUnsupported
+	case strings.HasPrefix(a.Reason, "several_") || strings.HasPrefix(a.Reason, "location_alternatives"):
+		a.Outcome = OutcomeAmbiguous
+	case strings.HasSuffix(a.Reason, "_conflict"):
+		a.Outcome = OutcomeConflicting
+	default:
+		a.Outcome = OutcomeMissing
+	}
+	return a
+}
+
+func assess(r *request.BuyerRequest, knownLocation string, h History, p autonomy.Params) Assessment {
 	product := strings.TrimSpace(deref(r.Product))
+	if term := RestrictedTerm(r.RawMessage+" "+product, p.RestrictedTerms); term != "" {
+		return Assessment{Hold: true, Reason: "restricted_item:" + term}
+	}
 	if r.ListingID != nil && product != "" {
 		// Listing-origin demand names one curated listing: nothing to ask.
 		return Assessment{Clear: true, Reason: "listing_origin"}
@@ -97,6 +147,24 @@ func Assess(r *request.BuyerRequest, knownLocation string, h History, p autonomy
 			return Assessment{Reason: "product_unknown_after_clarification"}
 		}
 		return Assessment{Missing: FieldProduct, Question: productQuestion(r), Reason: "product_unknown"}
+	}
+	signals := signalsOf(r)
+	// Several products in one message: ask which to start with (never
+	// silently drop one). Asked once.
+	if others := signals.otherProducts; len(others) > 0 && h.Asked[FieldProduct] == 0 && !h.Skipped[FieldProduct] {
+		opts := append([]string{product}, others...)
+		return Assessment{Missing: FieldProduct, Options: opts, Reason: "several_products",
+			Question: fmt.Sprintf("I can look for %s. Which should I start with? (I'll take the next one after)", joinOr(opts))}
+	}
+	// Contradictory condition ("brand new fairly used"): ask, do not guess.
+	if signals.has("condition_conflict") && h.Asked[FieldCondition] == 0 && !h.Skipped[FieldCondition] {
+		return Assessment{Missing: FieldCondition, Options: []string{"Brand new", "Fairly used"}, Reason: "condition_conflict",
+			Question: "Do you want it brand new or fairly used? (Reply \"either\" if both are fine)"}
+	}
+	// Two places offered as options ("Lagos or Abuja"): ask where to start.
+	if signals.has("location_alternatives") && h.Asked[FieldLocation] == 0 && !h.Skipped[FieldLocation] {
+		return Assessment{Missing: FieldLocation, Reason: "location_alternatives",
+			Question: "Which city should I search in first?"}
 	}
 	a := Assessment{Clear: true, Reason: "clear"}
 	if strings.TrimSpace(deref(r.Location)) == "" && !h.Skipped[FieldLocation] {
@@ -184,7 +252,7 @@ func YesNo(text string) int {
 
 var (
 	sizePattern  = regexp.MustCompile(`(?i)\b(\d{2,3})\s*(?:-\s*)?(inch|inches|in\b|")`)
-	modelPattern = regexp.MustCompile(`(?i)^\s*([a-z0-9][a-z0-9+-]*\d[a-z0-9+-]*(?:\s+(?:pro|max|plus|ultra|mini|lite|air))?)`)
+	modelPattern = regexp.MustCompile(`(?i)^\s*([a-z0-9+-]*\d[a-z0-9+-]*(?:\s+(?:pro|max|plus|ultra|mini|lite|air))*)\b`)
 )
 
 // SpecInText finds a model or size the buyer stated right after the product
@@ -200,6 +268,103 @@ func SpecInText(raw, product string) string {
 	}
 	if m := modelPattern.FindStringSubmatch(raw[i+len(product):]); m != nil {
 		return strings.TrimSpace(m[1])
+	}
+	return ""
+}
+
+// ---- interpretation signals and policy helpers (Phase 4C hardening) ---------------
+
+type signals struct {
+	otherProducts []string
+	ambiguities   map[string]bool
+}
+
+func (s signals) has(k string) bool { return s.ambiguities[k] }
+
+// signalsOf reads what the interpreter reported in the request's original
+// extraction output (extracted_data). An extractor that reports nothing
+// leaves the request as before.
+func signalsOf(r *request.BuyerRequest) signals {
+	s := signals{ambiguities: map[string]bool{}}
+	if r.ExtractedData == nil {
+		return s
+	}
+	if v, ok := r.ExtractedData["other_products"].([]any); ok {
+		for _, x := range v {
+			if p, ok := x.(string); ok && strings.TrimSpace(p) != "" {
+				s.otherProducts = append(s.otherProducts, strings.TrimSpace(p))
+			}
+		}
+	}
+	if v, ok := r.ExtractedData["ambiguities"].([]any); ok {
+		for _, x := range v {
+			if a, ok := x.(string); ok {
+				s.ambiguities[a] = true
+			}
+		}
+	}
+	return s
+}
+
+func joinOr(xs []string) string {
+	switch len(xs) {
+	case 0:
+		return ""
+	case 1:
+		return xs[0]
+	}
+	return strings.Join(xs[:len(xs)-1], ", ") + " or " + xs[len(xs)-1]
+}
+
+var nonWord = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// RestrictedTerm returns the first restricted term the text names as whole
+// word(s) ("" when none). Matching is deliberately literal: the list is a
+// safety net for automatic routing, not content moderation.
+func RestrictedTerm(text string, terms []string) string {
+	t := " " + strings.TrimSpace(nonWord.ReplaceAllString(strings.ToLower(text), " ")) + " "
+	for _, term := range terms {
+		norm := strings.TrimSpace(nonWord.ReplaceAllString(strings.ToLower(term), " "))
+		if norm != "" && strings.Contains(t, " "+norm+" ") {
+			return term
+		}
+	}
+	return ""
+}
+
+// ---- conversational small talk (no request) ----------------------------------------
+
+// acknowledgements are courtesy messages that ask for nothing. Affirmatives
+// that may mean "I choose it" ("ok", "yes", "that one") are NOT here: the
+// offer resolver answers those with a clarification (Phase 3.1).
+var acknowledgements = map[string]bool{"k": true, "kk": true, "okk": true, "oki": true,
+	"thanks": true, "thank you": true, "thank u": true, "thanks a lot": true, "thanks o": true, "tnx": true, "thx": true, "tanx": true,
+	"alright o": true, "noted": true, "cool": true, "fine": true, "great": true, "nice": true,
+	"ok thanks": true, "okay thanks": true, "ok thank you": true, "okay thank you": true, "no problem": true, "np": true,
+	"no": true, "nope": true, "thank you so much": true, "i see": true, "ehen": true, "gracias": true, "e don do": true, "seen": true,
+	"thanks so much": true, "thank you very much": true, "much appreciated": true, "okay noted": true, "ok noted": true}
+
+var greetings = map[string]bool{"hi": true, "hello": true, "hey": true, "hi there": true, "hello there": true, "good morning": true,
+	"good afternoon": true, "good evening": true, "morning": true, "how far": true, "howfa": true, "how you dey": true, "hello majo": true,
+	"hi majo": true, "hey majo": true, "good day": true, "hiya": true, "hy": true, "helo": true, "hallo": true, "sup": true, "wassup": true,
+	"whats up": true, "what's up": true, "how are you": true, "how are you doing": true, "good morning sir": true, "good morning ma": true}
+
+// SmallTalk classifies a whole message as "ack" (acknowledgement / bare
+// yes-no with nothing open), "greeting", or "" (anything else). Only exact
+// whole-message matches count: "hello, I need a fridge" is a request.
+func SmallTalk(text string) string {
+	raw := strings.TrimSpace(text)
+	t := autonomy.Normalize(strings.Trim(raw, ".,!?🙏👍😊🙂👌❤️ "))
+	t = strings.TrimSuffix(strings.TrimSuffix(t, " sir"), " ma")
+	switch {
+	case raw == "":
+		return ""
+	case t == "": // only emoji / punctuation ("👍", "🙏")
+		return "ack"
+	case acknowledgements[t] || acknowledgements[autonomy.Normalize(text)]:
+		return "ack"
+	case greetings[t] || greetings[autonomy.Normalize(text)]:
+		return "greeting"
 	}
 	return ""
 }

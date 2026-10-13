@@ -173,16 +173,16 @@ func (r *ConversationRepository) ApplyDeliveryStatus(ctx context.Context, extern
 
 	var (
 		idStr, convStr          string
-		metaBytes               []byte
+		metaBytes, contentBytes []byte
 		delivered, read, failed sql.NullTime
 	)
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, conversation_id, metadata, delivered_at, read_at, failed_at
+		SELECT id, conversation_id, metadata, content, delivered_at, read_at, failed_at
 		FROM messages
 		WHERE external_message_id = $1 AND direction = 'OUTBOUND'
 		ORDER BY created_at DESC LIMIT 1
 		FOR UPDATE
-	`, externalMessageID).Scan(&idStr, &convStr, &metaBytes, &delivered, &read, &failed)
+	`, externalMessageID).Scan(&idStr, &convStr, &metaBytes, &contentBytes, &delivered, &read, &failed)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -232,6 +232,11 @@ func (r *ConversationRepository) ApplyDeliveryStatus(ctx context.Context, extern
 	msg.ConversationID, _ = uuid.Parse(convStr)
 	if err := json.Unmarshal(metaBytes, &msg.Metadata); err != nil || msg.Metadata == nil {
 		msg.Metadata = map[string]any{}
+	}
+	// The content is needed to re-send a workflow notice whose delivery the
+	// provider reported as failed (Phase 4C hardening).
+	if err := json.Unmarshal(contentBytes, &msg.Content); err != nil || msg.Content == nil {
+		msg.Content = map[string]any{}
 	}
 	t.Message = msg
 	return t, nil

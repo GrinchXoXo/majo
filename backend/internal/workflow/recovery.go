@@ -4,117 +4,132 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/middleman/backend/internal/autonomy"
+	"github.com/middleman/backend/internal/channel"
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/supply"
 )
 
-// ---- delivery failure classification ---------------------------------------------
+// ---- delivery failure handling ----------------------------------------------------
+//
+// Failures are classified by channel.Classify (one taxonomy, from the
+// provider's structured error code). Per class:
+//   - retryable (transport, rate limit, provider unavailable): bounded durable
+//     retry (AUTO_RETRY_MAX_ATTEMPTS), first delay per class;
+//   - vendor request not retryable / retries exhausted: this vendor cannot
+//     be reached now — the buyer's request continues with alternative
+//     vendors (RecoverRequest) and the operator sees only what needs a person;
+//   - offers blocked by the customer-service window (or another
+//     recipient-level policy): kept deliverable and delivered when the buyer
+//     next writes — no free-form send outside the window, no template assumed;
+//   - invalid recipient / invalid request / account-level / auth-config /
+//     unknown: recorded and raised as an operator exception.
 
-// SendFailure classes.
-const (
-	SendTransient = "transient" // network, 429, 5xx: retry with backoff
-	SendPolicy    = "policy"    // the platform refuses (24h window closed, template required, blocked)
-	SendPermanent = "permanent" // bad request / auth: retrying cannot help
-)
-
-var statusPattern = regexp.MustCompile(`status (\d{3})`)
-
-// policyCodes are Meta errors meaning "not allowed now": 131047 re-engagement
-// (24h window closed), 131026 undeliverable, 131050 user stopped marketing,
-// 470 legacy re-engagement.
-var policyCodes = []string{"131047", "131026", "131050", "(#470)", "re-engagement"}
-
-// ClassifySendError classifies a channel send error from its text (the
-// provider includes Meta's status and error body).
-func ClassifySendError(err error) string {
+// ClassifySendError returns the failure class of a send error (kept for
+// callers and tests that only need the class).
+func ClassifySendError(err error) channel.FailureClass {
 	if err == nil {
 		return ""
 	}
-	msg := strings.ToLower(err.Error())
-	for _, c := range policyCodes {
-		if strings.Contains(msg, c) {
-			return SendPolicy
-		}
-	}
-	if m := statusPattern.FindStringSubmatch(msg); m != nil {
-		code, _ := strconv.Atoi(m[1])
-		switch {
-		case code == 429 || code >= 500:
-			return SendTransient
-		default:
-			return SendPermanent
-		}
-	}
-	return SendTransient // connection errors, timeouts
+	return channel.Classify(err).Class
 }
 
-// ---- vendor request recovery -----------------------------------------------------
-
-// VendorRequestSendFailed implements routing.SendFailureListener.
+// VendorRequestSendFailed implements routing.SendFailureListener (the send
+// was rejected synchronously; the request is SEND_FAILED).
 func (e *Engine) VendorRequestSendFailed(ctx context.Context, vr *routing.VendorRequest, err error) {
-	brid := vr.BuyerRequestID
-	class := ClassifySendError(err)
-	if class == SendPolicy || class == SendPermanent || !e.cfg.Flags.AutoRetryDelivery {
-		reason := autonomy.ReasonProviderPolicy
-		if class != SendPolicy {
-			reason = autonomy.ReasonVendorUnreachable
-		}
-		if !e.cfg.Flags.AutoRetryDelivery && class == SendTransient {
-			reason = autonomy.ReasonDeliveryRetryExhausted
-		}
-		e.recordDelivery(ctx, "vendor_request", vr.ID, &brid, autonomy.OutcomeRejected, fallbackFor(class), class, map[string]any{"error": err.Error()})
-		e.raise(ctx, autonomy.SystemException, reason, "vendor_request", vr.ID, &brid, map[string]any{"error": err.Error(), "class": class,
-			"reference": vr.PublicReference, "why": "the channel refused the vendor message; Majo cannot reach this vendor on its own"})
+	e.vendorRequestFailed(ctx, vr.ID, vr.BuyerRequestID, vr.PublicReference, channel.Classify(err), err)
+}
+
+// vendorRequestUndelivered: the provider reported an accepted vendor
+// request as failed (webhook). The request stops counting as awaiting a reply.
+func (e *Engine) vendorRequestUndelivered(ctx context.Context, vrID uuid.UUID, f channel.Failure, err error) {
+	if e.vrs == nil {
 		return
 	}
-	e.scheduleRetry(ctx, JobVendorResend, "vendor_request_id", vr.ID, &brid, err)
+	ok, merr := e.vrs.MarkUndelivered(ctx, vrID, err.Error())
+	if merr != nil {
+		e.logger.Error("marking vendor request undelivered", "vendor_request_id", vrID, "error", merr)
+		return
+	}
+	if !ok {
+		return // answered, expired or cancelled meanwhile: nothing to recover
+	}
+	vr, ferr := e.vrs.FindVendorRequestByID(ctx, vrID)
+	if ferr != nil || vr == nil {
+		return
+	}
+	e.vendorRequestFailed(ctx, vr.ID, vr.BuyerRequestID, vr.PublicReference, f, err)
 }
 
-func fallbackFor(class string) autonomy.Fallback {
-	if class == SendPolicy {
-		return autonomy.PolicyRejection
+func (e *Engine) vendorRequestFailed(ctx context.Context, vrID, brid uuid.UUID, ref string, f channel.Failure, err error) {
+	if f.Retry && e.cfg.Flags.AutoRetryDelivery {
+		e.scheduleRetry(ctx, JobVendorResend, "vendor_request_id", vrID, &brid, err, f.FirstDelay)
+		return
 	}
-	if class == SendTransient {
-		return autonomy.TemporaryProviderFailure
+	e.recordDelivery(ctx, "vendor_request", vrID, &brid, autonomy.OutcomeRejected, fallbackForClass(f), string(f.Class),
+		map[string]any{"error": err.Error(), "class": string(f.Class), "code": f.Code, "template_required": f.TemplateRequired, "template_configured": false})
+	detail := map[string]any{"reference": ref}
+	if f.Retry { // retryable, but automatic retry is switched off
+		e.raise(ctx, autonomy.SystemException, autonomy.ReasonDeliveryRetryExhausted, "vendor_request", vrID, &brid,
+			map[string]any{"error": err.Error(), "class": string(f.Class), "reference": ref, "why": "automatic retry is disabled (AUTO_RETRY_DELIVERY=false)"})
+	} else {
+		if f.Class == channel.FailPolicy {
+			detail["why"] = "the channel refused the vendor message (e.g. the vendor's 24h window is closed and no approved utility template is configured)"
+		}
+		e.raiseForFailure(ctx, f, "vendor_request", vrID, &brid, err.Error(), detail)
 	}
-	return autonomy.SystemException
+	// The buyer's request does not wait on a vendor Majo cannot reach.
+	e.enqueueRecoveryCheck(ctx, vrID, "send_failed")
 }
 
-func (e *Engine) scheduleRetry(ctx context.Context, jobType, key string, id uuid.UUID, brid *uuid.UUID, cause error) {
+func (e *Engine) scheduleRetry(ctx context.Context, jobType, key string, id uuid.UUID, brid *uuid.UUID, cause error, delay time.Duration) {
 	if e.jobs == nil {
 		return
 	}
+	delay = e.firstDelay(delay)
 	payload := map[string]any{key: id.String()}
 	if brid != nil {
 		payload["buyer_request_id"] = brid.String()
 	}
 	created, err := e.jobs.Enqueue(ctx, &jobs.Job{Type: jobType, IdempotencyKey: key + ":" + id.String() + ":" + uuid.NewString(),
-		Payload: payload, MaxAttempts: e.cfg.Params.RetryMaxAttempts, RunAt: e.now().UTC().Add(retryFirstDelay)})
+		Payload: payload, MaxAttempts: e.cfg.Params.RetryMaxAttempts, RunAt: e.now().UTC().Add(delay)})
 	if err != nil {
 		e.logger.Error("scheduling delivery retry", "type", jobType, "id", id, "error", err)
 		return
 	}
 	if created {
+		f := channel.Classify(cause)
 		e.recordDelivery(ctx, strings.TrimSuffix(key, "_id"), id, brid, autonomy.OutcomeDeferred, autonomy.RetryRequired, "retry_scheduled",
-			map[string]any{"error": cause.Error(), "max_attempts": e.cfg.Params.RetryMaxAttempts})
+			map[string]any{"error": cause.Error(), "class": string(f.Class), "code": f.Code, "max_attempts": e.cfg.Params.RetryMaxAttempts, "first_delay": delay.String()})
 		eid := id
 		_ = e.events.Write(ctx, &event.Event{EventType: event.DeliveryRetryScheduled, EntityType: strings.TrimSuffix(key, "_id"), EntityID: &eid,
-			ActorType: event.ActorSystem, Payload: event.Merge(map[string]any{"job_type": jobType, "error": cause.Error()}, idPayload("buyer_request_id", brid))})
+			ActorType: event.ActorSystem, Payload: event.Merge(map[string]any{"job_type": jobType, "error": cause.Error(), "class": string(f.Class)},
+				idPayload("buyer_request_id", brid))})
 	}
 }
 
-// retryFirstDelay is the wait before the first retry (later ones use the
-// durable worker's exponential backoff).
+// firstDelay applies AUTO_RETRY_FIRST_DELAY (one first delay for every
+// class, for tests and operations) over the class default.
+func (e *Engine) firstDelay(classDelay time.Duration) time.Duration {
+	if o := e.cfg.Params.RetryFirstDelayOverride; o > 0 {
+		return o
+	}
+	if classDelay <= 0 {
+		return retryFirstDelay
+	}
+	return classDelay
+}
+
+// retryFirstDelay is the default wait before the first retry (later ones
+// use the durable worker's exponential backoff). Per-class delays come from
+// channel.Failure.FirstDelay.
 var retryFirstDelay = 5 * time.Second
 
 func (e *Engine) handleVendorResend(ctx context.Context, j *jobs.Job) error {
@@ -123,7 +138,7 @@ func (e *Engine) handleVendorResend(ctx context.Context, j *jobs.Job) error {
 		return jobs.Permanent(err)
 	}
 	if err := e.router.ResendVendorRequest(ctx, id); err != nil {
-		if ClassifySendError(err) != SendTransient {
+		if !channel.Classify(err).Retry {
 			return jobs.Permanent(err)
 		}
 		return err
@@ -135,21 +150,71 @@ func (e *Engine) handleVendorResend(ctx context.Context, j *jobs.Job) error {
 // OfferDeliveryFailed is called by the offer loop when a delivery to the
 // buyer was rejected (offers are back in a deliverable state).
 func (e *Engine) OfferDeliveryFailed(ctx context.Context, buyerRequestID uuid.UUID, err error) {
+	e.offerDeliveryFailed(ctx, buyerRequestID, channel.Classify(err), err)
+}
+
+func (e *Engine) offerDeliveryFailed(ctx context.Context, buyerRequestID uuid.UUID, f channel.Failure, err error) {
 	brid := buyerRequestID
-	class := ClassifySendError(err)
-	if class != SendTransient || !e.cfg.Flags.AutoRetryDelivery {
-		reason := autonomy.ReasonProviderPolicy
-		if class == SendPermanent {
-			reason = autonomy.ReasonWorkflowFailure
-		} else if class == SendTransient {
-			reason = autonomy.ReasonDeliveryRetryExhausted
-		}
-		e.recordDelivery(ctx, "buyer_request", buyerRequestID, &brid, autonomy.OutcomeRejected, fallbackFor(class), class, map[string]any{"error": err.Error()})
-		e.raise(ctx, autonomy.SystemException, reason, "buyer_request", buyerRequestID, &brid, map[string]any{"error": err.Error(), "class": class,
-			"why": "offers could not be delivered to the buyer"})
+	if f.Retry && e.cfg.Flags.AutoRetryDelivery {
+		e.scheduleRetry(ctx, JobOfferRedelivery, "buyer_request_id", buyerRequestID, &brid, err, f.FirstDelay)
 		return
 	}
-	e.scheduleRetry(ctx, JobOfferRedelivery, "buyer_request_id", buyerRequestID, &brid, err)
+	result := map[string]any{"error": err.Error(), "class": string(f.Class), "code": f.Code, "template_required": f.TemplateRequired, "template_configured": false}
+	if queueable(f) && e.notices != nil {
+		// A compliant later route exists (the buyer's next message re-opens
+		// the window; a fixed configuration; a retry): the offers stay
+		// deliverable and are delivered then.
+		if req, rerr := e.reqRepo.FindByID(ctx, buyerRequestID); rerr == nil && req != nil {
+			n, _, qerr := e.notices.QueueNotice(ctx, &autonomy.Notice{ConversationID: req.ConversationID, BuyerRequestID: &brid,
+				Kind: autonomy.NoticeKindOffers, FailureClass: string(f.Class), FailureCode: f.Code, LastError: err.Error()})
+			if qerr == nil && n != nil {
+				result["notice_id"] = n.ID.String()
+				reason := "offers_deferred_until_buyer_writes"
+				if f.Retry {
+					reason = "offers_deferred_retry_disabled"
+				}
+				e.recordDelivery(ctx, "buyer_request", buyerRequestID, &brid, autonomy.OutcomeDeferred, fallbackForClass(f), reason, result)
+				if f.Class == channel.FailAuthConfig || f.Class == channel.FailUnknown || f.Retry {
+					e.raiseForOffers(ctx, f, brid, err)
+				}
+				return
+			}
+		}
+	}
+	e.recordDelivery(ctx, "buyer_request", buyerRequestID, &brid, autonomy.OutcomeRejected, fallbackForClass(f), string(f.Class), result)
+	e.raiseForOffers(ctx, f, brid, err)
+}
+
+func (e *Engine) raiseForOffers(ctx context.Context, f channel.Failure, brid uuid.UUID, err error) {
+	if f.Retry {
+		e.raise(ctx, autonomy.SystemException, autonomy.ReasonDeliveryRetryExhausted, "buyer_request", brid, &brid,
+			map[string]any{"error": err.Error(), "class": string(f.Class), "why": "offers could not be delivered and automatic retry is disabled or exhausted; they will go out when the buyer next writes"})
+		return
+	}
+	e.raiseForFailure(ctx, f, "buyer_request", brid, &brid, err.Error(), map[string]any{"why": "offers could not be delivered to the buyer"})
+}
+
+// offersUndelivered: the provider reported an offer message as failed after
+// accepting it. The offers it carried are returned to a deliverable state
+// (the buyer never saw them) and handled like a rejected delivery.
+func (e *Engine) offersUndelivered(ctx context.Context, buyerRequestID uuid.UUID, meta map[string]any, f channel.Failure, errText string) {
+	var ids []uuid.UUID
+	if raw, ok := meta["offer_ids"].([]any); ok {
+		for _, v := range raw {
+			if id := parseOptUUID(v); id != nil {
+				ids = append(ids, *id)
+			}
+		}
+	}
+	if e.offerReverter != nil && len(ids) > 0 {
+		if n, err := e.offerReverter.RevertUndelivered(ctx, ids, "delivery failed: "+errText); err != nil {
+			e.logger.Error("reverting undelivered offers", "buyer_request_id", buyerRequestID, "error", err)
+			return
+		} else if n == 0 {
+			return // selected / withdrawn meanwhile: nothing to redeliver
+		}
+	}
+	e.offerDeliveryFailed(ctx, buyerRequestID, f, &channel.ProviderError{Provider: "whatsapp", Code: f.Code, Body: "delivery failed: " + errText})
 }
 
 func (e *Engine) handleOfferRedelivery(ctx context.Context, j *jobs.Job) error {
@@ -160,8 +225,11 @@ func (e *Engine) handleOfferRedelivery(ctx context.Context, j *jobs.Job) error {
 	if e.offerDeliverer == nil {
 		return jobs.Permanent(errors.New("offer redelivery not wired"))
 	}
+	if e.held(ctx, id) {
+		return nil // paused by an operator: delivered after the hold is released
+	}
 	if err := e.offerDeliverer(ctx, id); err != nil {
-		if ClassifySendError(err) != SendTransient {
+		if !channel.Classify(err).Retry {
 			return jobs.Permanent(err)
 		}
 		return err
@@ -178,7 +246,9 @@ func (e *Engine) recovered(ctx context.Context, j *jobs.Job, subjectType string,
 		Payload: event.Merge(map[string]any{"job_type": j.Type, "attempts": j.Attempts}, idPayload("buyer_request_id", brid))})
 }
 
-// onRetryExhausted: recovery failed for good -> operator exception.
+// onRetryExhausted: bounded recovery failed. Vendor request: the buyer's
+// request continues with alternatives (and the operator is told the vendor
+// is unreachable). Offers: kept for the buyer's next message, and raised.
 func (e *Engine) onRetryExhausted(ctx context.Context, j *jobs.Job, err error) {
 	subjectType, key := "buyer_request", "buyer_request_id"
 	if j.Type == JobVendorResend {
@@ -189,16 +259,26 @@ func (e *Engine) onRetryExhausted(ctx context.Context, j *jobs.Job, err error) {
 		return
 	}
 	brid := parseOptUUID(j.Payload["buyer_request_id"])
-	class := ClassifySendError(err)
+	f := channel.Classify(err)
 	reason := autonomy.ReasonDeliveryRetryExhausted
-	if class == SendPolicy {
+	if f.Class == channel.FailPolicy {
 		reason = autonomy.ReasonProviderPolicy
 	}
-	e.recordDelivery(ctx, subjectType, *id, brid, autonomy.OutcomeFailed, autonomy.SystemException, reason, map[string]any{"error": err.Error(), "attempts": j.Attempts})
+	e.recordDelivery(ctx, subjectType, *id, brid, autonomy.OutcomeFailed, autonomy.SystemException, reason,
+		map[string]any{"error": err.Error(), "attempts": j.Attempts, "class": string(f.Class)})
 	eid := *id
 	_ = e.events.Write(ctx, &event.Event{EventType: event.DeliveryRetryExhausted, EntityType: subjectType, EntityID: &eid, ActorType: event.ActorSystem,
 		Payload: event.Merge(map[string]any{"job_type": j.Type, "attempts": j.Attempts, "error": err.Error()}, idPayload("buyer_request_id", brid))})
 	e.raise(ctx, autonomy.SystemException, reason, subjectType, *id, brid, map[string]any{"error": err.Error(), "attempts": j.Attempts, "job_type": j.Type})
+	switch {
+	case j.Type == JobVendorResend:
+		e.enqueueRecoveryCheck(ctx, *id, "send_retry_exhausted")
+	case j.Type == JobOfferRedelivery && brid != nil && e.notices != nil:
+		if req, rerr := e.reqRepo.FindByID(ctx, *brid); rerr == nil && req != nil {
+			_, _, _ = e.notices.QueueNotice(ctx, &autonomy.Notice{ConversationID: req.ConversationID, BuyerRequestID: brid,
+				Kind: autonomy.NoticeKindOffers, FailureClass: string(f.Class), FailureCode: f.Code, LastError: err.Error()})
+		}
+	}
 }
 
 func (e *Engine) recordDelivery(ctx context.Context, subjectType string, id uuid.UUID, brid *uuid.UUID, outcome string, fb autonomy.Fallback, reason string, result map[string]any) {

@@ -109,10 +109,59 @@ export default function AutonomyPage() {
               <RateTile label="Manual routing" rate={metrics.manual_routing} goodWhenLow />
               <RateTile label="Manual confirmation" rate={metrics.manual_confirmation} goodWhenLow />
               <RateTile label="Operator intervention" rate={metrics.operator_intervention} goodWhenLow />
-              <RateTile label="Clarification resolution" rate={metrics.clarification_resolution} />
-              <RateTile label="Automatic recovery" rate={metrics.automatic_recovery} />
+              <RateTile label="Questions answered (legacy)" rate={metrics.clarification_resolution} />
+              <RateTile label="Automatic recovery (retries)" rate={metrics.automatic_recovery} />
             </div>
           </section>
+          {metrics.workflow && (
+            <section style={{ margin: "16px 0" }} aria-label="Workflow level">
+              <strong style={{ fontSize: "0.85em", color: "#666" }}>
+                WORKFLOWS — denominator: {metrics.workflow.started} buyer requests started
+              </strong>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+                <RateTile label="Completed (transaction)" rate={metrics.workflow.completed} />
+                <RateTile label="Completed autonomously" rate={metrics.workflow.completed_autonomously} />
+                <RateTile label="Needed a question" rate={metrics.workflow.requiring_clarification} goodWhenLow />
+                <RateTile label="Escalated to operator" rate={metrics.workflow.escalated_to_operator} goodWhenLow />
+                <RateTile label="Operator performed a step" rate={metrics.workflow.operator_performed_step} goodWhenLow />
+                <RateTile label="Ended without an offer" rate={metrics.workflow.ended_without_offer} goodWhenLow />
+                <RateTile label="Abandoned (question expired)" rate={metrics.workflow.abandoned} goodWhenLow />
+                <RateTile label="Still pending" rate={metrics.workflow.pending} goodWhenLow />
+              </div>
+            </section>
+          )}
+          {metrics.questions && (
+            <section style={{ margin: "16px 0" }} aria-label="Question level">
+              <strong style={{ fontSize: "0.85em", color: "#666" }}>
+                QUESTIONS — denominator: {metrics.questions.delivered} questions delivered ({metrics.questions.messages_sent} messages incl. re-asks)
+              </strong>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+                <RateTile label="Answered" rate={metrics.questions.answered} />
+                <RateTile label="Resolved (not asked again)" rate={metrics.questions.resolved} />
+                <RateTile label="Re-asked" rate={metrics.questions.re_asked} goodWhenLow />
+                <RateTile label="Expired / gave up" rate={metrics.questions.expired_or_gave_up} goodWhenLow />
+              </div>
+            </section>
+          )}
+          {metrics.recovery && metrics.delivery && (
+            <section style={{ display: "flex", flexWrap: "wrap", gap: 24, margin: "16px 0" }} aria-label="Recovery and delivery">
+              <RateTile label="Delivery retries that recovered" rate={metrics.recovery.delivery_retries} />
+              <RateTile label="Re-routes that led to an offer" rate={metrics.recovery.reroute_led_to_offer} />
+              <Counts title="REQUEST RECOVERY DECISIONS" data={metrics.recovery.recovery_decisions} />
+              <Counts
+                title="DELIVERY"
+                data={{
+                  "vendor requests expired": metrics.recovery.vendor_requests_expired,
+                  "duplicate actions prevented": metrics.recovery.duplicate_actions_prevented,
+                  "policy-blocked sends": metrics.delivery.policy_blocked,
+                  "notices queued": metrics.delivery.notices_queued,
+                  "notices delivered late": metrics.delivery.notices_delivered,
+                  "notices still pending": metrics.delivery.notices_pending,
+                  "provider-reported failures": metrics.delivery.provider_failures_reported_async,
+                }}
+              />
+            </section>
+          )}
           <section style={{ display: "flex", flexWrap: "wrap", gap: 24, margin: "16px 0" }}>
             <Counts title="WORKFLOWS BY CLASS" data={metrics.workflows_by_class} />
             <Counts title="INTERVENTIONS BY REASON" data={metrics.interventions_by_reason} />

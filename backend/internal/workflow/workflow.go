@@ -129,6 +129,19 @@ type Engine struct {
 	offerDeliverer func(ctx context.Context, buyerRequestID uuid.UUID) error
 	publisher      ListingPublisher
 	async          func(func(context.Context)) // in-process runner for buyer answers
+
+	// Phase 4C hardening.
+	vrs           VendorRequestTimeouts
+	recovery      RecoveryReader
+	notices       autonomy.NoticeStore
+	holds         autonomy.HoldStore
+	offerReverter OfferReverter
+}
+
+// OfferReverter returns offers whose delivery the provider later reported
+// as failed to a deliverable state (postgres.OfferRepository).
+type OfferReverter interface {
+	RevertUndelivered(ctx context.Context, offerIDs []uuid.UUID, reason string) (int, error)
 }
 
 // Deps groups the constructor arguments.
@@ -150,6 +163,12 @@ type Deps struct {
 	Events    event.Writer
 	Logger    *slog.Logger
 	Async     func(func(context.Context))
+	// Phase 4C hardening (all optional; nil disables the capability).
+	VendorRequests VendorRequestTimeouts
+	Recovery       RecoveryReader
+	Notices        autonomy.NoticeStore
+	Holds          autonomy.HoldStore
+	OfferReverter  OfferReverter
 }
 
 // New builds the engine.
@@ -163,7 +182,8 @@ func New(cfg Config, d Deps) *Engine {
 	}
 	return &Engine{cfg: cfg, store: d.Store, ctxStore: d.Context, requests: d.Requests, reqRepo: d.ReqRepo, router: d.Router,
 		routes: d.Routes, listings: d.Listings, vendors: d.Vendors, extractor: d.Extractor, messenger: d.Messenger, convs: d.Convs,
-		enquirer: d.Enquirer, policy: d.Policy, jobs: d.Jobs, events: d.Events, logger: d.Logger, now: time.Now, async: async}
+		enquirer: d.Enquirer, policy: d.Policy, jobs: d.Jobs, events: d.Events, logger: d.Logger, now: time.Now, async: async,
+		vrs: d.VendorRequests, recovery: d.Recovery, notices: d.Notices, holds: d.Holds, offerReverter: d.OfferReverter}
 }
 
 // SetClock replaces the clock (tests).
@@ -184,6 +204,10 @@ func (e *Engine) Register(w *jobs.Worker) {
 	w.Register(JobVendorResend, e.handleVendorResend, e.onRetryExhausted)
 	w.Register(JobOfferRedelivery, e.handleOfferRedelivery, e.onRetryExhausted)
 	w.Register(JobListingPublish, e.handleListingPublish, nil)
+	w.Register(JobVendorTimeout, e.handleVendorTimeout, e.onRecoveryExhausted)
+	w.Register(JobNoticeResend, e.handleNoticeResend, e.onNoticeRetryExhausted)
+	w.Register(JobNoticeFlush, e.handleNoticeFlush, nil)
+	w.Register(JobRequestRecovery, e.handleRequestRecovery, e.onRecoveryExhausted)
 }
 
 // ---- request.Listener ---------------------------------------------------------
@@ -253,6 +277,11 @@ func (e *Engine) Advance(ctx context.Context, id uuid.UUID) error {
 		if req == nil {
 			return jobs.Permanent(fmt.Errorf("buyer request %s not found", id))
 		}
+		if e.held(ctx, id) {
+			// Paused by an operator: no automatic step (resume re-advances).
+			e.decide(ctx, req, autonomy.DecHold, autonomy.OutcomeDeferred, "", "advance_skipped_while_held", map[string]any{"status": string(req.Status)}, nil, nil)
+			return nil
+		}
 		switch req.Status {
 		case request.StatusNeedsReview:
 			return e.decideConfirmation(ctx, req)
@@ -311,7 +340,17 @@ func (e *Engine) decideConfirmation(ctx context.Context, req *request.BuyerReque
 	}
 	a := Assess(req, known, h, p)
 	conf := req.Confidence
-	inputs := map[string]any{"completeness": string(req.Completeness), "asked": h.Asked, "skipped": h.Skipped, "known_location": known}
+	inputs := map[string]any{"completeness": string(req.Completeness), "asked": h.Asked, "skipped": h.Skipped, "known_location": known,
+		"understanding": a.Outcome}
+	if a.Hold {
+		// Restricted item: never confirmed or routed automatically. The
+		// request stays in review; an operator decides (override confirm,
+		// or leave it). The buyer already got the neutral acknowledgement.
+		e.decide(ctx, req, autonomy.DecRestrictedItem, autonomy.OutcomeRejected, autonomy.SafetyException, a.Reason, inputs, nil, &conf)
+		e.raise(ctx, autonomy.SafetyException, autonomy.ReasonRestrictedItem, "buyer_request", req.ID, &req.ID,
+			map[string]any{"reason": a.Reason, "why": "the request names an item on the restricted-items list; it is not routed automatically"})
+		return nil
+	}
 
 	if a.FillLocation != "" || a.FillVariant != "" {
 		var patch request.Fields
@@ -367,18 +406,22 @@ func (e *Engine) decideConfirmation(ctx context.Context, req *request.BuyerReque
 		_, _ = e.requests.AwaitBuyer(ctx, req.ID)
 		return nil
 	}
-	return e.askBuyer(ctx, req, a.Missing, a.Question, inputs)
+	return e.askBuyer(ctx, req, a.Missing, a.Question, a.Options, inputs)
 }
 
 // askBuyer opens a missing-field clarification and sends the question.
-func (e *Engine) askBuyer(ctx context.Context, req *request.BuyerRequest, field, question string, inputs map[string]any) error {
+func (e *Engine) askBuyer(ctx context.Context, req *request.BuyerRequest, field, question string, options []string, inputs map[string]any) error {
 	conv, bid, rid := req.ConversationID, req.BuyerID, req.ID
+	var opts []autonomy.Option
+	for i, o := range options {
+		opts = append(opts, autonomy.Option{Key: fmt.Sprint(i + 1), Label: o})
+	}
 	// One question at a time per conversation: if another request's
 	// question is open, this one waits (re-advanced when that one closes),
 	// so an answer can never be merged into the wrong request.
 	c, blocking, err := e.store.OpenClarificationIfFree(ctx, &autonomy.Clarification{Party: autonomy.PartyBuyer, ConversationID: &conv, BuyerID: &bid,
 		BuyerRequestID: &rid, Kind: autonomy.KindMissingField, Field: field, Question: question, Status: autonomy.ClarOpen, Attempts: 1,
-		ExpiresAt: e.now().UTC().Add(e.cfg.Params.ClarificationTTL)})
+		Options: opts, ExpiresAt: e.now().UTC().Add(e.cfg.Params.ClarificationTTL)})
 	if err != nil {
 		return err
 	}
@@ -468,9 +511,21 @@ func (e *Engine) routingSettled(ctx context.Context, id uuid.UUID) (bool, error)
 // routeMatched runs matching and the routing policy. broaden=true contacts
 // eligible vendors outside the buyer's area (the buyer agreed).
 func (e *Engine) routeMatched(ctx context.Context, req *request.BuyerRequest, broaden bool) error {
-	cands, _, err := e.router.SuggestVendors(ctx, req.ID)
+	return e.routeMatchedWith(ctx, req, broaden, nil, e.cfg.Params.RouteMaxVendors)
+}
+
+// planRouting runs matching (minus vendors already contacted) and the
+// deterministic routing policy.
+func (e *Engine) planRouting(ctx context.Context, req *request.BuyerRequest, exclude map[uuid.UUID]bool) (RoutePlan, []map[string]any, error) {
+	all, _, err := e.router.SuggestVendors(ctx, req.ID)
 	if err != nil {
-		return err
+		return RoutePlan{}, nil, err
+	}
+	cands := make([]matching.Candidate, 0, len(all))
+	for _, c := range all {
+		if !exclude[c.Vendor.ID] {
+			cands = append(cands, c)
+		}
 	}
 	ids := make([]uuid.UUID, len(cands))
 	for i, c := range cands {
@@ -479,41 +534,59 @@ func (e *Engine) routeMatched(ctx context.Context, req *request.BuyerRequest, br
 	open := map[uuid.UUID]int{}
 	if len(ids) > 0 {
 		if open, err = e.routes.CountOpenByVendor(ctx, ids, e.now().Add(-e.cfg.Params.VendorRequestTTL)); err != nil {
-			return err
+			return RoutePlan{}, nil, err
 		}
 	}
 	plan := RoutingPolicy(req, cands, open, e.policy, e.cfg.Params, e.now().UTC())
-	route := plan.Route
-	if broaden {
-		route = append(append([]matching.Candidate{}, plan.Route...), plan.NonLocal...)
-		if len(route) > e.cfg.Params.RouteMaxVendors {
-			route = route[:e.cfg.Params.RouteMaxVendors]
-		}
-	}
-	var explained []map[string]any
+	explained := make([]map[string]any, 0, len(cands))
 	for _, c := range cands {
 		explained = append(explained, Explain(c))
 	}
+	return plan, explained, nil
+}
+
+// routeTo contacts the chosen candidates through the routing service.
+func (e *Engine) routeTo(ctx context.Context, req *request.BuyerRequest, route []matching.Candidate, reason string) ([]*routing.VendorRequest, error) {
+	vendorIDs := make([]uuid.UUID, len(route))
+	scores, breakdowns := map[uuid.UUID]int{}, map[uuid.UUID]map[string]any{}
+	for i, c := range route {
+		vendorIDs[i] = c.Vendor.ID
+		scores[c.Vendor.ID] = c.Score
+		bd := map[string]any{}
+		for k, v := range c.Breakdown {
+			bd[k] = v
+		}
+		breakdowns[c.Vendor.ID] = bd
+	}
+	return e.router.RouteAs(ctx, req, vendorIDs, scores, breakdowns, event.ActorSystem, reason)
+}
+
+// routeMatchedWith: exclude = vendors already contacted (recovery), capN =
+// the most vendors to contact now.
+func (e *Engine) routeMatchedWith(ctx context.Context, req *request.BuyerRequest, broaden bool, exclude map[uuid.UUID]bool, capN int) error {
+	plan, explained, err := e.planRouting(ctx, req, exclude)
+	if err != nil {
+		return err
+	}
+	route := plan.Route
+	if broaden {
+		route = append(append([]matching.Candidate{}, plan.Route...), plan.NonLocal...)
+	}
+	if len(route) > capN {
+		route = route[:capN]
+	}
 	inputs := map[string]any{"candidates": explained, "excluded": plan.Excluded, "broaden": broaden,
-		"min_score": e.cfg.Params.RouteMinScore, "max_vendors": e.cfg.Params.RouteMaxVendors}
+		"min_score": e.cfg.Params.RouteMinScore, "max_vendors": capN}
+	if len(exclude) > 0 {
+		inputs["already_contacted"] = len(exclude)
+	}
 
 	if len(route) > 0 {
-		vendorIDs := make([]uuid.UUID, len(route))
-		scores, breakdowns := map[uuid.UUID]int{}, map[uuid.UUID]map[string]any{}
-		for i, c := range route {
-			vendorIDs[i] = c.Vendor.ID
-			scores[c.Vendor.ID] = c.Score
-			bd := map[string]any{}
-			for k, v := range c.Breakdown {
-				bd[k] = v
-			}
-			breakdowns[c.Vendor.ID] = bd
-		}
 		reason := "routing_policy"
 		if broaden {
 			reason = "routing_policy_broadened"
 		}
-		vrs, err := e.router.RouteAs(ctx, req, vendorIDs, scores, breakdowns, event.ActorSystem, reason)
+		vrs, err := e.routeTo(ctx, req, route, reason)
 		if err != nil {
 			return err
 		}
@@ -525,7 +598,7 @@ func (e *Engine) routeMatched(ctx context.Context, req *request.BuyerRequest, br
 		}
 		return nil
 	}
-	if !broaden && len(plan.NonLocal) > 0 && e.cfg.Flags.AutoClarifyRequests {
+	if !broaden && len(plan.NonLocal) > 0 && e.cfg.Flags.AutoClarifyRequests && !e.broadenExcluded(req) {
 		q := fmt.Sprintf("I couldn't find %s in %s%s right now. I can check sellers in other areas too. Want me to? (Yes / No)",
 			describe(req), deref(req.Location), budgetSuffix(req))
 		conv, bid, rid := req.ConversationID, req.BuyerID, req.ID
@@ -551,7 +624,7 @@ func (e *Engine) routeMatched(ctx context.Context, req *request.BuyerRequest, br
 	e.decide(ctx, req, autonomy.DecNoMatch, autonomy.OutcomeApplied, "", "no_eligible_vendor", inputs, nil, nil)
 	rid := req.ID
 	_ = e.events.Write(ctx, &event.Event{EventType: event.NoMatchNotified, EntityType: "buyer_request", EntityID: &rid, ActorType: event.ActorSystem,
-		Payload: event.Merge(req.FunnelDims(), map[string]any{"candidates": len(cands), "broadened": broaden})})
+		Payload: event.Merge(req.FunnelDims(), map[string]any{"candidates": len(explained), "broadened": broaden})})
 	return nil
 }
 
@@ -594,21 +667,10 @@ func budgetSuffix(req *request.BuyerRequest) string {
 
 // ---- shared helpers --------------------------------------------------------------
 
-// say sends a buyer-facing text attributed to the request.
+// say sends a buyer-facing text attributed to the request. A failed send
+// is classified and handled by notify (queued, retried or raised).
 func (e *Engine) say(ctx context.Context, conversationID uuid.UUID, requestID *uuid.UUID, kind, text string) {
-	conv, err := e.convs.FindByID(ctx, conversationID)
-	if err != nil || conv == nil {
-		e.logger.Error("loading conversation for workflow message", "conversation_id", conversationID, "error", err)
-		return
-	}
-	et, eid := "conversation", &conversationID
-	if requestID != nil {
-		et, eid = "buyer_request", requestID
-	}
-	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{Kind: kind, EntityType: et, EntityID: eid})
-	if err := e.messenger.SendText(sendCtx, conv.ExternalID, text); err != nil {
-		e.logger.Error("sending workflow message", "kind", kind, "error", err)
-	}
+	e.notify(ctx, conversationID, requestID, kind, text)
 }
 
 func (e *Engine) decide(ctx context.Context, req *request.BuyerRequest, kind, outcome string, fb autonomy.Fallback, reason string,

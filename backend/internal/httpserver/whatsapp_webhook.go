@@ -47,6 +47,7 @@ type WhatsAppWebhookHandler struct {
 	verifyToken           string
 	allowUnsignedWebhooks bool
 	logger                *slog.Logger
+	failures              conversation.OutboundFailureListener // Phase 4C hardening; nil = receipts only
 }
 
 func NewWhatsAppWebhookHandler(
@@ -83,6 +84,14 @@ func NewWhatsAppWebhookHandler(
 // (Phase 4A.1). The adapter only records a durable job; downloading and
 // storing happen in the background worker, never in the webhook request.
 func (h *WhatsAppWebhookHandler) SetMediaIngestion(m media.Enqueuer) { h.media = m }
+
+// SetOutboundFailureListener hands provider-reported delivery failures to
+// the autonomous runtime, which classifies them like a rejected send
+// (Phase 4C hardening). Before this, an asynchronous failure only stamped
+// failed_at: a vendor request stayed SENT and offers stayed "delivered".
+func (h *WhatsAppWebhookHandler) SetOutboundFailureListener(l conversation.OutboundFailureListener) {
+	h.failures = l
+}
 
 // ServeHTTP handles both the Meta verification handshake (GET) and
 // incoming message webhooks (POST).
@@ -220,13 +229,26 @@ func (h *WhatsAppWebhookHandler) processStatusUpdate(ctx context.Context, st wha
 	}
 	if tr.FirstFailed {
 		write(event.MessageFailed)
+		if h.failures != nil {
+			kind, _ := tr.Message.Metadata["kind"].(string)
+			text, _ := tr.Message.Content["text"].(string)
+			var eid *uuid.UUID
+			if s, ok := tr.Message.Metadata["entity_id"].(string); ok {
+				if id, err := uuid.Parse(s); err == nil {
+					eid = &id
+				}
+			}
+			h.failures.OutboundFailed(ctx, conversation.OutboundFailure{MessageID: tr.Message.ID, ConversationID: tr.Message.ConversationID,
+				Kind: kind, EntityType: entityType, EntityID: eid, Metadata: tr.Message.Metadata, Text: text,
+				Code: st.ErrorCode, Title: st.ErrorTitle, At: at})
+		}
 	}
 }
 
 func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg whatsapp.InboundMessage, log *slog.Logger) {
 	conv, err := h.convRepo.FindOrCreateByExternalID(ctx, "whatsapp", msg.From)
 	if err != nil {
-		log.Error("finding/creating conversation", "error", err, "from", msg.From)
+		log.Error("finding/creating conversation", "error", err, "from", maskAddress(msg.From))
 		return
 	}
 
@@ -290,7 +312,7 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 	// becomes a vendor — it only takes the buyer path.
 	v, err := h.vendorRepo.FindByWhatsAppID(ctx, msg.From)
 	if err != nil {
-		log.Error("checking vendor identity", "error", err, "from", msg.From)
+		log.Error("checking vendor identity", "error", err, "from", maskAddress(msg.From))
 		return
 	}
 	isVendor := v != nil && v.Status == vendor.StatusActive
@@ -346,7 +368,7 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 
 	b, err := h.buyerRepo.FindOrCreateByExternalID(ctx, "whatsapp", msg.From)
 	if err != nil {
-		log.Error("finding/creating buyer", "error", err, "from", msg.From)
+		log.Error("finding/creating buyer", "error", err, "from", maskAddress(msg.From))
 		return
 	}
 	if err := h.convRepo.LinkBuyer(ctx, conv.ID, b.ID); err != nil {
@@ -386,4 +408,13 @@ func toMediaRef(m *whatsapp.Media) *conversation.MediaRef {
 		Kind: m.Kind, Provider: "whatsapp", ProviderRef: m.ID, MimeType: m.MimeType,
 		SHA256: m.SHA256, Caption: m.Caption, Filename: m.Filename, Voice: m.Voice,
 	}
+}
+
+// maskAddress keeps the last 4 digits of a channel address for logs (a
+// phone number is personal data; logs are not access-controlled).
+func maskAddress(a string) string {
+	if len(a) <= 4 {
+		return "****"
+	}
+	return "****" + a[len(a)-4:]
 }

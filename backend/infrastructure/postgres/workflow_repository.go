@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/middleman/backend/internal/request"
+	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/workflow"
 )
 
@@ -220,3 +223,121 @@ func (r *WorkflowRepository) VendorTrust(ctx context.Context, vendorID uuid.UUID
 
 // keep pq imported for array helpers used by future context queries.
 var _ = pq.Array
+
+var _ workflow.RecoveryReader = (*WorkflowRepository)(nil)
+
+// RecoveryFacts implements workflow.RecoveryReader (Phase 4C hardening):
+// one consistent read of what recovery decides on.
+func (r *WorkflowRepository) RecoveryFacts(ctx context.Context, buyerRequestID uuid.UUID, unsentGrace time.Duration) (*workflow.RecoveryFacts, error) {
+	f := &workflow.RecoveryFacts{}
+	var status string
+	err := r.db.QueryRowContext(ctx, `SELECT br.status,
+		EXISTS (SELECT 1 FROM buyer_selections s WHERE s.buyer_request_id = br.id),
+		EXISTS (SELECT 1 FROM transactions t WHERE t.buyer_request_id = br.id),
+		(SELECT count(*) FROM vendor_requests v WHERE v.buyer_request_id = br.id),
+		(SELECT count(*) FROM vendor_requests v WHERE v.buyer_request_id = br.id
+			AND (v.status = 'SENT' OR (v.status = 'PENDING' AND v.created_at > now() - make_interval(secs => $2))
+			     -- a rejected send with an automatic retry still pending is still awaited
+			     OR (v.status = 'SEND_FAILED' AND EXISTS (SELECT 1 FROM jobs j WHERE j.job_type = 'VENDOR_REQUEST_RESEND'
+			         AND j.status IN ('PENDING', 'RUNNING') AND j.payload->>'vendor_request_id' = v.id::text)))),
+		(SELECT count(*) FROM vendor_responses x JOIN vendor_requests v ON v.id = x.vendor_request_id WHERE v.buyer_request_id = br.id
+			AND x.status IN ('AVAILABLE', 'CAN_SOURCE', 'ALTERNATIVE') AND x.review_state <> 'NEEDS_REVIEW'),
+		(SELECT count(*) FROM vendor_responses x JOIN vendor_requests v ON v.id = x.vendor_request_id WHERE v.buyer_request_id = br.id
+			AND x.review_state = 'NEEDS_REVIEW' AND x.status <> 'UNAVAILABLE'),
+		(SELECT count(*) FROM offers o WHERE o.buyer_request_id = br.id AND o.status IN ('REVIEWED', 'SHORTLISTED', 'SENDING', 'SENT')
+			AND (o.expires_at IS NULL OR o.expires_at > now())),
+		EXISTS (SELECT 1 FROM buyer_requests n WHERE n.conversation_id = br.conversation_id AND n.id <> br.id AND n.created_at > br.created_at
+			AND n.status = 'CONFIRMED' AND br.product IS NOT NULL AND lower(n.product) = lower(br.product)),
+		EXISTS (SELECT 1 FROM workflow_holds h WHERE h.buyer_request_id = br.id AND h.released_at IS NULL)
+		FROM buyer_requests br WHERE br.id = $1`, buyerRequestID.String(), unsentGrace.Seconds()).Scan(&status, &f.HasSelection, &f.HasTransaction,
+		&f.Contacted, &f.Awaiting, &f.Usable, &f.Undecided, &f.ActiveOffers, &f.Superseded, &f.Held)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("buyer request %s not found", buyerRequestID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	f.Status = request.Status(status)
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT vendor_id FROM vendor_requests WHERE buyer_request_id = $1`, buyerRequestID.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if u, err := uuid.Parse(id); err == nil {
+			f.ContactedVendors = append(f.ContactedVendors, u)
+		}
+	}
+	return f, rows.Err()
+}
+
+// TimeoutCandidates implements workflow.RecoveryReader.
+func (r *WorkflowRepository) TimeoutCandidates(ctx context.Context, unsentGrace time.Duration, limit int) ([]workflow.TimeoutCandidate, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT v.id, v.status, v.sent_at, v.created_at FROM vendor_requests v
+		JOIN buyer_requests br ON br.id = v.buyer_request_id
+		WHERE v.status = 'SENT'
+		   OR (v.status = 'PENDING' AND v.created_at < now() - make_interval(secs => $1))
+		   OR (v.status IN ('EXPIRED', 'SEND_FAILED') AND br.status = 'CONFIRMED' AND v.created_at > now() - interval '30 days'
+		       AND NOT EXISTS (SELECT 1 FROM workflow_decisions d WHERE d.subject_type = 'vendor_request' AND d.subject_id = v.id
+		                       AND d.decision = 'VENDOR_REQUEST_TIMEOUT')
+		       AND NOT EXISTS (SELECT 1 FROM workflow_decisions d WHERE d.buyer_request_id = br.id AND d.decision = 'RECOVER_REQUEST'
+		                       AND d.inputs->>'vendor_request_id' = v.id::text))
+		ORDER BY v.created_at LIMIT $2`, unsentGrace.Seconds(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []workflow.TimeoutCandidate
+	for rows.Next() {
+		var (
+			c      workflow.TimeoutCandidate
+			id, st string
+			sent   sql.NullTime
+		)
+		if err := rows.Scan(&id, &st, &sent, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		c.VendorRequestID, _ = uuid.Parse(id)
+		c.Status = routing.VendorRequestStatus(st)
+		c.SentAt = optTime(sent)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// RequestMessages is the message trail of one request for the operator
+// (Phase 4C hardening): every outbound message about the request or its
+// vendor requests, with its delivery state (sent / delivered / read /
+// failed). Messages that never left (rejected sends) are not stored as
+// messages; they appear in the decision log and pending_notices.
+func (r *WorkflowRepository) RequestMessages(ctx context.Context, buyerRequestID uuid.UUID) ([]map[string]any, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT m.id, COALESCE(m.metadata->>'kind', ''), COALESCE(m.metadata->>'entity_type', ''),
+			COALESCE(m.delivery_status, 'sent'), m.created_at, m.delivered_at, m.read_at, m.failed_at, COALESCE(m.delivery_error, ''),
+			left(COALESCE(m.content->>'text', ''), 300)
+		FROM messages m
+		WHERE m.direction = 'OUTBOUND' AND (m.metadata->>'entity_id' = $1
+			OR m.metadata->>'entity_id' IN (SELECT id::text FROM vendor_requests WHERE buyer_request_id = $1::uuid))
+		ORDER BY m.created_at`, buyerRequestID.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var (
+			id, kind, et, status, errText, text string
+			at                                  time.Time
+			delivered, read, failed             sql.NullTime
+		)
+		if err := rows.Scan(&id, &kind, &et, &status, &at, &delivered, &read, &failed, &errText, &text); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"message_id": id, "kind": kind, "entity_type": et, "delivery_status": status, "sent_at": at,
+			"delivered_at": optTime(delivered), "read_at": optTime(read), "failed_at": optTime(failed), "error": errText, "text": text})
+	}
+	return out, rows.Err()
+}

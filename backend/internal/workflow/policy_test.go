@@ -9,6 +9,7 @@ import (
 
 	"github.com/middleman/backend/infrastructure/ai"
 	"github.com/middleman/backend/internal/autonomy"
+	"github.com/middleman/backend/internal/channel"
 	"github.com/middleman/backend/internal/matching"
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/vendor"
@@ -228,12 +229,16 @@ func TestSkipsAndYesNo(t *testing.T) {
 }
 
 func TestClassifySendError(t *testing.T) {
-	cases := map[string]string{
-		"whatsapp api returned status 400: {\"error\":{\"code\":131047}}": SendPolicy,
-		"whatsapp api returned status 503: unavailable":                   SendTransient,
-		"whatsapp api returned status 429: rate":                          SendTransient,
-		"whatsapp api returned status 401: bad token":                     SendPermanent,
-		"calling whatsapp api: dial tcp: connection refused":              SendTransient,
+	// Text fallback for errors that are not *channel.ProviderError.
+	cases := map[string]channel.FailureClass{
+		"whatsapp api returned status 400: {\"error\":{\"code\":131047}}": channel.FailPolicy,
+		"whatsapp api returned status 400: {\"error\":{\"code\":130429}}": channel.FailRateLimited,
+		"whatsapp api returned status 503: unavailable":                   channel.FailUnavailable,
+		"whatsapp api returned status 500: oops":                          channel.FailTransient,
+		"whatsapp api returned status 429: rate":                          channel.FailRateLimited,
+		"whatsapp api returned status 401: bad token":                     channel.FailAuthConfig,
+		"whatsapp api returned status 400: {\"error\":{\"code\":999999}}": channel.FailUnknown,
+		"calling whatsapp api: dial tcp: connection refused":              channel.FailTransient,
 	}
 	for msg, want := range cases {
 		if got := ClassifySendError(errors.New(msg)); got != want {
@@ -291,7 +296,7 @@ func TestSpecInTextAvoidsAskingWhatWasSaid(t *testing.T) {
 	cases := map[[2]string]string{
 		{"I need a Samsung A54 in Benin City", "samsung"}: "A54",
 		{"I need a 55 inch TV", "tv"}:                     "55 inch",
-		{"iphone 15 pro max abeg", "iphone"}:              "15 pro",
+		{"iphone 15 pro max abeg", "iphone"}:              "15 pro max", // every model suffix is kept (Phase 4C hardening)
 		{"I need a TV for my room", "tv"}:                 "",
 	}
 	for in, want := range cases {

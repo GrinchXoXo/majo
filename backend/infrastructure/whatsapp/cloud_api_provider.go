@@ -270,8 +270,10 @@ func (p *CloudAPIProvider) send(ctx context.Context, payload map[string]any) (st
 		// (e.g. 131047 "re-engagement message" when the 24h customer
 		// service window has closed and a template is required), which is
 		// what the operator needs to see on a failed VendorRequest/Offer.
+		// The structured code is kept (channel.ProviderError) so the runtime
+		// classifies the failure from the code, not from text.
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", fmt.Errorf("whatsapp api returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
+		return "", channel.ParseGraphError("whatsapp", resp.StatusCode, detail)
 	}
 	var sent struct {
 		Messages []struct {

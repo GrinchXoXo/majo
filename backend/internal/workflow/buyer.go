@@ -97,7 +97,27 @@ func (e *Engine) HandleBuyerText(ctx context.Context, m BuyerText) bool {
 		e.async(func(bg context.Context) { e.ProcessAnswer(bg, m) })
 		return true
 	}
+	if kind := SmallTalk(m.Text); kind != "" {
+		e.handleSmallTalk(ctx, m, kind)
+		return true
+	}
 	return e.handleReference(ctx, m, e.callbacks(m))
+}
+
+// handleSmallTalk: a greeting or a courtesy message with nothing open is
+// not demand — no BuyerRequest is created (Phase 4C hardening). A greeting
+// gets a prompt; an acknowledgement gets nothing.
+func (e *Engine) handleSmallTalk(ctx context.Context, m BuyerText, kind string) {
+	reason := "acknowledgement_no_request"
+	if kind == "greeting" {
+		reason = "greeting_prompted"
+		e.say(ctx, m.ConversationID, nil, "greeting", "Hi 👋 I'm Majo. Tell me what you're looking for (and your area) and I'll find it for you.")
+	}
+	if err := e.store.RecordDecision(ctx, &autonomy.Decision{WorkflowType: "conversation", SubjectType: "message", SubjectID: m.MessageID,
+		Kind: autonomy.DecAcknowledge, Outcome: autonomy.OutcomeApplied, Reason: reason, PolicyVersion: autonomy.PolicyVersion,
+		Inputs: map[string]any{"text": m.Text}, Actor: "SYSTEM"}); err != nil {
+		e.logger.Error("recording small-talk decision", "error", err)
+	}
 }
 
 // JobBuyerAnswer processes a buyer message while a question is open.
@@ -261,8 +281,31 @@ func (e *Engine) answerBuyer(ctx context.Context, m BuyerText, c *autonomy.Clari
 				return nil
 			}
 			existing, err := e.routes.ListVendorRequestsByBuyerRequest(ctx, req.ID)
-			if err != nil || len(existing) > 0 || !e.cfg.Flags.AutoRouteMatchedRequests {
-				return err // already routed (or routing is switched off)
+			if err != nil || !e.cfg.Flags.AutoRouteMatchedRequests {
+				return err // routing is switched off
+			}
+			if after, _ := c.Context["after_recovery"].(bool); after {
+				// Asked after the first vendors went quiet: contact vendors in
+				// other areas, never the ones already asked, within the total cap.
+				if e.held(ctx, req.ID) || req.Status != request.StatusConfirmed {
+					return nil
+				}
+				exclude := map[uuid.UUID]bool{}
+				for _, vr := range existing {
+					exclude[vr.VendorID] = true
+				}
+				left := e.cfg.Params.MaxVendorsPerRequest - len(existing)
+				if left <= 0 {
+					e.decide(ctx, req, autonomy.DecRecoverRequest, autonomy.OutcomeRejected, "", autonomy.RecoverContactLimit, map[string]any{"contacted": len(existing)}, nil, nil)
+					return nil
+				}
+				if left > e.cfg.Params.RouteMaxVendors {
+					left = e.cfg.Params.RouteMaxVendors
+				}
+				return e.routeMatchedWith(ctx, req, true, exclude, left)
+			}
+			if len(existing) > 0 {
+				return nil // already routed
 			}
 			return e.routeMatched(ctx, req, true)
 		}); err != nil {
@@ -334,11 +377,21 @@ func (e *Engine) answerMissingField(ctx context.Context, m BuyerText, c *autonom
 		cb.Default(ctx)
 		return
 	}
+	if c.Field == FieldProduct && len(c.Options) > 1 {
+		if e.answerProductChoice(ctx, m, c, req, cb) {
+			return
+		}
+	}
 	if IsSkip(m.Text) {
 		if e.closeBuyerClarification(ctx, c, autonomy.ClarAnswered, m, map[string]any{"skipped": true, "field": c.Field}) != nil {
 			return
 		}
-		e.continueRequest(ctx, req, request.Fields{}, c, m)
+		var patch request.Fields
+		if c.Field == FieldCondition {
+			either := "used_or_new" // "either / any" settles the contradiction
+			patch.Condition = &either
+		}
+		e.continueRequest(ctx, req, patch, c, m)
 		return
 	}
 	if c.Field == FieldProduct && e.liveReference(ctx, m) {
@@ -349,15 +402,30 @@ func (e *Engine) answerMissingField(ctx context.Context, m BuyerText, c *autonom
 	if xerr != nil {
 		ex = &ai.ExtractionResult{}
 	}
-	// A different product while Majo asked about something else is a new
-	// request, not an answer.
+	// A different product while Majo asked about something else: a full new
+	// request supersedes the question; a bare product name ("laptop" when
+	// asked "which phone model?") means the buyer changed their mind about
+	// THIS request — the product is replaced (never merged into the model
+	// field) and the request is assessed again. No second request.
 	if c.Field != FieldProduct && ex.Product != nil && strings.TrimSpace(deref(req.Product)) != "" {
 		exact, family := matching.ProductRelevance(*ex.Product, deref(req.Product))
-		if !exact && !family && looksLikeNewRequest(m.Text) {
-			if e.closeBuyerClarification(ctx, c, autonomy.ClarSuperseded, m, map[string]any{"reason": "new_request"}) != nil {
+		if !exact && !family {
+			if looksLikeNewRequest(m.Text) {
+				if e.closeBuyerClarification(ctx, c, autonomy.ClarSuperseded, m, map[string]any{"reason": "new_request"}) != nil {
+					return
+				}
+				cb.Default(ctx)
 				return
 			}
-			cb.Default(ctx)
+			if e.closeBuyerClarification(ctx, c, autonomy.ClarAnswered, m, map[string]any{"field": c.Field, "changed_product": *ex.Product}) != nil {
+				return
+			}
+			empty := ""
+			patch := request.Fields{Product: ex.Product, Variant: &empty, Category: ex.Category}
+			if ex.Variant != nil {
+				patch.Variant = ex.Variant
+			}
+			e.continueRequest(ctx, req, patch, c, m)
 			return
 		}
 	}
@@ -450,14 +518,25 @@ func answerPatch(field, text string, ex *ai.ExtractionResult, req *request.Buyer
 			p.Location, got = &loc, true
 		}
 	case FieldSpec:
-		if ex.Variant != nil {
+		// A model stated after the product word ("make it iphone 14"), then
+		// the extractor's variant, then a short answer ("pro max", "55").
+		// A long sentence is never stored as a model.
+		if v := SpecInText(raw, deref(req.Product)); v != "" {
+			p.Variant, got = &v, true
+		} else if ex.Variant != nil {
 			p.Variant, got = ex.Variant, true
-		} else if s := short(40); s != nil {
+		} else if s := short(40); s != nil && len(strings.Fields(*s)) <= 4 {
 			p.Variant, got = s, true
 		}
 	case FieldBudget:
 		if ex.BudgetMax != nil || ex.BudgetMin != nil {
 			p.BudgetMax, p.BudgetMin, got = ex.BudgetMax, ex.BudgetMin, true
+		}
+	case FieldCondition:
+		if c := conditionAnswer(raw); c != "" {
+			p.Condition, got = &c, true
+		} else if ex.Condition != nil {
+			p.Condition, got = ex.Condition, true
 		}
 	}
 	if field == "" {
@@ -474,7 +553,7 @@ func answerPatch(field, text string, ex *ai.ExtractionResult, req *request.Buyer
 	if field != FieldBudget && (ex.BudgetMax != nil || ex.BudgetMin != nil) && req.BudgetMax == nil && req.BudgetMin == nil {
 		p.BudgetMax, p.BudgetMin = ex.BudgetMax, ex.BudgetMin
 	}
-	if ex.Condition != nil && req.Condition == nil {
+	if field != FieldCondition && ex.Condition != nil && req.Condition == nil {
 		p.Condition = ex.Condition
 	}
 	if ex.Quantity != nil && req.Quantity == nil {
@@ -527,6 +606,13 @@ func (e *Engine) handleReference(ctx context.Context, m BuyerText, cb Callbacks)
 	items := ResolveReference(ref, bc.Items)
 	switch len(items) {
 	case 0:
+		if len(bc.Items) == 0 && referenceWithoutSubject(ref) {
+			// "how much is it?" with nothing ever shown: there is nothing to
+			// answer about, and it is not a request. Say so; no request.
+			e.say(ctx, m.ConversationID, nil, "context_answer", "I haven't sent you any options yet 🙏 Tell me what you're looking for and I'll search.")
+			e.recordReference(ctx, m, ref, nil, "no_context")
+			return true
+		}
 		return false // not about anything Majo showed: ordinary request
 	case 1:
 		e.recordReference(ctx, m, ref, items, "resolved")
@@ -810,4 +896,125 @@ func placeFromAnswer(raw string) string {
 		return ""
 	}
 	return t
+}
+
+// conditionAnswer reads a reply to "brand new or fairly used?".
+func conditionAnswer(raw string) string {
+	t := autonomy.Normalize(raw)
+	newer := strings.Contains(t, "new") && !strings.Contains(t, "used")
+	used := strings.Contains(t, "used") || strings.Contains(t, "tokunbo") || strings.Contains(t, "second hand")
+	switch {
+	case strings.Contains(t, "either") || strings.Contains(t, "both") || strings.Contains(t, " or "):
+		return "used_or_new"
+	case newer:
+		return "new"
+	case used && !strings.Contains(t, "new"):
+		return "used"
+	}
+	return ""
+}
+
+var bothWords = map[string]bool{"both": true, "both of them": true, "all": true, "all of them": true, "the two": true, "everything": true,
+	"any": true, "anyone": true, "any one": true, "both abeg": true, "i want both": true, "i need both": true}
+
+// answerProductChoice: the buyer named several products and Majo asked
+// which to start with. The choice becomes this request's product; every
+// other product becomes its own request (canonical: one BuyerRequest per
+// product), which waits for the question slot. Nothing is dropped and no
+// request is duplicated (only the answer that closes the question acts).
+func (e *Engine) answerProductChoice(ctx context.Context, m BuyerText, c *autonomy.Clarification, req *request.BuyerRequest, cb Callbacks) bool {
+	t := autonomy.Normalize(m.Text)
+	chosen := MatchProductOption(m.Text, c.Options)
+	if chosen == nil && bothWords[t] {
+		chosen = &c.Options[0]
+	}
+	if chosen == nil {
+		return false // not a choice: the ordinary answer / re-ask path decides
+	}
+	var others []string
+	for _, o := range c.Options {
+		if o.Key != chosen.Key {
+			others = append(others, o.Label)
+		}
+	}
+	if e.closeBuyerClarification(ctx, c, autonomy.ClarAnswered, m, map[string]any{"field": FieldProduct, "option": chosen.Key,
+		"chosen": chosen.Label, "deferred": others}) != nil {
+		return true // a concurrent answer won
+	}
+	product := chosen.Label
+	patch := request.Fields{Product: &product}
+	if !strings.EqualFold(product, deref(req.Product)) {
+		empty := "" // the stated model/size belonged to the other product
+		patch.Variant = &empty
+	}
+	e.continueRequest(ctx, req, patch, c, m)
+	for _, other := range others {
+		o := other
+		f := &request.Fields{Product: &o, Location: req.Location}
+		nr, created, err := e.requests.Create(ctx, request.NewRequest{Origin: request.OriginMessage, ConversationID: req.ConversationID,
+			BuyerID: req.BuyerID, RawText: strings.TrimSpace(o + " " + locSuffix(req)), Fields: f, Confidence: 0.9,
+			ExtractedData: map[string]any{"source": "deferred_from_multi_product_request", "parent_request_id": req.ID.String()},
+			EventExtra:    map[string]any{"parent_request_id": req.ID.String(), "split_from_message": true}})
+		if err != nil {
+			e.logger.Error("creating deferred product request", "parent", req.ID, "error", err)
+			continue
+		}
+		if created {
+			e.decide(ctx, req, autonomy.DecContinueRequest, autonomy.OutcomeApplied, "", "other_product_split_into_own_request",
+				map[string]any{"product": o}, map[string]any{"buyer_request_id": nr.ID.String()}, nil)
+		}
+	}
+	if len(others) > 0 {
+		e.say(ctx, m.ConversationID, &req.ID, "clarification_ack", fmt.Sprintf("Okay 👍 Starting with %s. I'll look for %s right after.", product, joinOr(others)))
+	}
+	return true
+}
+
+// MatchProductOption: a number ("2") or the product named ("the laptop").
+func MatchProductOption(text string, opts []autonomy.Option) *autonomy.Option {
+	t := autonomy.Normalize(text)
+	if n := strings.TrimPrefix(t, "#"); len(n) <= 2 {
+		for i := range opts {
+			if opts[i].Key == n {
+				return &opts[i]
+			}
+		}
+	}
+	var hit *autonomy.Option
+	for i := range opts {
+		label := strings.ToLower(opts[i].Label)
+		if strings.Contains(" "+t+" ", " "+label+" ") || strings.Contains(" "+t+" ", " "+strings.Split(label, " ")[0]+" ") {
+			if hit != nil {
+				return nil // both named: not a choice
+			}
+			hit = &opts[i]
+		}
+	}
+	return hit
+}
+
+// referenceWithoutSubject: "how much is it?" names nothing by itself.
+func referenceWithoutSubject(ref Reference) bool {
+	return ref.Intent != IntentNone && ref.Noun == "" && len(ref.Attrs) == 0 && ref.Amount == nil
+}
+
+// FirstReading is the pure, deterministic reading of a buyer message when
+// no question is open, before any request exists: "small_talk" (greeting /
+// courtesy: no request), "reference_without_context" (a question about
+// something never shown: no request), or "" (continue: offer selection
+// reply or a new request). Used by HandleBuyerText's order and by the
+// request-understanding corpus.
+func FirstReading(text string, shownItems int) string {
+	if SmallTalk(text) != "" {
+		return "small_talk"
+	}
+	if shownItems == 0 && referenceWithoutSubject(ParseReference(text)) {
+		return "reference_without_context"
+	}
+	return ""
+}
+
+// AnswerPatch is answerPatch for tests and evaluation.
+func AnswerPatch(field, text string, ex *ai.ExtractionResult, req *request.BuyerRequest) (request.Fields, bool) {
+	return answerPatch(field, text, ex, req)
 }

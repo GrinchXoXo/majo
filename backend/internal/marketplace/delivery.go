@@ -39,6 +39,7 @@ type OfferDelivery struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	failures   OfferFailureListener
+	hooks      AutomationHooks
 }
 
 // OfferFailureListener is told when an automatic offer delivery was rejected
@@ -50,6 +51,18 @@ type OfferFailureListener interface {
 
 // SetFailureListener wires automatic delivery recovery.
 func (d *OfferDelivery) SetFailureListener(l OfferFailureListener) { d.failures = l }
+
+// AutomationHooks connect automatic delivery to the autonomous runtime
+// (Phase 4C hardening): an operator hold stops automatic delivery (the
+// operator's own "deliver" override is unaffected), and a reply that is not
+// usable lets the runtime recover the request if no vendor can still help.
+type AutomationHooks interface {
+	Held(ctx context.Context, buyerRequestID uuid.UUID) bool
+	ResponseNotUsable(ctx context.Context, buyerRequestID, vendorRequestID uuid.UUID)
+}
+
+// SetAutomationHooks wires the hooks.
+func (d *OfferDelivery) SetAutomationHooks(h AutomationHooks) { d.hooks = h }
 
 func NewOfferDelivery(
 	requests request.Repository,
@@ -157,7 +170,7 @@ func (d *OfferDelivery) DeliverPendingOffers(ctx context.Context, buyerRequestID
 				d.logger.Error("writing OFFER_SEND_FAILED event", "error", wErr)
 			}
 		}
-		return nil, fmt.Errorf("%w: %v", ErrDeliveryFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrDeliveryFailed, err) // keep the provider error for classification
 	}
 
 	sentAt := d.now().UTC()
@@ -214,12 +227,23 @@ func (d *OfferDelivery) VendorResponseChanged(ctx context.Context, resp *routing
 
 	if !offer.IsEligible(resp) {
 		d.withdrawOfferFor(ctx, resp)
+		// A decline (not a reply still being clarified) may leave the buyer
+		// with nobody left to answer: let the runtime check.
+		if d.hooks != nil && resp.Status == routing.ResponseUnavailable && resp.ReviewState != routing.ReviewNeedsReview {
+			if vr, err := d.routing.FindVendorRequestByID(ctx, *resp.VendorRequestID); err == nil && vr != nil {
+				d.hooks.ResponseNotUsable(ctx, vr.BuyerRequestID, vr.ID)
+			}
+		}
 		return
 	}
 
 	vr, err := d.routing.FindVendorRequestByID(ctx, *resp.VendorRequestID)
 	if err != nil || vr == nil {
 		d.logger.Error("loading vendor request for offer delivery", "vendor_request_id", *resp.VendorRequestID, "error", err)
+		return
+	}
+	if d.hooks != nil && d.hooks.Held(ctx, vr.BuyerRequestID) {
+		d.logger.Info("automatic offer delivery skipped: request is on hold", "buyer_request_id", vr.BuyerRequestID)
 		return
 	}
 

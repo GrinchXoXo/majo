@@ -40,6 +40,13 @@ class ExtractionResult:
     urgency: Optional[str] = None
     preferences: List[str] = field(default_factory=list)
     confidence: float = 0.0
+    # Phase 4C hardening: interpretation signals for the deterministic
+    # policy (Go). The extractor only REPORTS them; it never decides.
+    #   other_products: further products named in the same message
+    #   ambiguities: "condition_conflict" (new AND used, not "new or used"),
+    #                "location_alternatives" (two places offered as options)
+    other_products: List[str] = field(default_factory=list)
+    ambiguities: List[str] = field(default_factory=list)
 
 
 # --- Reference data for the heuristic extractor ---
@@ -52,6 +59,7 @@ CATEGORY_KEYWORDS = {
         "ps5", "ps4", "playstation", "xbox", "console", "tv", "television",
         "headphone", "headphones", "airpods", "earpiece", "earpieces",
         "phone", "smartphone", "charger", "power bank", "speaker",
+        "tecno", "infinix", "itel", "redmi", "xiaomi", "oppo", "nokia", "pixel",
     ],
     "furniture": [
         "mattress", "bed", "table", "chair", "fan", "wardrobe", "cupboard",
@@ -72,7 +80,20 @@ PRODUCT_HINTS = [
     "table", "chair", "office chair", "fan", "wardrobe", "fridge",
     "refrigerator", "sofa", "shoe", "shoes", "sneakers", "bag", "watch",
     "smartphone", "phone",
+    # Phase 4C hardening: every category keyword is also a product word (a
+    # "freezer" was categorised but never read as the product), plus common
+    # household items.
+    "freezer", "cooker", "microwave", "cupboard", "shelf", "headphones", "headphone",
+    "earpiece", "charger", "power bank", "speaker", "console", "dress", "wig", "perfume",
+    "shirt", "clothes", "generator", "inverter", "solar panel", "blender", "iron", "air conditioner",
+    "gas cylinder", "washing machine",
+    # Phone brands common in Nigeria (Phase 4C hardening).
+    "tecno", "infinix", "itel", "redmi", "xiaomi", "oppo", "nokia", "pixel",
 ]
+
+# A brand directly followed by a product noun qualifies it ("samsung tv" is
+# one TV, not a Samsung phone and a TV).
+BRAND_HINTS = {"samsung", "tecno", "infinix", "nokia", "xiaomi"}
 
 NIGERIAN_LOCATIONS = [
     "benin city", "benin", "lagos", "abuja", "otuoke", "port harcourt",
@@ -92,7 +113,7 @@ URGENCY_PATTERNS = [
 # "200k max", "budget is 350k", "for 250k". Amounts are assumed to be in
 # thousands of naira when suffixed with "k", which is standard Nigerian
 # WhatsApp shorthand.
-RANGE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*k?\s*[-to]{1,3}\s*(\d+(?:\.\d+)?)\s*k", re.I)
+RANGE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*k?\s*(?:-|to|and)\s*(\d+(?:\.\d+)?)\s*k", re.I)
 SINGLE_AMOUNT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*k\b", re.I)
 UNDER_PATTERN = re.compile(r"\bunder\s+(\d+(?:\.\d+)?)\s*k\b", re.I)
 MAX_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*k\s*max\b", re.I)
@@ -189,22 +210,102 @@ def extract_location(text: str) -> Optional[str]:
     return None
 
 
-def extract_category_and_product(text: str) -> tuple[Optional[str], Optional[str]]:
-    lowered = text.lower()
+def _word_pattern(term: str) -> "re.Pattern[str]":
+    # Whole word, optional plural, a digit may follow ("iphone13"):
+    # "fan" must not match "fancy", "bag" not "baggage", "table" not
+    # "vegetable", "watch" not "watching", "bed" not "bedroom".
+    return re.compile(r"(?<![a-z])" + re.escape(term) + r"(?:s|es)?(?![a-z])", re.I)
 
+
+_HINT_PATTERNS = [(h, _word_pattern(h)) for h in PRODUCT_HINTS]
+_CATEGORY_PATTERNS = {cat: [_word_pattern(k) for k in kws] for cat, kws in CATEGORY_KEYWORDS.items()}
+
+
+def find_products(text: str) -> List[str]:
+    """Every distinct product hint named in the text, in order of
+    appearance; a hint inside a longer one found ("iphone" inside
+    "iphone 13") is not a second product."""
+    spans = []
+    for hint, pat in _HINT_PATTERNS:
+        for m in pat.finditer(text):
+            spans.append((m.start(), m.end(), hint))
+    spans.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    out, covered = [], []
+    for start, end, hint in spans:
+        if any(start >= a and end <= b for a, b in covered):
+            continue
+        covered.append((start, end))
+        if hint not in out:
+            out.append(hint)
+    return out
+
+
+def extract_category_and_product(text: str) -> tuple[Optional[str], Optional[str]]:
     product = None
-    for hint in PRODUCT_HINTS:
-        if hint in lowered:
+    for hint, pat in _HINT_PATTERNS:
+        if pat.search(text):
             product = hint
             break
+    if product in BRAND_HINTS:
+        m = _word_pattern(product).search(text)
+        if m:
+            rest = text[m.end():m.end() + 24]
+            for hint, pat in _HINT_PATTERNS:
+                if hint not in BRAND_HINTS and hint != product:
+                    nm = pat.match(rest.lstrip())
+                    if nm:
+                        product = product + " " + hint
+                        break
 
     category = None
-    for cat, keywords in CATEGORY_KEYWORDS.items():
-        if any(kw in lowered for kw in keywords):
+    for cat, pats in _CATEGORY_PATTERNS.items():
+        if any(p.search(text) for p in pats):
             category = cat
             break
 
     return category, product
+
+
+_FAMILY = {"iphone": "phone", "samsung": "phone", "smartphone": "phone", "television": "tv",
+           "refrigerator": "fridge", "sneakers": "shoe", "shoes": "shoe", "airpod": "airpods",
+           "macbook": "laptop", "office chair": "chair"}
+
+
+def _family(p: str) -> str:
+    head = p.split(" ")[0]
+    return _FAMILY.get(p, _FAMILY.get(head, head))
+
+
+def other_products(text: str, product: Optional[str]) -> List[str]:
+    """Products named besides the main one ("iphone and laptop"). A more
+    specific name of the same thing ("phone ... iphone 13") or a brand
+    qualifying the product ("samsung tv") is not another product."""
+    if not product:
+        return []
+    parts = product.split(" ")
+    return [p for p in find_products(text) if p != product and p not in parts and _family(p) != _family(product)
+            and not (p in product or product in p)]
+
+
+_CONDITION_EITHER = re.compile(r"\b(new|used)\s+or\s+(new|used|fairly used)\b|\beither\b|\bany condition\b|used\s+(is\s+)?(fine|ok|okay)", re.I)
+_NEW = re.compile(r"\b(brand\s+new|new)\b", re.I)
+_USED = re.compile(r"\b(fairly\s+used|used|second[\s-]?hand|tokunbo)\b", re.I)
+
+
+def extract_ambiguities(text: str) -> List[str]:
+    out = []
+    if _NEW.search(text) and _USED.search(text) and not _CONDITION_EITHER.search(text):
+        out.append("condition_conflict")
+    lowered = text.lower()
+    places = []
+    for loc in NIGERIAN_LOCATIONS:
+        if re.search(r"(?<![a-z])" + re.escape(loc) + r"(?![a-z])", lowered):
+            canon = "Benin City" if loc in ("benin", "benin city", "uniben") else loc.title()
+            if canon not in places:
+                places.append(canon)
+    if len(places) >= 2:
+        out.append("location_alternatives")
+    return out
 
 
 def extract_variant(text: str, product: Optional[str]) -> Optional[str]:
@@ -225,8 +326,11 @@ def extract_condition(text: str) -> Optional[str]:
 
 
 def extract_quantity(text: str) -> Optional[int]:
-    m = QUANTITY_PATTERN.search(text)
-    if m:
+    for m in QUANTITY_PATTERN.finditer(text):
+        # "iphone 13 and a laptop": 13 is the iPhone's model, not a quantity.
+        before = text[:m.start()].rstrip().lower()
+        if any(before.endswith(h) for h in PRODUCT_HINTS):
+            continue
         return int(m.group(1))
     m = QUANTITY_WORD_PATTERN.search(text)
     if m:
@@ -252,6 +356,8 @@ class HeuristicExtractor:
         quantity = extract_quantity(text)
         urgency = extract_urgency(text)
         variant = extract_variant(text, product)
+        others = other_products(text, product)
+        ambiguities = extract_ambiguities(text)
 
         # Confidence is informational only (PRD 1 §18) — never used to
         # auto-route in Phase 1. Weighted by how many signals were found.
@@ -282,6 +388,8 @@ class HeuristicExtractor:
             urgency=urgency,
             preferences=[],
             confidence=confidence,
+            other_products=others,
+            ambiguities=ambiguities,
         )
 
 
@@ -301,7 +409,10 @@ other text:
   "quantity": integer or null,
   "urgency": string or null,
   "preferences": array of strings,
-  "confidence": float between 0 and 1
+  "confidence": float between 0 and 1,
+  "other_products": array of strings (further products named besides "product"),
+  "ambiguities": array of strings, from "condition_conflict" (asks for new AND used),
+                 "location_alternatives" (offers two places as options)
 }
 
 Rules:
@@ -347,7 +458,8 @@ class AnthropicExtractor:
             block["text"] for block in data["content"] if block["type"] == "text"
         )
         parsed = json.loads(raw_text)
-        return ExtractionResult(**parsed)
+        known = set(ExtractionResult.__dataclass_fields__)
+        return ExtractionResult(**{k: v for k, v in parsed.items() if k in known})
 
 
 def get_extractor():

@@ -367,3 +367,25 @@ func uuidArray(ids []uuid.UUID) string {
 	}
 	return "{" + strings.Join(parts, ",") + "}"
 }
+
+// RevertUndelivered implements workflow.OfferReverter (Phase 4C hardening):
+// offers the provider later reported as undelivered go back to REVIEWED
+// (deliverable, renumbered on the next delivery). Only SENT offers move: a
+// selected, withdrawn or already re-claimed offer is left alone.
+func (r *OfferRepository) RevertUndelivered(ctx context.Context, offerIDs []uuid.UUID, reason string) (int, error) {
+	if len(offerIDs) == 0 {
+		return 0, nil
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE offers
+		SET status = 'REVIEWED', presentation_ordinal = NULL, sent_at = NULL, expires_at = NULL,
+		    last_delivery_error = $2, last_delivery_failed_at = now(), updated_at = now()
+		WHERE id = ANY($1::uuid[]) AND status = 'SENT'
+		  AND NOT EXISTS (SELECT 1 FROM buyer_selections s WHERE s.offer_id = offers.id)
+	`, uuidArray(offerIDs), reason)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}

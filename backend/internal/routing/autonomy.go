@@ -45,6 +45,9 @@ type VendorAutonomyRepository interface {
 	// ExpireStale moves this vendor's SENT requests sent before `before` to
 	// EXPIRED and returns them.
 	ExpireStale(ctx context.Context, vendorID uuid.UUID, before time.Time) ([]*VendorRequest, error)
+	// ListRecentlyExpiredByVendor: requests that expired at or after since
+	// whose buyer request is still confirmed (late replies).
+	ListRecentlyExpiredByVendor(ctx context.Context, vendorID uuid.UUID, since time.Time) ([]*VendorRequest, error)
 }
 
 // QuotedLookup resolves the business entity an outbound message was about
@@ -80,6 +83,7 @@ const (
 	AssocClarification = "vendor_clarification_answer"
 	AssocSingleActive  = "single_open_request"
 	AssocContextMatch  = "context_match"
+	AssocLateReply     = "late_reply_after_expiry"
 )
 
 // processVendorTextAutonomous is ProcessVendorMessageFrom with the
@@ -174,6 +178,12 @@ func (s *Service) processVendorTextAutonomous(ctx context.Context, v *vendor.Ven
 		}
 		switch len(active) {
 		case 0:
+			// A late reply that clearly names one request that expired
+			// recently (its buyer still waiting) is still that reply: the
+			// buyer gets the offer. Anything less clear stays supply.
+			if late, result, xerr := s.lateReplyTarget(ctx, v, rawText, now); late != nil {
+				return s.respondClassified(ctx, v, late, rawText, result, xerr, AssocLateReply, map[string]any{"late": true})
+			}
 			// No open request: supply submission (PRD 2 §39-40, unchanged).
 			if s.intake != nil && ref.MessageID != uuid.Nil {
 				s.submitTextSupply(ctx, v, ref, rawText)
@@ -240,8 +250,37 @@ func (s *Service) expireStale(ctx context.Context, v *vendor.Vendor, now time.Ti
 		id := vr.ID
 		_ = s.events.Write(ctx, &event.Event{EventType: event.VendorRequestExpired, EntityType: "vendor_request", EntityID: &id,
 			ActorType: event.ActorSystem, Payload: map[string]any{"buyer_request_id": vr.BuyerRequestID.String(), "vendor_id": v.ID.String(),
-				"reference": vr.PublicReference, "ttl": s.auto.Params.VendorRequestTTL.String()}})
+				"reference": vr.PublicReference, "ttl": s.auto.Params.VendorRequestTTL.String(), "detected_by": "vendor_message"}})
+		if s.lifecycle != nil {
+			s.lifecycle.VendorRequestExpired(ctx, vr)
+		}
 	}
+}
+
+// lateReplyTarget: the one recently expired request (within
+// AUTO_LATE_REPLY_WINDOW after its expiry) this reply names by product or
+// listing reference; nil when none or several fit.
+func (s *Service) lateReplyTarget(ctx context.Context, v *vendor.Vendor, rawText string, now time.Time) (*VendorRequest, *ai.VendorResponseExtractionResult, error) {
+	if s.auto.Repo == nil {
+		return nil, nil, nil
+	}
+	window := s.auto.Params.LateReplyWindow
+	if window <= 0 {
+		window = s.auto.Params.VendorRequestTTL
+	}
+	expired, err := s.auto.Repo.ListRecentlyExpiredByVendor(ctx, v.ID, now.Add(-window))
+	if err != nil || len(expired) == 0 {
+		return nil, nil, nil
+	}
+	result, xerr := s.aiProvider.ExtractVendorResponse(ctx, rawText)
+	if xerr != nil || result == nil || result.Product == nil {
+		return nil, nil, nil // an unnamed late message is not attached to an old request
+	}
+	pick := s.pickByContext(ctx, expired, rawText, result)
+	if pick == nil || !s.relevantToAny(ctx, []*VendorRequest{pick}, *result.Product) {
+		return nil, nil, nil
+	}
+	return pick, result, xerr
 }
 
 // quotedVendorRequest maps a WhatsApp reply-to (quoted) message onto the
@@ -766,6 +805,10 @@ func (s *Service) ResendVendorRequest(ctx context.Context, vendorRequestID uuid.
 		return err
 	}
 	_ = s.vendors.RecordRequestSent(ctx, vr.VendorID)
+	if s.lifecycle != nil {
+		vr.Status = VendorRequestSent
+		s.lifecycle.VendorRequestSent(ctx, vr)
+	}
 	return nil
 }
 

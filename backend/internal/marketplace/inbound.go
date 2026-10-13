@@ -80,6 +80,9 @@ type BuyerInbound struct {
 // already shown are taken before the ordinary path.
 type Autonomy interface {
 	HandleBuyerText(ctx context.Context, m workflow.BuyerText) bool
+	// BuyerWrote: the buyer's service window is open again — updates Majo
+	// could not deliver earlier are sent (Phase 4C hardening).
+	BuyerWrote(ctx context.Context, conversationID, messageID uuid.UUID)
 }
 
 // SetAutonomy wires the autonomous runtime.
@@ -113,6 +116,9 @@ func NewBuyerInbound(
 // pipeline. A structured ID never falls through to free text, so a tap can
 // never create an unrelated BuyerRequest.
 func (b *BuyerInbound) Handle(ctx context.Context, m InboundBuyerMessage) {
+	if b.auto != nil {
+		b.auto.BuyerWrote(ctx, m.ConversationID, m.MessageID)
+	}
 	if m.InteractionID != "" || structid.Looks(m.Text) || m.Type == "interactive" || m.Type == "button" {
 		raw := m.InteractionID
 		if raw == "" {

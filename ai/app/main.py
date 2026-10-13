@@ -48,6 +48,8 @@ class ExtractionResult(BaseModel):
     urgency: Optional[str] = None
     preferences: List[str] = []
     confidence: float = 0.0
+    other_products: List[str] = []
+    ambiguities: List[str] = []
 
 
 @app.get("/health")
@@ -86,6 +88,8 @@ def extract(req: ExtractionRequest) -> ExtractionResult:
         urgency=result.urgency,
         preferences=result.preferences,
         confidence=result.confidence,
+        other_products=getattr(result, "other_products", []) or [],
+        ambiguities=getattr(result, "ambiguities", []) or [],
     )
 
 

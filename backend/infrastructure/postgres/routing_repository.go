@@ -533,3 +533,63 @@ func (r *RoutingRepository) CountOpenByVendor(ctx context.Context, vendorIDs []u
 	}
 	return out, rows.Err()
 }
+
+// ExpireOne moves one SENT vendor request whose send is older than cutoff
+// to EXPIRED (Phase 4C hardening: the timeout job). Conditional on status,
+// so concurrent workers and a racing vendor reply cannot both win: exactly
+// one caller sees true.
+func (r *RoutingRepository) ExpireOne(ctx context.Context, id uuid.UUID, cutoff time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE vendor_requests SET status = 'EXPIRED', expired_at = now()
+		WHERE id = $1 AND status = 'SENT' AND sent_at < $2`, id.String(), cutoff)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// MarkUndelivered records that a vendor request never reached the vendor:
+// a PENDING request whose send never completed (process died mid-send) or a
+// SENT request the provider later reported as failed (delivery-status
+// webhook). Conditional: a request that was answered, expired or cancelled
+// is left alone (false).
+func (r *RoutingRepository) MarkUndelivered(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE vendor_requests SET status = 'SEND_FAILED', send_error = $2, send_failed_at = now()
+		WHERE id = $1 AND status IN ('PENDING', 'SENT')`, id.String(), reason)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// ListRecentlyExpiredByVendor returns this vendor's requests that expired at
+// or after since and whose buyer request is still confirmed (Phase 4C
+// hardening: a late reply that clearly names one of them is still a reply).
+func (r *RoutingRepository) ListRecentlyExpiredByVendor(ctx context.Context, vendorID uuid.UUID, since time.Time) ([]*routing.VendorRequest, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+prefixedVendorRequestColumns("v")+` FROM vendor_requests v
+		JOIN buyer_requests br ON br.id = v.buyer_request_id
+		WHERE v.vendor_id = $1 AND v.status = 'EXPIRED' AND v.expired_at >= $2 AND br.status = 'CONFIRMED'
+		ORDER BY v.expired_at DESC`, vendorID.String(), since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*routing.VendorRequest
+	for rows.Next() {
+		vr, err := scanVendorRequestRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, vr)
+	}
+	return out, rows.Err()
+}
+
+func prefixedVendorRequestColumns(alias string) string {
+	cols := strings.Split(vendorRequestColumns, ",")
+	for i, c := range cols {
+		cols[i] = alias + "." + strings.TrimSpace(c)
+	}
+	return strings.Join(cols, ", ")
+}

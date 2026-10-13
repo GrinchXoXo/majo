@@ -28,6 +28,10 @@ type ExtractionResult struct {
 	Urgency      *string  `json:"urgency"`
 	Preferences  []string `json:"preferences"`
 	Confidence   float64  `json:"confidence"`
+	// Phase 4C hardening: interpretation signals (the AI service reports
+	// them; the deterministic policy decides). Empty when not provided.
+	OtherProducts []string `json:"other_products,omitempty"`
+	Ambiguities   []string `json:"ambiguities,omitempty"`
 }
 
 // Provider is the interface all business logic depends on.

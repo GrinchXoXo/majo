@@ -32,7 +32,25 @@ type AutonomyHandlers struct {
 	events  event.Writer
 	logger  *slog.Logger
 	advance Readvancer
+	control WorkflowControl // Phase 4C hardening: pause / resume one request
+	trail   MessageTrail
 }
+
+// WorkflowControl pauses and resumes one request's automation.
+type WorkflowControl interface {
+	Pause(ctx context.Context, buyerRequestID uuid.UUID, by, reason string) (*autonomy.Hold, bool, error)
+	Resume(ctx context.Context, buyerRequestID uuid.UUID, by, reason string) (bool, error)
+}
+
+// MessageTrail reads what Majo sent (or could not send) for a request.
+type MessageTrail interface {
+	RequestMessages(ctx context.Context, buyerRequestID uuid.UUID) ([]map[string]any, error)
+	Holds(ctx context.Context, buyerRequestID uuid.UUID) ([]*autonomy.Hold, error)
+	NoticesForRequest(ctx context.Context, buyerRequestID uuid.UUID) ([]*autonomy.Notice, error)
+}
+
+// SetControl wires pause/resume and the message trail.
+func (h *AutonomyHandlers) SetControl(c WorkflowControl, t MessageTrail) { h.control, h.trail = c, t }
 
 // Readvancer hands a request back to Majo once its exception is resolved.
 type Readvancer interface {
@@ -60,7 +78,12 @@ func (h *AutonomyHandlers) Settings(w http.ResponseWriter, r *http.Request) {
 		"params": map[string]any{"confirm_min_confidence": p.ConfirmMinConfidence, "max_clarifications": p.MaxClarifications,
 			"clarification_ttl": p.ClarificationTTL.String(), "route_min_score": p.RouteMinScore, "route_max_vendors": p.RouteMaxVendors,
 			"route_vendor_max_open": p.RouteVendorMaxOpen, "vendor_request_ttl": p.VendorRequestTTL.String(),
-			"vendor_clarify_max_rounds": p.VendorClarifyMaxRounds, "retry_max_attempts": p.RetryMaxAttempts, "context_window": p.ContextWindow.String()},
+			"vendor_clarify_max_rounds": p.VendorClarifyMaxRounds, "retry_max_attempts": p.RetryMaxAttempts, "context_window": p.ContextWindow.String(),
+			"recovery_max_rounds": p.RecoveryMaxRounds, "route_max_vendors_per_request": p.MaxVendorsPerRequest,
+			"pending_notice_ttl": p.PendingNoticeTTL.String(), "broaden_excluded_categories": p.BroadenExcludedCategories,
+			"restricted_terms": len(p.RestrictedTerms), "retry_first_delay_override": p.RetryFirstDelayOverride.String()},
+		"templates": map[string]any{"buyer_update_template_configured": false,
+			"note": "no approved utility template is configured: updates blocked by the 24h window wait for the buyer's next message"},
 	})
 }
 
@@ -164,5 +187,68 @@ func (h *AutonomyHandlers) Request(w http.ResponseWriter, r *http.Request) {
 			ex = append(ex, e)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"decisions": ds, "clarifications": cs, "exceptions": ex})
+	out := map[string]any{"decisions": ds, "clarifications": cs, "exceptions": ex}
+	if h.trail != nil {
+		if ms, err := h.trail.RequestMessages(r.Context(), id); err == nil {
+			out["messages"] = ms
+		}
+		if hs, err := h.trail.Holds(r.Context(), id); err == nil {
+			out["holds"] = hs
+		}
+		if ns, err := h.trail.NoticesForRequest(r.Context(), id); err == nil {
+			out["pending_notices"] = ns
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// Pause handles POST /api/requests/{id}/pause {"reason": "..."}: Majo takes
+// no automatic step for this request until it is resumed.
+func (h *AutonomyHandlers) Pause(w http.ResponseWriter, r *http.Request) {
+	h.holdAction(w, r, true)
+}
+
+// Resume handles POST /api/requests/{id}/resume {"reason": "..."}.
+func (h *AutonomyHandlers) Resume(w http.ResponseWriter, r *http.Request) {
+	h.holdAction(w, r, false)
+}
+
+func (h *AutonomyHandlers) holdAction(w http.ResponseWriter, r *http.Request, pause bool) {
+	if h.control == nil {
+		writeErrorCode(w, http.StatusNotImplemented, "NOT_CONFIGURED", "workflow holds are not configured")
+		return
+	}
+	id, ok := pathUUID(w, r)
+	if !ok {
+		return
+	}
+	var b struct {
+		Reason string `json:"reason"`
+	}
+	if err := decodeStrict(r, &b); err != nil || strings.TrimSpace(b.Reason) == "" {
+		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "reason is required")
+		return
+	}
+	reason := strings.TrimSpace(b.Reason)
+	if pause {
+		hold, created, err := h.control.Pause(r.Context(), id, "operator", reason)
+		if err != nil {
+			h.logger.ErrorContext(r.Context(), "pausing workflow", "error", err)
+			writeErrorCode(w, http.StatusBadRequest, "PAUSE_FAILED", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"held": true, "already_held": !created, "hold": hold})
+		return
+	}
+	released, err := h.control.Resume(r.Context(), id, "operator", reason)
+	if err != nil {
+		h.logger.ErrorContext(r.Context(), "resuming workflow", "error", err)
+		writeErrorCode(w, http.StatusBadRequest, "RESUME_FAILED", err.Error())
+		return
+	}
+	if !released {
+		writeErrorCode(w, http.StatusConflict, "NOT_HELD", "this request is not on hold")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"held": false, "resumed": true})
 }

@@ -348,6 +348,7 @@ func loadAutonomy(cfg *Config) error {
 		{"AUTO_CLARIFY_VENDOR_RESPONSES", &f.AutoClarifyVendorResponses},
 		{"AUTO_RETRY_DELIVERY", &f.AutoRetryDelivery},
 		{"AUTO_PUBLISH_TRUSTED_VENDOR_LISTINGS", &f.AutoPublishTrustedVendorLists},
+		{"AUTO_RECOVER_STALLED_REQUESTS", &f.AutoRecoverStalledRequests},
 	}
 	for _, fl := range flags {
 		v, err := getBool(fl.key, *fl.dest)
@@ -377,6 +378,8 @@ func loadAutonomy(cfg *Config) error {
 		{"AUTO_ROUTE_VENDOR_MAX_OPEN", &p.RouteVendorMaxOpen},
 		{"AUTO_VENDOR_CLARIFY_MAX_ROUNDS", &p.VendorClarifyMaxRounds},
 		{"AUTO_RETRY_MAX_ATTEMPTS", &p.RetryMaxAttempts},
+		{"AUTO_RECOVERY_MAX_ROUNDS", &p.RecoveryMaxRounds},
+		{"AUTO_ROUTE_MAX_VENDORS_PER_REQUEST", &p.MaxVendorsPerRequest},
 	}
 	for _, i := range ints {
 		n, err := getInt(i.key, int64(*i.dest))
@@ -392,6 +395,9 @@ func loadAutonomy(cfg *Config) error {
 		{"AUTO_CLARIFICATION_TTL", &p.ClarificationTTL},
 		{"VENDOR_REQUEST_TTL", &p.VendorRequestTTL},
 		{"AUTO_CONTEXT_WINDOW", &p.ContextWindow},
+		{"AUTO_PENDING_NOTICE_TTL", &p.PendingNoticeTTL},
+		{"AUTO_RETRY_FIRST_DELAY", &p.RetryFirstDelayOverride},
+		{"AUTO_LATE_REPLY_WINDOW", &p.LateReplyWindow},
 	}
 	for _, d := range durs {
 		v, err := getDuration(d.key, *d.dest)
@@ -399,6 +405,20 @@ func loadAutonomy(cfg *Config) error {
 			return err
 		}
 		*d.dest = v
+	}
+	if v := os.Getenv("AUTO_BROADEN_EXCLUDED_CATEGORIES"); v != "" {
+		for _, c := range splitList(v) {
+			p.BroadenExcludedCategories = append(p.BroadenExcludedCategories, strings.ToLower(c))
+		}
+	}
+	// AUTO_RESTRICTED_ITEM_TERMS replaces the default list; "off" disables it.
+	if v := strings.TrimSpace(os.Getenv("AUTO_RESTRICTED_ITEM_TERMS")); v != "" {
+		p.RestrictedTerms = nil
+		if !strings.EqualFold(v, "off") {
+			for _, t := range splitList(v) {
+				p.RestrictedTerms = append(p.RestrictedTerms, strings.ToLower(t))
+			}
+		}
 	}
 	if err := p.Validate(); err != nil {
 		return err

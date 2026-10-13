@@ -155,6 +155,11 @@ var affirmatives = map[string]bool{
 	"i'll take it": true, "i will take it": true, "i want it": true, "i want this one": true,
 	"i want that one": true, "i go take am": true, "go for it": true, "go for am": true,
 	"buy it": true, "buy am": true, "i'll take this one": true, "i'll take that one": true,
+	// Ordinal words (Phase 4C hardening): never a selection by themselves
+	// (the buyer is asked to reply with the number), never a BuyerRequest.
+	"the first one": true, "first one": true, "the second one": true, "second one": true, "the third one": true,
+	"third one": true, "the last one": true, "last one": true, "the first": true, "the second": true, "the last": true,
+	"number one": true, "number two": true, "number three": true, "i want the first one": true, "i want the second one": true,
 }
 
 // ParseSelectionReply deterministically classifies a buyer reply. Pure

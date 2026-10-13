@@ -24,7 +24,7 @@ run() { # name script mode(extra env...)
   echo "$NAME exit=$? $(tail -1 $E2E/reg-$NAME.txt)"
 }
 STAFF="DISCOVERY_MODE=INTERNAL DISCOVERY_INTERNAL_RECIPIENTS=2347300000001,2347300000002,2347300000003"
-ALL="phase31 media grouping listing curation matching lifecycle disc_commerce disc_geo disc_stale disc_expired disc_dashboard autonomy"
+ALL="phase31 media grouping listing curation matching lifecycle disc_commerce disc_geo disc_stale disc_expired disc_dashboard autonomy hardening"
 for s in ${@:-$ALL}; do
   case $s in
     phase31) run phase31 offer_selection_loop.py $LEGACY ;;
@@ -45,6 +45,7 @@ for s in ${@:-$ALL}; do
     disc_stale) run disc_stale discovery_stale_not_expired.py $LEGACY $STAFF ;;
     disc_expired) run disc_expired discovery_expired_supply.py $LEGACY $STAFF ;;
     disc_dashboard) run disc_dashboard discovery_dashboard.py $LEGACY $STAFF ;;
-    autonomy) run autonomy autonomy_scenarios.py DISCOVERY_MODE=INTERNAL DISCOVERY_INTERNAL_RECIPIENTS=2347300000001,2347300000002 JOBS_BACKOFF_BASE=1s AUTO_RETRY_MAX_ATTEMPTS=3 ;;
+    autonomy) run autonomy autonomy_scenarios.py DISCOVERY_MODE=INTERNAL DISCOVERY_INTERNAL_RECIPIENTS=2347300000001,2347300000002 JOBS_BACKOFF_BASE=1s AUTO_RETRY_MAX_ATTEMPTS=3 AUTO_RETRY_FIRST_DELAY=2s ;;
+    hardening) run hardening autonomy_hardening.py VENDOR_REQUEST_TTL=12s AUTO_ROUTE_MAX_VENDORS=1 AUTO_RETRY_FIRST_DELAY=1s JOBS_BACKOFF_BASE=1s AUTO_RETRY_MAX_ATTEMPTS=3 ;;
   esac
 done
