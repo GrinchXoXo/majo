@@ -1,0 +1,17 @@
+meta {
+  name: Core funnel (30 days)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/api/metrics/funnel?days=30
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

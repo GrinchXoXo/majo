@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import OperatorToken from "@/components/OperatorToken";
 import {
   getAutonomyMetrics,
   getAutonomySettings,
@@ -83,7 +82,6 @@ export default function AutonomyPage() {
         Majo is autonomous by default: it confirms clear requests, asks buyers and vendors what it needs, routes by policy and recovers
         failed deliveries. Operators are the control plane — they handle the exceptions below and can override any step.
       </p>
-      <OperatorToken onChange={load} />
       {err && <p style={{ color: "crimson" }}>{err}</p>}
 
       {settings && (

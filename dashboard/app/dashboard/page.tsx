@@ -1,4 +1,7 @@
-import { getHealth, getReadiness, getFunnel, type FunnelReport, type SupplyMetric } from "@/lib/api";
+"use client";
+
+import { useEffect, useState } from "react";
+import { getHealth, getReadiness, getFunnel, type FunnelReport, type HealthStatus, type SupplyMetric } from "@/lib/api";
 
 function supplyValue(m: SupplyMetric): string {
   if (m.kind === "count") return m.value.toLocaleString();
@@ -9,17 +12,27 @@ function supplyValue(m: SupplyMetric): string {
 }
 
 // Proves dashboard -> Go connectivity, per Phase 0 acceptance criteria
-// (PRD 0 FINAL §3, item 9 / §28 service communication test).
-export default async function DashboardPage() {
-  let health, readiness, error: string | null = null;
-  let funnel: FunnelReport | null = null;
+// (PRD 0 FINAL §3, item 9 / §28 service communication test). Reuse-audit R1:
+// rendered in the browser so the funnel call carries the operator token;
+// /health and /ready stay public.
+export default function DashboardPage() {
+  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [readiness, setReadiness] = useState<HealthStatus | null>(null);
+  const [funnel, setFunnel] = useState<FunnelReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [funnelError, setFunnelError] = useState<string | null>(null);
 
-  try {
-    [health, readiness] = await Promise.all([getHealth(), getReadiness()]);
-    funnel = await getFunnel(30).catch(() => null);
-  } catch (e) {
-    error = e instanceof Error ? e.message : "unknown error";
-  }
+  useEffect(() => {
+    Promise.all([getHealth(), getReadiness()])
+      .then(([h, r]) => {
+        setHealth(h);
+        setReadiness(r);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "unknown error"));
+    getFunnel(30)
+      .then(setFunnel)
+      .catch((e) => setFunnelError(e instanceof Error ? e.message : "unknown error"));
+  }, []);
 
   return (
     <div>
@@ -30,6 +43,10 @@ export default async function DashboardPage() {
         <p style={{ color: "crimson" }}>
           Could not reach backend: {error}. Is the Go server running?
         </p>
+      )}
+
+      {funnelError && (
+        <p style={{ color: "#b45309" }}>Funnel unavailable ({funnelError}). Set your operator token (top right).</p>
       )}
 
       {funnel && (

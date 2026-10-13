@@ -1,8 +1,9 @@
 import "./globals.css";
+import OperatorToken from "@/components/OperatorToken";
 
 export const metadata = {
   title: "Majo Ops",
-  description: "Internal operations dashboard — Phase 0 shell",
+  description: "Majo operator control plane",
 };
 
 export default function RootLayout({
@@ -13,7 +14,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <nav style={{ padding: "12px 20px", borderBottom: "1px solid #ddd", display: "flex", gap: "16px" }}>
+        <nav style={{ padding: "12px 20px", borderBottom: "1px solid #ddd", display: "flex", gap: "16px", alignItems: "center", flexWrap: "wrap" }}>
           <strong>Majo Ops</strong>
           <a href="/dashboard">Dashboard</a>
           <a href="/requests">Requests</a>
@@ -23,6 +24,10 @@ export default function RootLayout({
           <a href="/autonomy">Autonomy</a>
           <a href="/discovery">Discovery</a>
           <a href="/events">Events</a>
+          <a href="/jobs">Jobs</a>
+          <span style={{ marginLeft: "auto" }}>
+            <OperatorToken />
+          </span>
         </nav>
         <main style={{ padding: "20px" }}>{children}</main>
       </body>

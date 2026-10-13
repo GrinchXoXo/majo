@@ -1,0 +1,8 @@
+#!/bin/sh
+# Majo pre-commit hook: block commits that contain secrets (reuse-audit R0).
+# Enable once per clone:  git config core.hooksPath .githooks
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks is not installed; secret scan SKIPPED (see docs/security/security-checks.md)" >&2
+  exit 0
+fi
+exec gitleaks git --staged --redact --no-banner --config .gitleaks.toml

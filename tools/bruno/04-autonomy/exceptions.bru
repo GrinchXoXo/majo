@@ -1,0 +1,17 @@
+meta {
+  name: Open exceptions
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/autonomy/exceptions
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

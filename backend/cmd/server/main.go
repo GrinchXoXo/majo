@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"github.com/middleman/backend/internal/conversation"
 	"github.com/middleman/backend/internal/discovery"
 	"github.com/middleman/backend/internal/distribution"
+	"github.com/middleman/backend/internal/errortrack"
 	"github.com/middleman/backend/internal/httpserver"
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/logging"
@@ -42,6 +44,11 @@ import (
 )
 
 func main() {
+	// `server healthcheck` is the container HEALTHCHECK (the distroless image
+	// has no shell or curl): exit 0 when this host's /health answers 200.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
 	logger := logging.New("middleman-backend")
 
 	cfg, err := config.Load()
@@ -49,6 +56,17 @@ func main() {
 		logger.Error("loading configuration", "error", err)
 		os.Exit(1)
 	}
+
+	// Reuse-audit R1 pilot: ERROR records and handler panics go to a
+	// Sentry-protocol error tracker when SENTRY_DSN is set (scrubbed).
+	flushErrors, err := errortrack.Init(errortrack.Config{DSN: cfg.SentryDSN, Environment: cfg.SentryEnvironment,
+		Release: cfg.SentryRelease, ServerName: "majo-backend"})
+	if err != nil {
+		logger.Error("error tracking disabled: invalid SENTRY_DSN", "error", err)
+	}
+	defer flushErrors()
+	logger = slog.New(errortrack.SlogHandler(logger.Handler()))
+	logger.Info("error tracking", "enabled", errortrack.Enabled())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -307,98 +325,121 @@ func main() {
 	// Phase 4C correction: every operator override of the autonomous loop
 	// (correct, confirm, clarify, route, associate, deliver, select) is an
 	// authenticated control-plane action.
+	// Reuse-audit R1: every /api route is behind the guard (reads need a
+	// VIEWER or OPERATOR credential, changes an OPERATOR one). Named operators
+	// come from the operators table; the shared token is break-glass.
 	operatorAuth := httpserver.NewOperatorAuth(cfg.OperatorAPIToken)
-	if cfg.AllowUnauthenticatedOperator {
-		logger.Warn("OPERATOR_API_TOKEN is not set: operator overrides and listing curation are UNAUTHENTICATED. Development only.")
+	operatorRepo := postgres.NewOperatorRepository(pool)
+	activeOperators, err := operatorRepo.CountActive(ctx)
+	if err != nil {
+		logger.Error("count operators", "error", err)
+		os.Exit(1)
 	}
+	operatorAuth.SetStore(operatorRepo, activeOperators, logger)
+	if operatorAuth.Open() {
+		logger.Warn("no OPERATOR_API_TOKEN and no named operators: the operator API is UNAUTHENTICATED. Development only.")
+	}
+	logger.Info("operator access", "named_operators", activeOperators, "shared_token", cfg.OperatorAPIToken != "", "cors_origins", cfg.CORSAllowedOrigins)
 	requestHandlers := httpserver.NewRequestHandlers(requestRepo, requestService, eventWriter)
 	if cfg.AutonomyFlags.AutoClarifyRequests {
 		requestHandlers.SetClarifier(engine) // operator questions continue the request
 	}
-	mux.HandleFunc("GET /api/requests", requestHandlers.List)
-	mux.HandleFunc("GET /api/requests/{id}", requestHandlers.Get)
+	mux.HandleFunc("GET /api/requests", operatorAuth.RequireViewer(requestHandlers.List))
+	mux.HandleFunc("GET /api/requests/{id}", operatorAuth.RequireViewer(requestHandlers.Get))
 	mux.HandleFunc("PATCH /api/requests/{id}", operatorAuth.Require(requestHandlers.Patch))
 	mux.HandleFunc("POST /api/requests/{id}/confirm", operatorAuth.Require(requestHandlers.Confirm))
 	mux.HandleFunc("POST /api/requests/{id}/clarify", operatorAuth.Require(requestHandlers.Clarify))
-	mux.HandleFunc("GET /api/requests/{id}/events", requestHandlers.Events)
+	mux.HandleFunc("GET /api/requests/{id}/events", operatorAuth.RequireViewer(requestHandlers.Events))
 
 	vendorHandlers := httpserver.NewVendorHandlers(vendorRepo, supplyRepo, eventWriter)
 	// Phase 4C correction: vendors receive buyers' requests automatically, so
 	// creating or activating one is an authenticated control-plane action.
 	mux.HandleFunc("POST /api/vendors", operatorAuth.Require(vendorHandlers.Create))
-	mux.HandleFunc("GET /api/vendors", vendorHandlers.List)
-	mux.HandleFunc("GET /api/vendors/{id}", vendorHandlers.Get)
+	mux.HandleFunc("GET /api/vendors", operatorAuth.RequireViewer(vendorHandlers.List))
+	mux.HandleFunc("GET /api/vendors/{id}", operatorAuth.RequireViewer(vendorHandlers.Get))
 	mux.HandleFunc("PATCH /api/vendors/{id}", operatorAuth.Require(vendorHandlers.Patch))
-	mux.HandleFunc("GET /api/vendors/{id}/supply", vendorHandlers.Supply)
+	mux.HandleFunc("GET /api/vendors/{id}/supply", operatorAuth.RequireViewer(vendorHandlers.Supply))
 
 	routingHandlers := httpserver.NewRoutingHandlers(routingRepo, routingService)
-	mux.HandleFunc("GET /api/requests/{id}/matches", routingHandlers.Matches)
+	mux.HandleFunc("GET /api/requests/{id}/matches", operatorAuth.RequireViewer(routingHandlers.Matches))
 	mux.HandleFunc("POST /api/requests/{id}/route", operatorAuth.Require(routingHandlers.Route))
-	mux.HandleFunc("GET /api/requests/{id}/vendor-requests", routingHandlers.VendorRequestsForBuyerRequest)
-	mux.HandleFunc("GET /api/vendor-responses/unmatched", routingHandlers.Unmatched)
-	mux.HandleFunc("GET /api/vendor-responses/{id}", routingHandlers.GetVendorResponse)
+	mux.HandleFunc("GET /api/requests/{id}/vendor-requests", operatorAuth.RequireViewer(routingHandlers.VendorRequestsForBuyerRequest))
+	mux.HandleFunc("GET /api/vendor-responses/unmatched", operatorAuth.RequireViewer(routingHandlers.Unmatched))
+	mux.HandleFunc("GET /api/vendor-responses/{id}", operatorAuth.RequireViewer(routingHandlers.GetVendorResponse))
 	mux.HandleFunc("PATCH /api/vendor-responses/{id}", operatorAuth.Require(routingHandlers.PatchVendorResponse))
 	mux.HandleFunc("POST /api/vendor-responses/{id}/associate", operatorAuth.Require(routingHandlers.AssociateResponse))
-	mux.HandleFunc("GET /api/vendors/{id}/vendor-requests", routingHandlers.VendorRequestsForVendor)
+	mux.HandleFunc("GET /api/vendors/{id}/vendor-requests", operatorAuth.RequireViewer(routingHandlers.VendorRequestsForVendor))
 
 	// Phase 4A Step 4: listing writes and media previews are operator-only.
 	supplyListingHandlers := httpserver.NewSupplyListingHandlers(listingRepo, listingService, listingRepo, mediaStore, operatorAuth, logger)
 	mux.HandleFunc("POST /api/supply-listings", operatorAuth.Require(supplyListingHandlers.CreateFromSignal))
 	// Search can list drafts and rejected listings: operator-only.
-	mux.HandleFunc("GET /api/supply-listings", operatorAuth.Require(supplyListingHandlers.Search))
+	mux.HandleFunc("GET /api/supply-listings", operatorAuth.RequireViewer(supplyListingHandlers.Search))
 	// The detail carries the vendor's raw messages (evidence): operator-only.
-	mux.HandleFunc("GET /api/supply-listings/{id}", operatorAuth.Require(supplyListingHandlers.Get))
+	mux.HandleFunc("GET /api/supply-listings/{id}", operatorAuth.RequireViewer(supplyListingHandlers.Get))
 	mux.HandleFunc("PATCH /api/supply-listings/{id}", operatorAuth.Require(supplyListingHandlers.Patch))
 	mux.HandleFunc("POST /api/supply-listings/{id}/publish", operatorAuth.Require(supplyListingHandlers.PublishListing))
 	// Legacy alias kept for existing callers: the same publication gate.
 	mux.HandleFunc("POST /api/supply-listings/{id}/activate", operatorAuth.Require(supplyListingHandlers.PublishListing))
 	mux.HandleFunc("POST /api/supply-listings/{id}/reject", operatorAuth.Require(supplyListingHandlers.Reject))
 	mux.HandleFunc("POST /api/supply-listings/{id}/verify", operatorAuth.Require(supplyListingHandlers.Verify))
-	mux.HandleFunc("GET /api/supply-listings/{id}/media/{asset}", operatorAuth.Require(supplyListingHandlers.Media))
-	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", operatorAuth.Require(supplyListingHandlers.ListByVendor))
+	mux.HandleFunc("GET /api/supply-listings/{id}/media/{asset}", operatorAuth.RequireViewer(supplyListingHandlers.Media))
+	mux.HandleFunc("GET /api/vendors/{id}/supply-listings", operatorAuth.RequireViewer(supplyListingHandlers.ListByVendor))
 
 	offerHandlers := httpserver.NewOfferHandlers(offerRepo, requestRepo, txService, txRepo, offerDelivery)
-	mux.HandleFunc("GET /api/requests/{id}/offers", offerHandlers.List) // read-only since Phase 3.1
-	mux.HandleFunc("GET /api/requests/{id}/offers/preview", offerHandlers.BuyerMessagePreview)
+	mux.HandleFunc("GET /api/requests/{id}/offers", operatorAuth.RequireViewer(offerHandlers.List)) // read-only since Phase 3.1
+	mux.HandleFunc("GET /api/requests/{id}/offers/preview", operatorAuth.RequireViewer(offerHandlers.BuyerMessagePreview))
 	mux.HandleFunc("POST /api/requests/{id}/offers/deliver", operatorAuth.Require(offerHandlers.Deliver))
 	mux.HandleFunc("POST /api/requests/{id}/select", operatorAuth.Require(offerHandlers.Select))
-	mux.HandleFunc("GET /api/requests/{id}/selection", offerHandlers.Selection)
+	mux.HandleFunc("GET /api/requests/{id}/selection", operatorAuth.RequireViewer(offerHandlers.Selection))
 
 	// §23A: read-only core funnel, counted from system-of-record tables.
 	funnelHandlers := httpserver.NewFunnelHandlers(postgres.NewFunnelRepository(pool))
 	funnelHandlers.SetListingFreshness(supplyPolicy.Config().FreshnessWindow) // §K.2 stale rate uses the canonical freshness [PARAM]
-	mux.HandleFunc("GET /api/metrics/funnel", funnelHandlers.Get)
+	mux.HandleFunc("GET /api/metrics/funnel", operatorAuth.RequireViewer(funnelHandlers.Get))
 
 	// Phase 4B: every discovery route is operator-only; there is no consumer endpoint.
 	discoveryHandlers := httpserver.NewDiscoveryHandlers(distributionService, discoveryService, logger)
-	mux.HandleFunc("GET /api/discovery/settings", operatorAuth.Require(discoveryHandlers.Settings))
-	mux.HandleFunc("GET /api/discovery/candidates", operatorAuth.Require(discoveryHandlers.Candidates))
-	mux.HandleFunc("GET /api/discovery/preferences", operatorAuth.Require(discoveryHandlers.Preferences))
+	mux.HandleFunc("GET /api/discovery/settings", operatorAuth.RequireViewer(discoveryHandlers.Settings))
+	mux.HandleFunc("GET /api/discovery/candidates", operatorAuth.RequireViewer(discoveryHandlers.Candidates))
+	mux.HandleFunc("GET /api/discovery/preferences", operatorAuth.RequireViewer(discoveryHandlers.Preferences))
 	mux.HandleFunc("POST /api/discovery/preferences", operatorAuth.Require(discoveryHandlers.SetPreference))
 	mux.HandleFunc("POST /api/discovery/consent/invite", operatorAuth.Require(discoveryHandlers.Invite))
 	mux.HandleFunc("POST /api/discovery/preview", operatorAuth.Require(discoveryHandlers.Preview))
 	mux.HandleFunc("POST /api/discovery/batches", operatorAuth.Require(discoveryHandlers.CreateBatch))
-	mux.HandleFunc("GET /api/discovery/batches", operatorAuth.Require(discoveryHandlers.Batches))
-	mux.HandleFunc("GET /api/discovery/batches/{id}", operatorAuth.Require(discoveryHandlers.Batch))
+	mux.HandleFunc("GET /api/discovery/batches", operatorAuth.RequireViewer(discoveryHandlers.Batches))
+	mux.HandleFunc("GET /api/discovery/batches/{id}", operatorAuth.RequireViewer(discoveryHandlers.Batch))
 	mux.HandleFunc("POST /api/discovery/batches/{id}/send", operatorAuth.Require(discoveryHandlers.Send))
-	mux.HandleFunc("GET /api/discovery/deliveries/{id}", operatorAuth.Require(discoveryHandlers.Delivery))
-	mux.HandleFunc("GET /api/discovery/funnel", operatorAuth.Require(discoveryHandlers.Funnel))
+	mux.HandleFunc("GET /api/discovery/deliveries/{id}", operatorAuth.RequireViewer(discoveryHandlers.Delivery))
+	mux.HandleFunc("GET /api/discovery/funnel", operatorAuth.RequireViewer(discoveryHandlers.Funnel))
 
 	autonomyHandlers := httpserver.NewAutonomyHandlers(cfg.AutonomyFlags, cfg.AutonomyParams, autonomyRepo, autonomyRepo, eventWriter, logger)
 	autonomyHandlers.SetReadvancer(engine)
 	autonomyHandlers.SetControl(engine, messageTrail{workflowRepo, autonomyRepo})
-	mux.HandleFunc("GET /api/autonomy/settings", operatorAuth.Require(autonomyHandlers.Settings))
-	mux.HandleFunc("GET /api/autonomy/metrics", operatorAuth.Require(autonomyHandlers.Metrics))
-	mux.HandleFunc("GET /api/autonomy/exceptions", operatorAuth.Require(autonomyHandlers.Exceptions))
+	mux.HandleFunc("GET /api/autonomy/settings", operatorAuth.RequireViewer(autonomyHandlers.Settings))
+	mux.HandleFunc("GET /api/autonomy/metrics", operatorAuth.RequireViewer(autonomyHandlers.Metrics))
+	mux.HandleFunc("GET /api/autonomy/exceptions", operatorAuth.RequireViewer(autonomyHandlers.Exceptions))
 	mux.HandleFunc("POST /api/autonomy/exceptions/{id}/resolve", operatorAuth.Require(autonomyHandlers.ResolveException))
-	mux.HandleFunc("GET /api/requests/{id}/autonomy", operatorAuth.Require(autonomyHandlers.Request))
+	mux.HandleFunc("GET /api/requests/{id}/autonomy", operatorAuth.RequireViewer(autonomyHandlers.Request))
 	mux.HandleFunc("POST /api/requests/{id}/pause", operatorAuth.Require(autonomyHandlers.Pause))
 	mux.HandleFunc("POST /api/requests/{id}/resume", operatorAuth.Require(autonomyHandlers.Resume))
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)
-	mux.HandleFunc("GET /api/transactions/{id}", transactionHandlers.Get)
+	mux.HandleFunc("GET /api/transactions/{id}", operatorAuth.RequireViewer(transactionHandlers.Get))
 
-	handler := httpserver.RequestID(httpserver.CORS(mux))
+	// Reuse-audit R1: control-plane read views (event timeline, job queue).
+	controlPlaneRepo := postgres.NewControlPlaneRepository(pool)
+	requestHandlers.SetPager(struct {
+		*postgres.RequestRepository
+		*postgres.ControlPlaneRepository
+	}{requestRepo, controlPlaneRepo})
+	controlPlaneHandlers := httpserver.NewControlPlaneHandlers(controlPlaneRepo)
+	mux.HandleFunc("GET /api/events", operatorAuth.RequireViewer(controlPlaneHandlers.Events))
+	mux.HandleFunc("GET /api/events/types", operatorAuth.RequireViewer(controlPlaneHandlers.EventTypes))
+	mux.HandleFunc("GET /api/jobs", operatorAuth.RequireViewer(controlPlaneHandlers.Jobs))
+	mux.HandleFunc("GET /api/jobs/summary", operatorAuth.RequireViewer(controlPlaneHandlers.JobSummary))
+
+	handler := httpserver.RequestID(httpserver.CORS(cfg.CORSAllowedOrigins)(errortrack.Recoverer(logger)(mux)))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.AppPort,
@@ -463,4 +504,21 @@ func (t messageTrail) Holds(ctx context.Context, id uuid.UUID) ([]*autonomy.Hold
 
 func (t messageTrail) NoticesForRequest(ctx context.Context, id uuid.UUID) ([]*autonomy.Notice, error) {
 	return t.autonomy.NoticesForRequest(ctx, id)
+}
+
+func healthcheck() int {
+	port := os.Getenv("APP_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	c := http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Get("http://127.0.0.1:" + port + "/health")
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }

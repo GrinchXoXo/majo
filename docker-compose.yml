@@ -19,6 +19,11 @@ services:
   ai:
     build: ./ai
     restart: unless-stopped
+    environment:
+      # Reuse-audit R1 pilot: error reports go to GlitchTip (or any
+      # Sentry-protocol endpoint) only when SENTRY_DSN is set.
+      SENTRY_DSN: ${AI_SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
     ports:
       - "8000:8000"
     healthcheck:
@@ -48,6 +53,9 @@ services:
       OPERATOR_API_TOKEN: ${OPERATOR_API_TOKEN:-}
       DASHBOARD_URL: http://localhost:3000
       MEDIA_STORAGE_DIR: /app/data/media
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      SENTRY_DSN: ${BACKEND_SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
     ports:
       - "8080:8080"
     volumes:
@@ -63,6 +71,45 @@ services:
     ports:
       - "3000:3000"
 
+  # --- Reuse-audit R1 pilot: error tracking (NOT started by default) ---
+  # Start with: docker compose --profile observability up -d glitchtip
+  # GlitchTip runs all-in-one on PostgreSQL only (no Valkey/Redis), in its own
+  # database server so it never shares Majo's data. UI: http://localhost:8001
+  # Create a project per service there and put its DSN in BACKEND_SENTRY_DSN /
+  # AI_SENTRY_DSN (from inside compose, use host "glitchtip:8000").
+  glitchtip-postgres:
+    image: postgres:16-alpine
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: ${GLITCHTIP_DB_PASSWORD:-change-me}
+      POSTGRES_DB: glitchtip
+    volumes:
+      - glitchtip_pg:/var/lib/postgresql/data
+
+  glitchtip:
+    image: glitchtip/glitchtip:6
+    profiles: ["observability"]
+    restart: unless-stopped
+    depends_on:
+      - glitchtip-postgres
+    environment:
+      SERVER_ROLE: all_in_one
+      DATABASE_URL: postgres://glitchtip:${GLITCHTIP_DB_PASSWORD:-change-me}@glitchtip-postgres:5432/glitchtip
+      VALKEY_URL: ""
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY:-}
+      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN:-http://localhost:8001}
+      DEFAULT_FROM_EMAIL: ${GLITCHTIP_FROM_EMAIL:-glitchtip@localhost}
+      EMAIL_URL: ${GLITCHTIP_EMAIL_URL:-consolemail://}
+      GLITCHTIP_ENABLE_LOGS: "False"
+    ports:
+      - "8001:8000"
+    volumes:
+      - glitchtip_uploads:/code/uploads
+
 volumes:
   postgres_data:
   media_data:
+  glitchtip_pg:
+  glitchtip_uploads:

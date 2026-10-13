@@ -14,7 +14,6 @@ import {
   type ListingEditBody,
 } from "@/lib/api";
 import ListingMedia from "@/components/ListingMedia";
-import OperatorToken from "@/components/OperatorToken";
 import { FRESHNESS_COLORS, STATUS_COLORS, formatDate, formatPrice, geoLabel, relativeDays } from "@/lib/listing";
 
 // Listing curation (Phase 4A Step 4): inspect a listing next to the
@@ -141,7 +140,6 @@ export default function ListingCurationPage() {
         <p style={{ color: "crimson" }} data-testid="load-error">
           {loadError}
         </p>
-        <OperatorToken onChange={load} />
       </div>
     );
   }
@@ -263,7 +261,6 @@ export default function ListingCurationPage() {
     <div style={{ maxWidth: 1100 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <a href="/offers">← Supply listings</a>
-        <OperatorToken onChange={() => setTokenTick((t) => t + 1)} />
       </div>
 
       <h1 style={{ marginBottom: 4 }}>

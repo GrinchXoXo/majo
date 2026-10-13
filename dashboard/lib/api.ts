@@ -33,7 +33,7 @@ export type FunnelReport = { since: string; until: string; stages: FunnelStage[]
 // Core marketplace funnel (Phase 3.1 §23A), read-only, counted from the
 // system-of-record tables.
 export async function getFunnel(days = 30): Promise<FunnelReport> {
-  const res = await fetch(`${API_URL}/api/metrics/funnel?days=${days}`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/metrics/funnel?days=${days}`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load funnel: ${res.status}`);
   return res.json();
 }
@@ -81,20 +81,20 @@ export async function listRequests(status?: string): Promise<BuyerRequestDTO[]> 
   const url = status
     ? `${API_URL}/api/requests?status=${encodeURIComponent(status)}`
     : `${API_URL}/api/requests`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to list requests: ${res.status}`);
   const data = await res.json();
   return data ?? [];
 }
 
 export async function getRequest(id: string): Promise<BuyerRequestDTO> {
-  const res = await fetch(`${API_URL}/api/requests/${id}`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/requests/${id}`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load request: ${res.status}`);
   return res.json();
 }
 
 export async function getRequestEvents(id: string): Promise<RequestEventDTO[]> {
-  const res = await fetch(`${API_URL}/api/requests/${id}/events`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/requests/${id}/events`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load events: ${res.status}`);
   const data = await res.json();
   return data ?? [];
@@ -218,13 +218,13 @@ export type VendorRequestDTO = {
 
 export async function listVendors(status?: string): Promise<VendorDTO[]> {
   const url = status ? `${API_URL}/api/vendors?status=${encodeURIComponent(status)}` : `${API_URL}/api/vendors`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to list vendors: ${res.status}`);
   return (await res.json()) ?? [];
 }
 
 export async function getVendor(id: string): Promise<VendorDTO> {
-  const res = await fetch(`${API_URL}/api/vendors/${id}`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/vendors/${id}`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load vendor: ${res.status}`);
   return res.json();
 }
@@ -260,13 +260,13 @@ export async function patchVendor(id: string, body: Partial<CreateVendorBody & {
 }
 
 export async function getVendorSupply(id: string): Promise<Record<string, unknown>[]> {
-  const res = await fetch(`${API_URL}/api/vendors/${id}/supply`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/vendors/${id}/supply`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load supply: ${res.status}`);
   return (await res.json()) ?? [];
 }
 
 export async function getMatches(requestId: string): Promise<MatchCandidateDTO[]> {
-  const res = await fetch(`${API_URL}/api/requests/${requestId}/matches`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/matches`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load matches: ${res.status}`);
   return (await res.json()) ?? [];
 }
@@ -282,7 +282,7 @@ export async function routeToVendors(requestId: string, vendorIds: string[]): Pr
 }
 
 export async function getVendorRequests(requestId: string): Promise<VendorRequestDTO[]> {
-  const res = await fetch(`${API_URL}/api/requests/${requestId}/vendor-requests`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/vendor-requests`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load vendor requests: ${res.status}`);
   return (await res.json()) ?? [];
 }
@@ -290,13 +290,13 @@ export async function getVendorRequests(requestId: string): Promise<VendorReques
 // --- Vendor response correction & association (Phase 2.1) ---
 
 export async function getUnmatchedResponses(): Promise<VendorResponseDTO[]> {
-  const res = await fetch(`${API_URL}/api/vendor-responses/unmatched`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/vendor-responses/unmatched`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load unmatched responses: ${res.status}`);
   return (await res.json()) ?? [];
 }
 
 export async function getVendorResponse(id: string): Promise<VendorResponseDTO> {
-  const res = await fetch(`${API_URL}/api/vendor-responses/${id}`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/vendor-responses/${id}`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load vendor response: ${res.status}`);
   return res.json();
 }
@@ -339,7 +339,7 @@ export async function associateVendorResponse(id: string, vendorRequestId: strin
 }
 
 export async function getVendorOwnRequests(vendorId: string): Promise<VendorRequestDTO[]> {
-  const res = await fetch(`${API_URL}/api/vendors/${vendorId}/vendor-requests`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/vendors/${vendorId}/vendor-requests`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load vendor's requests: ${res.status}`);
   return (await res.json()) ?? [];
 }
@@ -617,7 +617,7 @@ export type OfferDTO = {
 // Read-only since Phase 3.1: offers are built and delivered automatically
 // when vendor replies arrive; viewing never builds or sends anything.
 export async function getOffers(requestId: string): Promise<OfferDTO[]> {
-  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load offers: ${res.status}`);
   return (await res.json()) ?? [];
 }
@@ -654,7 +654,7 @@ export type SelectionDTO = {
 };
 
 export async function getSelection(requestId: string): Promise<SelectionDTO> {
-  const res = await fetch(`${API_URL}/api/requests/${requestId}/selection`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/selection`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load selection: ${res.status}`);
   return res.json();
 }
@@ -669,7 +669,7 @@ async function errorText(res: Response, fallback: string): Promise<string> {
 }
 
 export async function getOfferPreview(requestId: string): Promise<string> {
-  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers/preview`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers/preview`, { cache: "no-store", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to load offer preview: ${res.status}`);
   const data = await res.json();
   return data.message;
@@ -866,3 +866,81 @@ export const pauseRequest = (id: string, reason: string) =>
   operatorCall<{ held: boolean; already_held: boolean }>(`/api/requests/${id}/pause`, "POST", { reason });
 export const resumeRequest = (id: string, reason: string) =>
   operatorCall<{ resumed: boolean }>(`/api/requests/${id}/resume`, "POST", { reason });
+
+// --- Reuse-audit R1: paginated control-plane views ---
+
+export type Page<T> = { rows: T[]; total: number };
+
+async function readPage<T>(path: string, key?: string): Promise<Page<T>> {
+  const res = await fetch(`${API_URL}${path}`, { cache: "no-store", headers: operatorHeaders(false) });
+  if (res.status === 401) throw new ApiError(401, "UNAUTHORIZED", "Set your operator token (top right) to see this page.");
+  if (!res.ok) throw new ApiError(res.status, "ERROR", `request failed: ${res.status}`);
+  const body = await res.json();
+  const rows = (key ? body[key] : body) ?? [];
+  const total = Number(res.headers.get("X-Total-Count") ?? body.total ?? rows.length);
+  return { rows, total };
+}
+
+function qs(params: Record<string, string | number | undefined>): string {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") u.set(k, String(v));
+  return u.toString();
+}
+
+export function listRequestsPage(status: string, limit: number, offset: number): Promise<Page<BuyerRequestDTO>> {
+  return readPage<BuyerRequestDTO>(`/api/requests?${qs({ status, limit, offset })}`);
+}
+
+export type TimelineEvent = {
+  id: string;
+  event_type: string;
+  entity_type: string;
+  entity_id: string | null;
+  actor_type: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type EventQuery = { event_type?: string; entity_type?: string; entity_id?: string; actor_type?: string };
+
+export function listEvents(q: EventQuery, limit: number, offset: number): Promise<Page<TimelineEvent>> {
+  return readPage<TimelineEvent>(`/api/events?${qs({ ...q, limit, offset })}`, "events");
+}
+
+export async function listEventTypes(): Promise<string[]> {
+  return (await readPage<string>(`/api/events/types`)).rows;
+}
+
+export type JobDTO = {
+  id: string;
+  job_type: string;
+  idempotency_key: string;
+  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  attempts: number;
+  max_attempts: number;
+  run_at: string;
+  locked_by: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type JobSummary = {
+  job_type: string;
+  pending: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  overdue_seconds: number;
+};
+
+export function listJobs(status: string, jobType: string, limit: number, offset: number): Promise<Page<JobDTO>> {
+  return readPage<JobDTO>(`/api/jobs?${qs({ status, job_type: jobType, limit, offset })}`, "jobs");
+}
+
+export async function getJobSummary(): Promise<JobSummary[]> {
+  return (await readPage<JobSummary>(`/api/jobs/summary`)).rows;
+}

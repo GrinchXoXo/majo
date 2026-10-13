@@ -1,0 +1,21 @@
+meta {
+  name: Event timeline
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/events?limit=20
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("has events and total", function () {
+    expect(res.getBody()).to.have.property("events");
+    expect(res.getBody()).to.have.property("total");
+  });
+}

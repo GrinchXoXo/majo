@@ -47,7 +47,7 @@ func (h *SupplyListingHandlers) CreateFromSignal(w http.ResponseWriter, r *http.
 		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid supply_signal_id")
 		return
 	}
-	listing, err := h.service.PublishFromSignal(r.Context(), signalID, nil)
+	listing, err := h.service.PublishFromSignal(r.Context(), signalID, actorID(r))
 	var inel supply.ErrIneligible
 	switch {
 	case errors.As(err, &inel):
@@ -237,7 +237,7 @@ func (h *SupplyListingHandlers) Patch(w http.ResponseWriter, r *http.Request) {
 		Price: body.Price, Currency: body.Currency, Quantity: body.Quantity, Location: body.Location,
 		Description: body.Description, MediaOrder: body.MediaOrder, PrimaryAssetID: body.PrimaryMediaAssetID,
 		ExpectedUpdatedAt: body.ExpectedUpdatedAt,
-	}, nil)
+	}, actorID(r))
 	if err != nil {
 		h.curationError(w, r, err)
 		return
@@ -265,7 +265,7 @@ func (h *SupplyListingHandlers) PublishListing(w http.ResponseWriter, r *http.Re
 		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body (allowed: expected_updated_at)")
 		return
 	}
-	l, err := h.service.Publish(r.Context(), id, body.ExpectedUpdatedAt, nil)
+	l, err := h.service.Publish(r.Context(), id, body.ExpectedUpdatedAt, actorID(r))
 	if err != nil {
 		h.curationError(w, r, err)
 		return
@@ -284,7 +284,7 @@ func (h *SupplyListingHandlers) Reject(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body (allowed: reason, expected_updated_at)")
 		return
 	}
-	l, err := h.service.Reject(r.Context(), id, body.Reason, body.ExpectedUpdatedAt, nil)
+	l, err := h.service.Reject(r.Context(), id, body.Reason, body.ExpectedUpdatedAt, actorID(r))
 	if err != nil {
 		h.curationError(w, r, err)
 		return
@@ -305,7 +305,7 @@ func (h *SupplyListingHandlers) Verify(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body (allowed: note, expected_updated_at)")
 		return
 	}
-	l, err := h.service.Verify(r.Context(), id, body.Note, body.ExpectedUpdatedAt, nil)
+	l, err := h.service.Verify(r.Context(), id, body.Note, body.ExpectedUpdatedAt, actorID(r))
 	if err != nil {
 		h.curationError(w, r, err)
 		return

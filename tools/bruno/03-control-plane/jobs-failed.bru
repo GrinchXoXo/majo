@@ -1,0 +1,17 @@
+meta {
+  name: Failed jobs
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/jobs?status=FAILED&limit=20
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

@@ -8,7 +8,7 @@
 # API (:9090), and for UI suites the dashboard (:3000).
 E2E=${E2E:-/tmp/claude-0/e2e4}; export PGPASSWORD=middleman
 HERE=$(cd $(dirname $0) && pwd)
-(cd $HERE/../../backend && go build -o $E2E/majo-server ./cmd/server) || exit 1
+(cd $HERE/../../backend && go build -o $E2E/majo-server ./cmd/server && go build -o $E2E/operatorctl ./cmd/operatorctl) || exit 1
 LEGACY="AUTO_CONFIRM_CLEAR_REQUESTS=false AUTO_ROUTE_DISCOVERY_REQUESTS=false AUTO_ROUTE_MATCHED_REQUESTS=false AUTO_RESOLVE_VENDOR_CONTEXT=false AUTO_CLARIFY_REQUESTS=false AUTO_CLARIFY_VENDOR_RESPONSES=false AUTO_RETRY_DELIVERY=false AUTO_RECOVER_STALLED_REQUESTS=false"
 run() { # name script mode(extra env...)
   local NAME=$1 SCRIPT=$2; shift 2
@@ -19,12 +19,12 @@ run() { # name script mode(extra env...)
   ( env "$@" $E2E/start_backend.sh $DBN >/dev/null ) || { echo "$NAME: backend failed"; return 1; }
   ( cd $HERE/../.. && env "$@" BASE=http://localhost:8080 APP_SECRET=e2esecret OPERATOR_TOKEN=e2e-operator-token-4a4 \
       DATABASE_URL="postgres://middleman:middleman@localhost:5433/$DBN?sslmode=disable" MEDIA_DIR=$E2E/media STORAGE_DIR=$E2E/store \
-      OUTBOUND_LOG=$E2E/outbound.jsonl UPLOAD_LOG=$E2E/uploads.jsonl FAIL_PLAN=$E2E/fail_plan.json FAIL_VENDOR_PHONE=2347099999999 \
+      OUTBOUND_LOG=$E2E/outbound.jsonl UPLOAD_LOG=$E2E/uploads.jsonl FAIL_PLAN=$E2E/fail_plan.json FAIL_VENDOR_PHONE=2347099999999 OPERATORCTL=$E2E/operatorctl \
       DASH=http://localhost:3000 python3 scripts/e2e/$SCRIPT > $E2E/reg-$NAME.txt 2>&1 )  # SCRIPT may carry args
   echo "$NAME exit=$? $(tail -1 $E2E/reg-$NAME.txt)"
 }
 STAFF="DISCOVERY_MODE=INTERNAL DISCOVERY_INTERNAL_RECIPIENTS=2347300000001,2347300000002,2347300000003"
-ALL="phase31 media grouping listing curation matching lifecycle disc_commerce disc_geo disc_stale disc_expired disc_dashboard autonomy hardening"
+ALL="phase31 media grouping listing curation matching lifecycle disc_commerce disc_geo disc_stale disc_expired disc_dashboard autonomy hardening access"
 for s in ${@:-$ALL}; do
   case $s in
     phase31) run phase31 offer_selection_loop.py $LEGACY ;;
@@ -46,6 +46,7 @@ for s in ${@:-$ALL}; do
     disc_expired) run disc_expired discovery_expired_supply.py $LEGACY $STAFF ;;
     disc_dashboard) run disc_dashboard discovery_dashboard.py $LEGACY $STAFF ;;
     autonomy) run autonomy autonomy_scenarios.py DISCOVERY_MODE=INTERNAL DISCOVERY_INTERNAL_RECIPIENTS=2347300000001,2347300000002 JOBS_BACKOFF_BASE=1s AUTO_RETRY_MAX_ATTEMPTS=3 AUTO_RETRY_FIRST_DELAY=2s ;;
+    access) run access operator_access.py $LEGACY ;;
     hardening) run hardening autonomy_hardening.py VENDOR_REQUEST_TTL=12s AUTO_ROUTE_MAX_VENDORS=1 AUTO_RETRY_FIRST_DELAY=1s JOBS_BACKOFF_BASE=1s AUTO_RETRY_MAX_ATTEMPTS=3 ;;
   esac
 done

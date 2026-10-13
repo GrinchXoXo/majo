@@ -47,8 +47,10 @@ def main():
     entries = json.loads(SRC.read_text())
     for e in entries:
         e["weighted"] = weighted(e.get("scores"))
-    installed = [e for e in entries if e["status"] == "INSTALLED"]
-    evaluated = [e for e in entries if e["status"] != "INSTALLED"]
+    installed = [e for e in entries if e["status"].startswith("INSTALLED")]
+    # Everything that went through the reuse assessment (sections 2-4),
+    # whether it ended up installed or not.
+    evaluated = [e for e in entries if e["category"] != "Installed"]
 
     out = []
     w = out.append
@@ -65,14 +67,15 @@ def main():
     w("")
     w("## 1. Installed in the repository today")
     w("")
-    w("| Component | Licence | Where | Decision | Note |")
-    w("|---|---|---|---|---|")
+    w("| Component | Status | Licence | Where | Decision | Note |")
+    w("|---|---|---|---|---|---|")
     for e in installed:
-        w(f"| {cell(e['product'])} | {cell(e['licence'])} | {cell(e['hosting'])} | {e['decision']} | {cell(e['reason'])} {cell(e['security_implications']) if e['security_implications'] not in ('None', '-') else ''} |")
+        w(f"| {cell(e['product'])} | {e['status']} | {cell(e['licence'])} | {cell(e['hosting'])} | {e['decision']} | {cell(e['reason'])} {cell(e['security_implications']) if e['security_implications'] not in ('None', '-') else ''} |")
     w("")
-    w("No other third-party product, service or library is integrated. Everything below is **evaluated or planned only — not integrated**.")
+    w("`INSTALLED (dev tool)` means the repository carries the configuration, script or collection and the tool runs on developer machines; it is not a runtime service. "
+      "No other third-party product, service or library is integrated: every entry below whose status is `EVALUATED` is **not integrated**.")
     w("")
-    w("## 2. Evaluated: decisions at a glance")
+    w("## 2. Assessed: decisions at a glance")
     w("")
     w("| Decision | Products |")
     w("|---|---|")
@@ -131,7 +134,7 @@ def main():
             w(f"| {k} | {cell(v)} |")
         w("")
     OUT.write_text("\n".join(out) + "\n")
-    print(f"wrote {OUT.relative_to(ROOT)}: {len(installed)} installed, {len(evaluated)} evaluated")
+    print(f"wrote {OUT.relative_to(ROOT)}: {len(installed)} installed, {len(evaluated)} assessed")
     return 0
 
 

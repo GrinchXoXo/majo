@@ -33,12 +33,24 @@ type Config struct {
 	AllowUnsignedWebhooks bool
 
 	DashboardURL string
+	// CORSAllowedOrigins (reuse-audit R1) are the browser origins allowed to
+	// call the API: CORS_ALLOWED_ORIGINS (comma-separated), default
+	// DASHBOARD_URL. Any other website gets no CORS grant.
+	CORSAllowedOrigins []string
 
-	// OperatorAPIToken (Phase 4A Step 4) is the shared secret that protects
-	// operator curation actions (listing edit/publish/reject and listing
-	// media previews): callers must send "Authorization: Bearer <token>".
-	// Required outside development. There is no per-operator identity.
+	// OperatorAPIToken (Phase 4A Step 4) is the shared secret for the operator
+	// control plane: callers send "Authorization: Bearer <token>". Required
+	// outside development. Since reuse-audit R1 it is the bootstrap /
+	// break-glass credential; day-to-day operators use named tokens
+	// (cmd/operatorctl), which record who acted and carry a role.
 	OperatorAPIToken string
+
+	// Error tracking (reuse-audit R1 pilot). Off unless SENTRY_DSN is set;
+	// any Sentry-protocol endpoint works (GlitchTip self-hosted, Sentry).
+	SentryDSN         string
+	SentryEnvironment string // default APP_ENV
+	SentryRelease     string // e.g. majo-backend@<git sha>; default majo-backend@unknown
+
 	// AllowUnauthenticatedOperator is true ONLY when APP_ENV=development
 	// and no OperatorAPIToken is configured (local work).
 	AllowUnauthenticatedOperator bool
@@ -147,6 +159,10 @@ func Load() (*Config, error) {
 		MediaStorageDir:       getEnv("MEDIA_STORAGE_DIR", "data/media"),
 		OperatorAPIToken:      os.Getenv("OPERATOR_API_TOKEN"),
 	}
+	cfg.SentryDSN = os.Getenv("SENTRY_DSN")
+	cfg.SentryEnvironment = getEnv("SENTRY_ENVIRONMENT", cfg.AppEnv)
+	cfg.SentryRelease = os.Getenv("SENTRY_RELEASE")
+	cfg.CORSAllowedOrigins = splitList(getEnv("CORS_ALLOWED_ORIGINS", cfg.DashboardURL))
 
 	var err error
 	ints := []struct {

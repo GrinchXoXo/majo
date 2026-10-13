@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import OperatorToken from "@/components/OperatorToken";
 import {
   getUnmatchedResponses,
   getVendorOwnRequests,
@@ -109,7 +108,6 @@ export default function UnmatchedResponsesPage() {
         Majo first resolves a vendor reply from context and asks the vendor which request they mean. A reply lands here only if the
         vendor&apos;s answer stayed ambiguous (an exception). Associating is an operator override.
       </p>
-      <OperatorToken />
       <p style={{ color: "#666" }}>
         Responses that could not be safely auto-associated with a specific request — an ambiguous
         multi-request situation, an unrecognized reference, or no active request at all. Nothing here

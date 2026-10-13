@@ -26,7 +26,18 @@ type RequestHandlers struct {
 	service   *request.Service
 	events    event.Reader
 	clarifier Clarifier
+	pager     RequestPager
 }
+
+// RequestPager serves the paginated request list (?limit=&offset=), with the
+// total in X-Total-Count. Without ?limit the full list is returned as before.
+type RequestPager interface {
+	ListPage(ctx context.Context, status *request.Status, limit, offset int) ([]*request.BuyerRequest, error)
+	CountRequests(ctx context.Context, status string) (int, error)
+}
+
+// SetPager enables ?limit=&offset= on GET /api/requests.
+func (h *RequestHandlers) SetPager(p RequestPager) { h.pager = p }
 
 // Clarifier records an operator question as an open clarification so the
 // buyer's answer continues the request (workflow.Engine).
@@ -117,7 +128,22 @@ func (h *RequestHandlers) List(w http.ResponseWriter, r *http.Request) {
 		statusFilter = &st
 	}
 
-	reqs, err := h.requests.List(r.Context(), statusFilter)
+	var reqs []*request.BuyerRequest
+	var err error
+	if limit, offset, paged, perr := pageParams(r); perr != nil {
+		writeError(w, http.StatusBadRequest, perr.Error())
+		return
+	} else if paged && h.pager != nil {
+		total, cerr := h.pager.CountRequests(r.Context(), r.URL.Query().Get("status"))
+		if cerr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to count requests")
+			return
+		}
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
+		reqs, err = h.pager.ListPage(r.Context(), statusFilter, limit, offset)
+	} else {
+		reqs, err = h.requests.List(r.Context(), statusFilter)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list requests")
 		return
@@ -191,7 +217,7 @@ func (h *RequestHandlers) Patch(w http.ResponseWriter, r *http.Request) {
 	// Phase 1 does not implement operator authentication; actorID is nil
 	// (system-attributed). See PRD 1 §42 — production auth is a documented
 	// follow-up, not a Phase 1 blocker.
-	updated, err := h.service.Correct(r.Context(), id, fields, nil)
+	updated, err := h.service.Correct(r.Context(), id, fields, actorID(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to apply correction")
 		return
@@ -207,7 +233,7 @@ func (h *RequestHandlers) Confirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confirmed, err := h.service.Confirm(r.Context(), id, nil)
+	confirmed, err := h.service.Confirm(r.Context(), id, actorID(r))
 	if errors.Is(err, request.ErrInvalidTransition) {
 		writeError(w, http.StatusConflict, "request can only be confirmed from NEEDS_REVIEW (extraction may still be running)")
 		return

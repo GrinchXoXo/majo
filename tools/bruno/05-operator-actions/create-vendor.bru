@@ -1,0 +1,27 @@
+meta {
+  name: Create vendor (changes data)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/vendors
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "business_name": "Bruno Test Shop",
+    "whatsapp_external_id": "2348000{{$randomInt}}",
+    "phone": "2348000{{$randomInt}}",
+    "primary_location": "Lagos",
+    "categories": ["phones"]
+  }
+}
+
+tests {
+  test("created", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+}

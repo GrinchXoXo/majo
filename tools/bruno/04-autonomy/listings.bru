@@ -1,0 +1,17 @@
+meta {
+  name: Supply listings
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/api/supply-listings
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -208,8 +209,18 @@ func (r *RequestRepository) FindByID(ctx context.Context, id uuid.UUID) (*reques
 }
 
 func (r *RequestRepository) List(ctx context.Context, statusFilter *request.Status) ([]*request.BuyerRequest, error) {
+	return r.ListPage(ctx, statusFilter, 0, 0)
+}
+
+// ListPage is List with LIMIT/OFFSET (limit 0 = no limit), for the paginated
+// dashboard view.
+func (r *RequestRepository) ListPage(ctx context.Context, statusFilter *request.Status, limit, offset int) ([]*request.BuyerRequest, error) {
 	var rows *sql.Rows
 	var err error
+	page := ""
+	if limit > 0 {
+		page = fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	}
 
 	if statusFilter != nil {
 		rows, err = r.db.QueryContext(ctx, `
@@ -217,15 +228,15 @@ func (r *RequestRepository) List(ctx context.Context, statusFilter *request.Stat
 			WHERE status = $1
 			ORDER BY
 				CASE status WHEN 'NEEDS_REVIEW' THEN 0 WHEN 'EXTRACTING' THEN 1 ELSE 2 END,
-				created_at DESC
-		`, *statusFilter)
+				created_at DESC, id
+		`+page, *statusFilter)
 	} else {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT `+requestColumns+` FROM buyer_requests
 			ORDER BY
 				CASE status WHEN 'NEEDS_REVIEW' THEN 0 WHEN 'EXTRACTING' THEN 1 ELSE 2 END,
-				created_at DESC
-		`)
+				created_at DESC, id
+		`+page)
 	}
 	if err != nil {
 		return nil, err

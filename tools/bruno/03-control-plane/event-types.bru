@@ -1,0 +1,17 @@
+meta {
+  name: Event types
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/events/types
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

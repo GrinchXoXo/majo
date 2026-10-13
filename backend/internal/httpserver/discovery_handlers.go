@@ -206,7 +206,7 @@ func (h *DiscoveryHandlers) CreateBatch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	batch, created, err := h.dist.CreateBatch(r.Context(), distribution.PlanRequest{
-		ClientKey: strings.TrimSpace(b.ClientKey), Scope: b.Scope.scope(), Recipients: b.Recipients, Note: b.Note, CreatedBy: "operator",
+		ClientKey: strings.TrimSpace(b.ClientKey), Scope: b.Scope.scope(), Recipients: b.Recipients, Note: b.Note, CreatedBy: actorName(r),
 	})
 	if err != nil {
 		h.fail(w, r, err)

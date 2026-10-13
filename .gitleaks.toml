@@ -1,0 +1,30 @@
+# Gitleaks configuration (reuse-audit R0). Extends the default rules with a
+# rule for database URLs that carry a password (the default rules do not
+# catch e.g. a Neon connection string), and excludes generated build output.
+title = "majo"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "postgres-url-with-password"
+description = "PostgreSQL connection URL with an embedded password"
+regex = '''postgres(?:ql)?://[^:\s/@'"]+:([^@\s/'"]{4,})@[^\s'"]+'''
+secretGroup = 1
+keywords = ["postgres://", "postgresql://"]
+
+  # Local/test databases with the documented throwaway password, compose
+  # service names, and placeholders are not secrets.
+  [[rules.allowlists]]
+  regexTarget = "match"
+  regexes = [
+    '''@(localhost|127\.0\.0\.1|postgres|glitchtip-postgres)[:/]''',
+    '''://[^:]+:(middleman|change-me|password|pass|secret|\$\{[^}]+\}|\*+|<[^>]+>)@''',
+  ]
+
+[allowlist]
+description = "generated output, never committed"
+paths = [
+  '''dashboard/\.next/''',
+  '''(^|/)node_modules/''',
+]

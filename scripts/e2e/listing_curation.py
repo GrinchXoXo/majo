@@ -246,13 +246,15 @@ with sync_playwright() as pw:
     ok(sql(f"SELECT condition FROM supply_listings WHERE id='{LID}'") == "Brand new, sealed", "newer edit kept")
     stale.close()
 
-    # Publish without authorization: error shown, still DRAFT.
+    # Without authorization nothing can be published. Since reuse-audit R1
+    # every /api read needs the token too, so clearing it reloads the page into
+    # the authorization error: the listing and its Publish button are not even
+    # shown (the API-level 401 on publish is checked above).
     page.get_by_role("button", name="Clear").click()
-    page.click("[data-testid=publish]")
-    page.wait_for_selector("[data-testid=notice-error]")
-    ok("authorization" in page.locator("[data-testid=notice-error]").inner_text().lower(), "unauthorized publish -> error shown")
-    ok(page.locator("[data-testid=notice-ok]").count() == 0 and page.locator("[data-testid=status]").inner_text() == "DRAFT",
-       "no false success; page still shows DRAFT")
+    page.wait_for_selector("[data-testid=load-error]")
+    ok("authorization" in page.locator("[data-testid=load-error]").inner_text().lower(), "without the token the detail shows an authorization error")
+    ok(page.locator("[data-testid=publish]").count() == 0 and page.locator("[data-testid=notice-ok]").count() == 0,
+       "no Publish button and no false success without the token")
     ok(sql(f"SELECT status FROM supply_listings WHERE id='{LID}'") == "DRAFT", "database still DRAFT")
 
     # Publish with authorization.

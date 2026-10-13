@@ -31,3 +31,6 @@ ai/.venv/
 .idea/
 dashboard/tsconfig.tsbuildinfo
 __pycache__/
+dashboard/next-env.d.ts
+dashboard/test-results/
+dashboard/playwright-report/

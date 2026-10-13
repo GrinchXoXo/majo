@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import { getOperatorToken, setOperatorToken } from "@/lib/api";
 
-// Operator token entry (Phase 4A Step 4). Listing edit/publish/reject and
-// media previews require it when the backend has OPERATOR_API_TOKEN set.
-// Kept in sessionStorage for this browser tab session only.
+// Operator token entry, shown once in the navigation bar. Since reuse-audit R1
+// every /api route needs it (a named operator token, or the shared
+// OPERATOR_API_TOKEN). Kept in sessionStorage for this browser tab session
+// only. Setting or clearing it reloads the page so every view refetches.
 export default function OperatorToken({ onChange }: { onChange?: () => void }) {
+  const changed = onChange ?? (() => window.location.reload());
   const [saved, setSaved] = useState(false);
   const [value, setValue] = useState("");
 
@@ -22,7 +24,7 @@ export default function OperatorToken({ onChange }: { onChange?: () => void }) {
           onClick={() => {
             setOperatorToken("");
             setSaved(false);
-            onChange?.();
+            changed();
           }}
           style={{ fontSize: "0.85em" }}
         >
@@ -38,7 +40,7 @@ export default function OperatorToken({ onChange }: { onChange?: () => void }) {
         setOperatorToken(value.trim());
         setValue("");
         setSaved(value.trim() !== "");
-        onChange?.();
+        changed();
       }}
       style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: "0.85em" }}
     >

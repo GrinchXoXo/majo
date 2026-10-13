@@ -136,7 +136,7 @@ func (h *AutonomyHandlers) ResolveException(w http.ResponseWriter, r *http.Reque
 		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "resolution is required")
 		return
 	}
-	if err := h.store.ResolveException(r.Context(), id, "operator", strings.TrimSpace(b.Resolution), time.Now().UTC()); err != nil {
+	if err := h.store.ResolveException(r.Context(), id, actorName(r), strings.TrimSpace(b.Resolution), time.Now().UTC()); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErrorCode(w, http.StatusNotFound, "NOT_FOUND", "no open exception with this id")
 			return
@@ -155,7 +155,7 @@ func (h *AutonomyHandlers) ResolveException(w http.ResponseWriter, r *http.Reque
 	}
 	eid := id
 	_ = h.events.Write(r.Context(), &event.Event{EventType: event.WorkflowExceptionResolved, EntityType: "workflow_exception", EntityID: &eid,
-		ActorType: event.ActorOperator, Payload: map[string]any{"resolution": b.Resolution}})
+		ActorType: event.ActorOperator, ActorID: actorID(r), Payload: map[string]any{"resolution": b.Resolution, "by": actorName(r)}})
 	writeJSON(w, http.StatusOK, map[string]any{"resolved": true})
 }
 
@@ -231,7 +231,7 @@ func (h *AutonomyHandlers) holdAction(w http.ResponseWriter, r *http.Request, pa
 	}
 	reason := strings.TrimSpace(b.Reason)
 	if pause {
-		hold, created, err := h.control.Pause(r.Context(), id, "operator", reason)
+		hold, created, err := h.control.Pause(r.Context(), id, actorName(r), reason)
 		if err != nil {
 			h.logger.ErrorContext(r.Context(), "pausing workflow", "error", err)
 			writeErrorCode(w, http.StatusBadRequest, "PAUSE_FAILED", err.Error())
@@ -240,7 +240,7 @@ func (h *AutonomyHandlers) holdAction(w http.ResponseWriter, r *http.Request, pa
 		writeJSON(w, http.StatusOK, map[string]any{"held": true, "already_held": !created, "hold": hold})
 		return
 	}
-	released, err := h.control.Resume(r.Context(), id, "operator", reason)
+	released, err := h.control.Resume(r.Context(), id, actorName(r), reason)
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "resuming workflow", "error", err)
 		writeErrorCode(w, http.StatusBadRequest, "RESUME_FAILED", err.Error())

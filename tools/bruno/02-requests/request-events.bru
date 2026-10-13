@@ -1,0 +1,17 @@
+meta {
+  name: Request events
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/requests/{{requestId}}/events
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("found, or no request yet", function () {
+    expect([200, 400, 404]).to.include(res.getStatus());
+  });
+}

@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import VendorResponseCard from "@/components/VendorResponseCard";
-import OperatorToken from "@/components/OperatorToken";
 import AutonomyPanel from "./AutonomyPanel";
 import {
   getRequest,
@@ -349,7 +348,6 @@ export default function RequestDetailPage() {
       <section style={{ border: "1px dashed #b45309", borderRadius: 8, padding: 12, marginBottom: 20 }}>
         <strong style={{ fontSize: "0.85em", color: "#b45309" }}>OPERATOR OVERRIDES (control plane — not needed for a healthy request)</strong>
         <div style={{ margin: "8px 0" }}>
-          <OperatorToken />
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={handleSave} disabled={saving} style={buttonStyle("#2563eb")}>

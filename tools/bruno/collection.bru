@@ -1,0 +1,26 @@
+meta {
+  name: Majo API
+}
+
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+docs {
+  # Majo operator API
+
+  Every `/api` route needs an operator token (`Authorization: Bearer ...`):
+  a named token from `go run ./cmd/operatorctl create`, or the shared
+  `OPERATOR_API_TOKEN`. VIEWER tokens can run the read folders only.
+
+  The token is a **secret** variable: set it in Bruno's environment editor
+  (it is stored outside these files) or pass `--env-var operatorToken=...`
+  to `bru run`. Never write a token into a `.bru` file.
+
+  Folders 01–04 only read. Folder 05 changes data (creates a vendor, pauses
+  and resumes a request): run it against a local or test database only.
+}

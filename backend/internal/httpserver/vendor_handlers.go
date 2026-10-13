@@ -87,7 +87,7 @@ func (h *VendorHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.events.Write(r.Context(), &event.Event{
-		EventType: event.VendorCreated, EntityType: "vendor", EntityID: &created.ID, ActorType: event.ActorOperator,
+		EventType: event.VendorCreated, EntityType: "vendor", EntityID: &created.ID, ActorType: event.ActorOperator, ActorID: actorID(r),
 	}); err != nil {
 		// Non-fatal — vendor was created successfully.
 	}
@@ -180,7 +180,7 @@ func (h *VendorHandlers) Patch(w http.ResponseWriter, r *http.Request) {
 		} else if *body.Status == string(vendor.StatusInactive) || *body.Status == string(vendor.StatusBlocked) {
 			evtType = event.VendorDeactivated
 		}
-		_ = h.events.Write(r.Context(), &event.Event{EventType: evtType, EntityType: "vendor", EntityID: &id, ActorType: event.ActorOperator})
+		_ = h.events.Write(r.Context(), &event.Event{EventType: evtType, EntityType: "vendor", EntityID: &id, ActorType: event.ActorOperator, ActorID: actorID(r)})
 	}
 
 	writeJSON(w, http.StatusOK, toVendorDTO(updated))

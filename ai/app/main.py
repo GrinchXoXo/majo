@@ -1,5 +1,5 @@
 """
-Middleman AI Service — Phase 1.
+Majo AI Service — Phase 1.
 
 Per PRD 0 FINAL §21-22 and PRD 1 §13-20: this service is called by the Go
 backend through the AIProvider boundary. It never owns business state —
@@ -23,10 +23,16 @@ from app.extraction import (
     classify_vendor_response,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("middleman-ai")
+from app.errortrack import init_error_tracking
 
-app = FastAPI(title="Middleman AI Service", version="0.2.0")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("majo-ai")
+
+# Reuse-audit R1 pilot: errors go to a Sentry-protocol tracker when SENTRY_DSN
+# is set (scrubbed; never request bodies). Must run before the app is built.
+ERROR_TRACKING = init_error_tracking()
+
+app = FastAPI(title="Majo AI Service", version="0.2.0")
 
 _heuristic_fallback = HeuristicExtractor()
 

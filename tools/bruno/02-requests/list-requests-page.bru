@@ -1,0 +1,26 @@
+meta {
+  name: List requests (paged)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/requests?limit=10&offset=0
+  body: none
+  auth: inherit
+}
+
+script:post-response {
+  if (Array.isArray(res.getBody()) && res.getBody().length > 0) {
+    bru.setVar("requestId", res.getBody()[0].id);
+  }
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("carries X-Total-Count", function () {
+    expect(res.getHeader("x-total-count")).to.be.a("string");
+  });
+}

@@ -352,7 +352,7 @@ func (h *RoutingHandlers) PatchVendorResponse(w http.ResponseWriter, r *http.Req
 		fields.Status = &st
 	}
 
-	updated, err := h.service.CorrectResponse(r.Context(), id, fields, nil)
+	updated, err := h.service.CorrectResponse(r.Context(), id, fields, actorID(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "correction failed: "+err.Error())
 		return
@@ -385,7 +385,7 @@ func (h *RoutingHandlers) AssociateResponse(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	updated, err := h.service.AssociateResponse(r.Context(), id, vendorRequestID, nil)
+	updated, err := h.service.AssociateResponse(r.Context(), id, vendorRequestID, actorID(r))
 	if errors.Is(err, routing.ErrCrossVendorAssociation) {
 		writeError(w, http.StatusConflict, "a response can only be associated with a request sent to the same vendor")
 		return

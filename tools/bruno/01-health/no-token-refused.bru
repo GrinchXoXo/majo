@@ -1,0 +1,17 @@
+meta {
+  name: API without a token is refused
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/requests
+  body: none
+  auth: none
+}
+
+tests {
+  test("answers 401", function () {
+    expect(res.getStatus()).to.equal(401);
+  });
+}

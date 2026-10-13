@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { ApiError, searchSupplyListings, listVendors, type SupplyListingDTO } from "@/lib/api";
 import ListingMedia from "@/components/ListingMedia";
-import OperatorToken from "@/components/OperatorToken";
 import { FRESHNESS_COLORS, STATUS_COLORS, formatDate, formatPrice, geoLabel } from "@/lib/listing";
 
 // Supply listing curation queue (Phase 4A Step 4). By default it shows the
@@ -68,7 +67,6 @@ export default function SupplyListingsPage() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <h1 style={{ margin: "8px 0" }}>Supply Listings</h1>
-        <OperatorToken onChange={() => setTokenTick((t) => t + 1)} />
       </div>
       <p style={{ color: "#666", marginTop: 0 }}>
         Listings are created as DRAFT from vendor supply. Open one to check it, correct it, and publish or reject it. Nothing

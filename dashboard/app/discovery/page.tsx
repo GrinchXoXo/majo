@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import OperatorToken from "@/components/OperatorToken";
 import { ApiError } from "@/lib/api";
 import {
   createBatch, getDiscoveryFunnel, getPreferences, getSettings, listBatches, previewBatch, setPreference, splitList,
@@ -54,7 +53,6 @@ export default function DiscoveryPage() {
   return (
     <div>
       <h1>Discovery (staff-only)</h1>
-      <OperatorToken onChange={() => setTick((t) => t + 1)} />
       {error && <p style={{ color: "#b91c1c" }} data-testid="discovery-error">{error}</p>}
 
       {settings && (

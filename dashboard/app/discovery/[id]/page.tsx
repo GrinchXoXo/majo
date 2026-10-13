@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import OperatorToken from "@/components/OperatorToken";
+import { useParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { getBatch, getDelivery, getDiscoveryFunnel, sendBatch, type Batch, type Delivery, type DeliveryDetail, type Funnel } from "@/lib/discovery";
 import { Counts, FunnelTable, PlanView, PolicyResult, Reasons, cell } from "../components";
 
 // Batch detail: plan (dry-run report), deliveries with the canonical policy
 // result per listing, the operator send action, and per-delivery attribution.
-export default function BatchPage({ params }: { params: { id: string } }) {
+// Next.js 15+ passes route params to pages as a Promise; this client page
+// reads them with useParams() like the other detail pages.
+export default function BatchPage() {
+  const params = useParams<{ id: string }>();
   const [batch, setBatch] = useState<Batch | null>(null);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [funnel, setFunnel] = useState<Funnel | null>(null);
@@ -56,7 +59,6 @@ export default function BatchPage({ params }: { params: { id: string } }) {
       <p>
         <a href="/discovery">← Discovery</a>
       </p>
-      <OperatorToken onChange={() => setTick((t) => t + 1)} />
       {error && <p style={{ color: "#b91c1c" }} data-testid="batch-error">{error}</p>}
       {notice && <p style={{ color: "#15803d" }} data-testid="batch-notice">{notice}</p>}
       {batch && (

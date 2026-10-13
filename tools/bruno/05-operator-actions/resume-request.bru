@@ -1,0 +1,23 @@
+meta {
+  name: Resume request automation (changes data)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/requests/{{requestId}}/resume
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "reason": "Bruno collection check done"
+  }
+}
+
+tests {
+  test("resumed (or no request yet)", function () {
+    expect([200, 400, 404, 409]).to.include(res.getStatus());
+  });
+}
