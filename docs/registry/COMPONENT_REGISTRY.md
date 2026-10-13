@@ -8,28 +8,39 @@ Weighted score: Need 20%, Compat 15%, Maint 10%, Licence 10%, Deploy/cost 15%, S
 
 ## 1. Installed in the repository today
 
-| Component | Licence | Where | Decision | Note |
-|---|---|---|---|---|
-| google/uuid | BSD-3-Clause | Go module (backend/go.mod v1.6.0) | KEEP | In use across the backend.  |
-| lib/pq | MIT | Go module (backend/go.mod v1.10.9) | KEEP | In use. Upstream is active (v1.12.3, last commit 2026-08-20) but Majo pins v1.10.9 (2023): include in dependency updates. pgx would be a separate decision (River needs it).  |
-| FastAPI + Uvicorn + Pydantic + httpx | MIT / BSD-3-Clause | ai/requirements.txt | KEEP | In use (ai/). Pinned 2024 versions; include in vulnerability scans. |
-| Next.js 14.2.15 + React 18 | MIT | dashboard/package.json | KEEP, UPGRADE | The dashboard is the control plane and should stay native. The version needs patching. npm audit on 2026-10-13: 1 critical (next), 2 high (postcss, source-map-js). The latest 14.x patch is 14.2.35; some advisories are only fixed in 15.x/16.x. |
-| PostgreSQL 16 (local) / Neon (owner's dev DB) | PostgreSQL Licence | docker-compose postgres:16-alpine; Neon | KEEP | Canonical database. Holds buyer phone numbers and messages. |
-| pytest | MIT | ai/requirements.txt | KEEP | In use.  |
-| Meta WhatsApp Cloud API (external API) | Meta platform terms | External API behind channel.Sender / infrastructure/whatsapp | KEEP | Core channel, accessed only through Majo's provider abstraction. The only outbound channel: no other tool may send on the Majo number. |
-| Anthropic API (external, optional) | Anthropic commercial terms | Called from ai/app/extraction.py over HTTP | KEEP | Optional; the deterministic policy decides, the extractor only proposes. Sends buyer message text to a processor when enabled. |
-| Majo metrics | Majo | Existing | BUILD NATIVELY (keep) | The definitions are part of the control plane and the Architecture Lock; a BI tool must not redefine them.  |
+| Component | Status | Licence | Where | Decision | Note |
+|---|---|---|---|---|---|
+| google/uuid | INSTALLED | BSD-3-Clause | Go module (backend/go.mod v1.6.0) | KEEP | In use across the backend.  |
+| lib/pq | INSTALLED | MIT | Go module (backend/go.mod v1.10.9) | KEEP | In use. Upstream is active (v1.12.3, last commit 2026-08-20) but Majo pins v1.10.9 (2023): include in dependency updates. pgx would be a separate decision (River needs it).  |
+| FastAPI 0.143 + Starlette 1.8 + Uvicorn 0.54 + Pydantic 2.14 + httpx 0.28 | INSTALLED | MIT / BSD-3-Clause | ai/requirements.txt | KEEP | In use (ai/). Pins raised in reuse-audit R0. pip-audit 2026-10-13: 0 (was 16 via starlette 0.38.6 and pytest 8.3.3). |
+| Next.js 16.4.0 + React 19.3.0 | INSTALLED | MIT | dashboard/package.json | KEEP | The dashboard stays the native control plane. Upgraded in reuse-audit R0 (Next 14 had advisories only fixed in 15.x/16.x). npm audit 2026-10-13: 0 vulnerabilities after the upgrade from 14.2.15 (which had 1 critical, 2 high). |
+| PostgreSQL 16 (local) / Neon (owner's dev DB) | INSTALLED | PostgreSQL Licence | docker-compose postgres:16-alpine; Neon | KEEP | Canonical database. Holds buyer phone numbers and messages. |
+| pytest 9.1.1 | INSTALLED | MIT | ai/requirements.txt | KEEP | In use.  |
+| Meta WhatsApp Cloud API (external API) | INSTALLED | Meta platform terms | External API behind channel.Sender / infrastructure/whatsapp | KEEP | Core channel, accessed only through Majo's provider abstraction. The only outbound channel: no other tool may send on the Majo number. |
+| Anthropic API (external, optional) | INSTALLED | Anthropic commercial terms | Called from ai/app/extraction.py over HTTP | KEEP | Optional; the deterministic policy decides, the extractor only proposes. Sends buyer message text to a processor when enabled. |
+| TanStack Table v9 (9.3.1) | INSTALLED | MIT | dashboard dependency; components/DataTable.tsx | REUSE COMPONENTS | Headless, so it fits the inline-style dashboard. Used by the requests, events and jobs pages (R1). v9 became stable in Aug 2026. None (client-side only). |
+| Bruno | INSTALLED (dev tool) | MIT (paid editions exist) | tools/bruno (20 requests, 22 tests); Bruno app or @usebruno/cli 4.2.1 | ADOPT NOW | Cheap onboarding and manual testing for 62 routes, with no infrastructure. Plain files diff well in git. Done in R0: the collection runs green with bru run. Never commit tokens: use Bruno env files that are git-ignored. |
+| Gitleaks | INSTALLED (dev tool) | MIT | .gitleaks.toml (adds a PostgreSQL-URL rule), .githooks/pre-commit, scripts/security/run_security_checks.sh; binary installed per developer | ADOPT NOW | Highest value per hour: prevents committing the Neon credential, and the planned move to a new git repo is the moment to scan history. Done in R0: history scan clean; hook verified to block a Neon-style URL. Reports contain secret fragments: don't paste them in chats. |
+| govulncheck + npm audit + pip-audit | INSTALLED (dev tool) | BSD-3-Clause (govulncheck); Apache-2.0 (pip-audit); npm built-in | scripts/security/run_security_checks.sh; binaries installed per developer | ADOPT NOW | It has already found real issues. govulncheck reports only vulnerabilities reachable from Majo's code, which cuts noise. Done in R0: findings fixed (Next.js 16.4, Python pins, Go 1.26); all three report 0.  |
+| Trivy | INSTALLED (dev tool) | Apache-2.0 | scripts/security/run_security_checks.sh (trivy config); v0.75.0 pinned and checksum-verified | ADOPT NOW (config scans) | trivy config found 7 Dockerfile issues (root users, :latest base, no health checks), all fixed. Image/filesystem CVE scanning not run in the sandbox (Trivy DB host unreachable). Supply-chain incident: v0.69.4 binary, Docker Hub 0.69.5/0.69.6 and trivy-action tags were malicious (March 2026). Pin verified versions by digest/SHA. |
+| Playwright | INSTALLED (dev tool) | Apache-2.0 | dashboard devDependency @playwright/test 1.64.0; dashboard/e2e (5 smoke tests) | ADOPT NOW | 5 smoke tests (token gate, paginated requests, timeline filter, jobs summary, pause/resume) pass against Next 16. Test-only. |
+| Mermaid | INSTALLED | MIT | docs/architecture/diagrams.md (5 diagrams, all render with mermaid-cli) | ADOPT NOW | Zero-install way to document state machines and failure paths.  |
+| Majo operator accounts | INSTALLED | Majo | In the backend; one migration | BUILD NATIVELY | Built in R1: all /api routes guarded, named VIEWER/OPERATOR tokens (cmd/operatorctl, hash-only storage), actor names in events, CORS allow-list. 34-check E2E suite. Closes 16 unauthenticated data-returning GET routes (buyer requests, vendors, offers, transactions), and names the actor in audit records. |
+| Majo dashboard pages | INSTALLED | Majo | In the dashboard (TanStack Table for lists) | BUILD NATIVELY | Built in R1: GET /api/events, /api/jobs, /api/jobs/summary, paginated /api/requests; dashboard Events and Jobs pages. Read-only views. |
+| Majo metrics | INSTALLED | Majo | Existing | BUILD NATIVELY (keep) | The definitions are part of the control plane and the Architecture Lock; a BI tool must not redefine them.  |
+| Go 1.26 (go.mod: go 1.26.0, toolchain go1.26.9; Docker golang:1.26) | INSTALLED | BSD-3-Clause | backend/go.mod, backend/Dockerfile | KEEP, UPGRADE | Raised from Go 1.22 (unsupported since Feb 2025) in reuse-audit R0. govulncheck: 0 reachable vulnerabilities with go1.26.9 (36 with go1.24.7; the previous Docker image used EOL Go 1.22). |
+| sentry-go v0.50.0, sentry-sdk 2.72.0 (Python) | INSTALLED | MIT | backend/internal/errortrack, ai/app/errortrack.py | PILOT | Client side of the GlitchTip pilot. Reports scrubbed: phone-like numbers, bearer/operator tokens, e-mails, request bodies, locals and source lines removed. Tested against a fake Sentry-protocol endpoint. |
 
-No other third-party product, service or library is integrated. Everything below is **evaluated or planned only — not integrated**.
+`INSTALLED (dev tool)` means the repository carries the configuration, script or collection and the tool runs on developer machines; it is not a runtime service. No other third-party product, service or library is integrated: every entry below whose status is `EVALUATED` is **not integrated**.
 
-## 2. Evaluated: decisions at a glance
+## 2. Assessed: decisions at a glance
 
 | Decision | Products |
 |---|---|
-| **ADOPT NOW** | govulncheck + npm audit + pip-audit (97.0), Gitleaks (95.0), Mermaid (89.0), Bruno (84.0) |
-| **PILOT** | GlitchTip (93.0), Trivy (89.0), Testcontainers for Go (88.0), Playwright (83.0) |
-| **REUSE COMPONENTS** | TanStack Table v8 (90.0) |
-| **BUILD NATIVELY** | Majo operator accounts, Majo dashboard pages |
+| **ADOPT NOW** | govulncheck + npm audit + pip-audit (97.0), Gitleaks (95.0), Trivy (89.0), Mermaid (89.0), Bruno (84.0), Playwright (83.0) |
+| **PILOT** | GlitchTip (93.0), Testcontainers for Go (88.0) |
+| **REUSE COMPONENTS** | TanStack Table v9 (9.3.1) (90.0) |
+| **BUILD NATIVELY** | Majo operator accounts, Majo dashboard pages, Majo metrics |
 | **DEFER** | pg_trgm (Postgres contrib) (86.0), Apache ECharts (79.0), OWASP ZAP (76.0), Grafana OSS (74.0), shadcn/ui (73.0), Metabase (OSS) (73.0), pgvector (72.0), Scalar (71.0), Swagger UI (71.0), SeaweedFS (69.0), Umami (68.0), OpenTelemetry Go SDK (68.0), River (67.0), Prometheus (65.0), authentik (65.0), Keycloak (64.0), FFmpeg (63.0), Zitadel (63.0), EventCatalog (62.0), listmonk (62.0), Flagsmith (61.0), Unleash (59.0), GrowthBook (59.0), Grafana Loki (58.0), Meilisearch (57.0), Zammad (53.0), Typesense (52.0), FreeScout (51.0) |
 | **REJECT** | Sentry (self-hosted) (82.0), React Flow (xyflow) (71.0), Apache Superset (69.0), Hoppscotch (67.0), Refine (64.0), React Admin (64.0), Tremor (62.0), ToolJet (51.0), Postal (51.0), Appsmith (50.0), MinIO (community) (50.0), Chatwoot (49.0), Temporal (48.0), OpenSearch (47.0), Novu (47.0), Asynq (46.0), Windmill (46.0), Paperless-ngx (46.0), Saleor (46.0), Medusa (44.0), Directus (44.0), Papercups (43.0), Vendure (42.0) |
 
@@ -40,13 +51,13 @@ No other third-party product, service or library is integrated. Everything below
 | govulncheck + npm audit + pip-audit | K. Testing and security | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 5 | **97.0** | ADOPT NOW |
 | Gitleaks | K. Testing and security | 5 | 5 | 4 | 5 | 5 | 5 | 4 | 5 | **95.0** | ADOPT NOW |
 | GlitchTip | C. Observability | 5 | 5 | 4 | 5 | 4 | 4 | 5 | 5 | **93.0** | PILOT |
-| TanStack Table v8 | A. Admin interfaces | 4 | 5 | 5 | 5 | 5 | 5 | 3 | 5 | **90.0** | REUSE COMPONENTS |
-| Trivy | K. Testing and security | 4 | 5 | 5 | 5 | 5 | 3 | 4 | 5 | **89.0** | PILOT |
+| TanStack Table v9 (9.3.1) | A. Admin interfaces | 4 | 5 | 5 | 5 | 5 | 5 | 3 | 5 | **90.0** | REUSE COMPONENTS |
+| Trivy | K. Testing and security | 4 | 5 | 5 | 5 | 5 | 3 | 4 | 5 | **89.0** | ADOPT NOW (config scans) |
 | Mermaid | L. Workflow visualisation | 3 | 5 | 5 | 5 | 5 | 5 | 4 | 5 | **89.0** | ADOPT NOW |
 | Testcontainers for Go | K. Testing and security | 4 | 4 | 5 | 5 | 5 | 4 | 4 | 5 | **88.0** | PILOT |
 | pg_trgm (Postgres contrib) | F. Search | 3 | 5 | 5 | 5 | 5 | 5 | 3 | 5 | **86.0** | DEFER |
 | Bruno | J. API tooling | 3 | 5 | 5 | 5 | 5 | 4 | 3 | 5 | **84.0** | ADOPT NOW |
-| Playwright | K. Testing and security | 3 | 5 | 5 | 5 | 4 | 5 | 3 | 5 | **83.0** | PILOT |
+| Playwright | K. Testing and security | 3 | 5 | 5 | 5 | 4 | 5 | 3 | 5 | **83.0** | ADOPT NOW |
 | Sentry (self-hosted) | C. Observability | 5 | 5 | 5 | 3 | 1 | 4 | 5 | 5 | **82.0** | REJECT |
 | Apache ECharts | B. Business analytics | 2 | 4 | 5 | 5 | 5 | 5 | 3 | 5 | **79.0** | DEFER |
 | OWASP ZAP | K. Testing and security | 3 | 4 | 5 | 5 | 4 | 3 | 3 | 5 | **76.0** | DEFER |
@@ -102,7 +113,7 @@ No other third-party product, service or library is integrated. Everything below
 
 ### A. Admin interfaces
 
-#### TanStack Table v8 — REUSE COMPONENTS  `EVALUATED`
+#### TanStack Table v9 (9.3.1) — REUSE COMPONENTS  `INSTALLED`
 
 | Field | Value |
 |---|---|
@@ -115,11 +126,11 @@ No other third-party product, service or library is integrated. Everything below
 | Integration model | A |
 | Data owner | n/a |
 | Auth requirements | n/a |
-| Hosting | npm library, no service |
+| Hosting | dashboard dependency; components/DataTable.tsx |
 | Resource/maintenance burden | Low |
 | Integration complexity | Low |
 | Security | None (client-side only). |
-| Reason | Headless, so it fits the inline-style dashboard; React 18 compatible. It saves real work on the events, jobs and exceptions lists that are missing. |
+| Reason | Headless, so it fits the inline-style dashboard. Used by the requests, events and jobs pages (R1). v9 became stable in Aug 2026. |
 | Reconsider when | - |
 | Weighted score | 90.0 |
 
@@ -337,7 +348,7 @@ No other third-party product, service or library is integrated. Everything below
 
 ### C. Observability
 
-#### GlitchTip — PILOT  `EVALUATED`
+#### GlitchTip — PILOT  `EVALUATED (pilot wired, server not run)`
 
 | Field | Value |
 |---|---|
@@ -350,11 +361,11 @@ No other third-party product, service or library is integrated. Everything below
 | Integration model | B + C (Sentry SDKs: sentry-go, sentry-python, @sentry/nextjs) |
 | Data owner | GlitchTip (error events). Majo state is untouched. |
 | Auth requirements | GlitchTip users; DSN per service as an env var (empty = off). |
-| Hosting | Docker; documented 512 MB RAM recommended (256 MB all-in-one). PostgreSQL 14+; Valkey/Redis optional ('PostgreSQL-only mode', 5.2). |
+| Hosting | Docker; documented 512 MB RAM recommended (256 MB all-in-one). PostgreSQL 14+; Valkey/Redis optional ('PostgreSQL-only mode', 5.2). Compose profile `observability` added (glitchtip/glitchtip:6, Postgres-only, port 8001). |
 | Resource/maintenance burden | Low |
 | Integration complexity | Low (SDK init + recover hooks) |
 | Security | Error payloads can carry phone numbers or message text: scrub before send (SDK BeforeSend). |
-| Reason | Closes the biggest observability gap (silent failures) at the smallest cost, and is Sentry-SDK compatible so it can be swapped later. |
+| Reason | Closes the biggest observability gap (silent failures) at the smallest cost, and is Sentry-SDK compatible so it can be swapped later. SDK side done and tested against a fake ingest endpoint. GlitchTip itself NOT RUN: no Docker daemon or registry access in the sandbox. |
 | Reconsider when | - |
 | Weighted score | 93.0 |
 
@@ -960,7 +971,7 @@ No other third-party product, service or library is integrated. Everything below
 
 ### J. API tooling
 
-#### Bruno — ADOPT NOW  `EVALUATED`
+#### Bruno — ADOPT NOW  `INSTALLED (dev tool)`
 
 | Field | Value |
 |---|---|
@@ -973,11 +984,11 @@ No other third-party product, service or library is integrated. Everything below
 | Integration model | A (files in repo + desktop app) |
 | Data owner | n/a |
 | Auth requirements | Collections reference {{operatorToken}} from a git-ignored env file |
-| Hosting | Desktop app / CLI; no server |
+| Hosting | tools/bruno (20 requests, 22 tests); Bruno app or @usebruno/cli 4.2.1 |
 | Resource/maintenance burden | None |
 | Integration complexity | Low |
 | Security | Never commit tokens: use Bruno env files that are git-ignored. |
-| Reason | Cheap onboarding and manual testing for 58 routes, with no infrastructure. Plain files diff well in git. |
+| Reason | Cheap onboarding and manual testing for 62 routes, with no infrastructure. Plain files diff well in git. Done in R0: the collection runs green with bru run. |
 | Reconsider when | - |
 | Weighted score | 84.0 |
 
@@ -1046,7 +1057,7 @@ No other third-party product, service or library is integrated. Everything below
 
 ### K. Testing and security
 
-#### govulncheck + npm audit + pip-audit — ADOPT NOW  `EVALUATED`
+#### govulncheck + npm audit + pip-audit — ADOPT NOW  `INSTALLED (dev tool)`
 
 | Field | Value |
 |---|---|
@@ -1059,15 +1070,15 @@ No other third-party product, service or library is integrated. Everything below
 | Integration model | A (CLI) |
 | Data owner | n/a |
 | Auth requirements | n/a |
-| Hosting | CLIs; no service |
+| Hosting | scripts/security/run_security_checks.sh; binaries installed per developer |
 | Resource/maintenance burden | None |
 | Integration complexity | Low |
 | Security | - |
-| Reason | It has already found real issues. govulncheck reports only vulnerabilities reachable from Majo's code, which cuts noise. |
+| Reason | It has already found real issues. govulncheck reports only vulnerabilities reachable from Majo's code, which cuts noise. Done in R0: findings fixed (Next.js 16.4, Python pins, Go 1.26); all three report 0. |
 | Reconsider when | - |
 | Weighted score | 97.0 |
 
-#### Gitleaks — ADOPT NOW  `EVALUATED`
+#### Gitleaks — ADOPT NOW  `INSTALLED (dev tool)`
 
 | Field | Value |
 |---|---|
@@ -1080,15 +1091,15 @@ No other third-party product, service or library is integrated. Everything below
 | Integration model | A (CLI / pre-commit) |
 | Data owner | n/a |
 | Auth requirements | n/a |
-| Hosting | Single binary |
+| Hosting | .gitleaks.toml (adds a PostgreSQL-URL rule), .githooks/pre-commit, scripts/security/run_security_checks.sh; binary installed per developer |
 | Resource/maintenance burden | None |
 | Integration complexity | Low |
 | Security | Reports contain secret fragments: don't paste them in chats. |
-| Reason | Highest value per hour: prevents committing the Neon credential, and the planned move to a new git repo is the moment to scan history. |
+| Reason | Highest value per hour: prevents committing the Neon credential, and the planned move to a new git repo is the moment to scan history. Done in R0: history scan clean; hook verified to block a Neon-style URL. |
 | Reconsider when | - |
 | Weighted score | 95.0 |
 
-#### Trivy — PILOT  `EVALUATED`
+#### Trivy — ADOPT NOW (config scans)  `INSTALLED (dev tool)`
 
 | Field | Value |
 |---|---|
@@ -1101,11 +1112,11 @@ No other third-party product, service or library is integrated. Everything below
 | Integration model | A (CLI) |
 | Data owner | n/a |
 | Auth requirements | n/a |
-| Hosting | Single binary |
+| Hosting | scripts/security/run_security_checks.sh (trivy config); v0.75.0 pinned and checksum-verified |
 | Resource/maintenance burden | Low |
 | Integration complexity | Low |
 | Security | Supply-chain incident: v0.69.4 binary, Docker Hub 0.69.5/0.69.6 and trivy-action tags were malicious (March 2026). Pin verified versions by digest/SHA. |
-| Reason | Valuable for images, but after the March 2026 compromise it must be installed by verified digest only. |
+| Reason | trivy config found 7 Dockerfile issues (root users, :latest base, no health checks), all fixed. Image/filesystem CVE scanning not run in the sandbox (Trivy DB host unreachable). |
 | Reconsider when | - |
 | Weighted score | 89.0 |
 
@@ -1126,11 +1137,11 @@ No other third-party product, service or library is integrated. Everything below
 | Resource/maintenance burden | Low |
 | Integration complexity | Low–Medium |
 | Security | Test-only. |
-| Reason | Would let 28+ Postgres integration tests run wherever Docker exists, without a hand-made DB, and keeps Neon out of tests by construction. |
+| Reason | Would let 28+ Postgres integration tests run wherever Docker exists, without a hand-made DB, and keeps Neon out of tests by construction. Pilot NOT RUN: the sandbox has no Docker daemon, so it could not be verified. Do it in the local session. |
 | Reconsider when | - |
 | Weighted score | 88.0 |
 
-#### Playwright — PILOT  `EVALUATED`
+#### Playwright — ADOPT NOW  `INSTALLED (dev tool)`
 
 | Field | Value |
 |---|---|
@@ -1139,15 +1150,15 @@ No other third-party product, service or library is integrated. Everything below
 | Licence | Apache-2.0 |
 | Open-source edition limits | - |
 | Maintenance (checked 2026-10-13) | last commit 2026-10-12 |
-| Overlaps with Majo | None in the repo (used ad hoc in the sandbox for screenshots only). |
+| Overlaps with Majo | Python Playwright already drives one E2E suite (scripts/e2e/discovery_dashboard.py); the registry earlier said 'none', which was wrong. |
 | Integration model | A (test-only) |
 | Data owner | n/a |
 | Auth requirements | Test operator token |
-| Hosting | npm dev dependency + browsers |
+| Hosting | dashboard devDependency @playwright/test 1.64.0; dashboard/e2e (5 smoke tests) |
 | Resource/maintenance burden | Low |
 | Integration complexity | Low |
 | Security | Test-only. |
-| Reason | A few smoke tests on the operator pages (token, pause/resume, curation) protect the control plane during the Next.js upgrade. |
+| Reason | 5 smoke tests (token gate, paginated requests, timeline filter, jobs summary, pause/resume) pass against Next 16. |
 | Reconsider when | - |
 | Weighted score | 83.0 |
 
@@ -1174,7 +1185,7 @@ No other third-party product, service or library is integrated. Everything below
 
 ### L. Workflow visualisation
 
-#### Mermaid — ADOPT NOW  `EVALUATED`
+#### Mermaid — ADOPT NOW  `INSTALLED`
 
 | Field | Value |
 |---|---|
@@ -1187,7 +1198,7 @@ No other third-party product, service or library is integrated. Everything below
 | Integration model | A (markdown) |
 | Data owner | n/a |
 | Auth requirements | n/a |
-| Hosting | None (GitHub renders ```mermaid blocks natively) |
+| Hosting | docs/architecture/diagrams.md (5 diagrams, all render with mermaid-cli) |
 | Resource/maintenance burden | None |
 | Integration complexity | Low |
 | Security | None |
@@ -1390,7 +1401,7 @@ No other third-party product, service or library is integrated. Everything below
 
 ### Native (Majo)
 
-#### Majo operator accounts — BUILD NATIVELY  `NATIVE (planned, not built)`
+#### Majo operator accounts — BUILD NATIVELY  `INSTALLED`
 
 | Field | Value |
 |---|---|
@@ -1407,11 +1418,11 @@ No other third-party product, service or library is integrated. Everything below
 | Resource/maintenance burden | Low |
 | Integration complexity | Low–Medium (dashboard already sends a bearer token) |
 | Security | Closes 16 unauthenticated data-returning GET routes (buyer requests, vendors, offers, transactions), and names the actor in audit records. |
-| Reason | Small, Majo-specific, and a prerequisite before any external tool (BI, error tracking, API docs) touches Majo. |
+| Reason | Built in R1: all /api routes guarded, named VIEWER/OPERATOR tokens (cmd/operatorctl, hash-only storage), actor names in events, CORS allow-list. 34-check E2E suite. |
 | Reconsider when | Customer web accounts or SSO become requirements (then an IdP). |
 | Weighted score | not scored |
 
-#### Majo dashboard pages — BUILD NATIVELY  `NATIVE (planned, not built)`
+#### Majo dashboard pages — BUILD NATIVELY  `INSTALLED`
 
 | Field | Value |
 |---|---|
@@ -1428,7 +1439,28 @@ No other third-party product, service or library is integrated. Everything below
 | Resource/maintenance burden | Low |
 | Integration complexity | Low–Medium (needs paginated read APIs) |
 | Security | Read-only views. |
-| Reason | Domain-specific: shows Majo's own state transitions. No external product understands them without a second copy of the data. |
+| Reason | Built in R1: GET /api/events, /api/jobs, /api/jobs/summary, paginated /api/requests; dashboard Events and Jobs pages. |
+| Reconsider when | - |
+| Weighted score | not scored |
+
+#### Majo metrics — BUILD NATIVELY (keep)  `INSTALLED`
+
+| Field | Value |
+|---|---|
+| Capability | Product/autonomy metrics with explicit denominators |
+| Repository | backend/infrastructure/postgres/autonomy_metrics.go |
+| Licence | Majo |
+| Open-source edition limits | - |
+| Maintenance (checked 2026-10-13) | n/a |
+| Overlaps with Majo | Exists. |
+| Integration model | E |
+| Data owner | Majo |
+| Auth requirements | Operator auth |
+| Hosting | Existing |
+| Resource/maintenance burden | Low |
+| Integration complexity | - |
+| Security | - |
+| Reason | The definitions are part of the control plane and the Architecture Lock; a BI tool must not redefine them. |
 | Reconsider when | - |
 | Weighted score | not scored |
 

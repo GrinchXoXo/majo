@@ -1,0 +1,39 @@
+
+== Secrets in git history (gitleaks)
+[90m12:35AM[0m [32mINF[0m [1m32 commits scanned.[0m
+[90m12:35AM[0m [32mINF[0m [1mscanned ~3752725 bytes (3.75 MB) in 9.27s[0m
+[90m12:35AM[0m [32mINF[0m [1mno leaks found[0m
+-- gitleaks: PASS
+
+== Go: reachable vulnerabilities (govulncheck)
+No vulnerabilities found.
+-- govulncheck: PASS
+
+== Dashboard: npm audit (production dependencies)
+found 0 vulnerabilities
+-- npm audit: PASS
+
+== AI service: pip-audit
+No known vulnerabilities found
+-- pip-audit: PASS
+
+== Dockerfiles and config (trivy config)
+
+Report Summary
+
+┌──────────────────────┬────────────┬───────────────────┐
+│        Target        │    Type    │ Misconfigurations │
+├──────────────────────┼────────────┼───────────────────┤
+│ ai/Dockerfile        │ dockerfile │         0         │
+├──────────────────────┼────────────┼───────────────────┤
+│ backend/Dockerfile   │ dockerfile │         0         │
+├──────────────────────┼────────────┼───────────────────┤
+│ dashboard/Dockerfile │ dockerfile │         0         │
+└──────────────────────┴────────────┴───────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+
+-- trivy config: PASS
+
+0 check(s) failed

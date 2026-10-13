@@ -7,6 +7,23 @@
 | Scope | Evaluation and architecture only. **Nothing was installed, deployed or integrated.** No production service, commerce-loop, payment or autonomy change. |
 | Registry | `docs/registry/COMPONENT_REGISTRY.md`, generated from `docs/registry/components.json` (71 entries: 9 installed — dependencies, 2 external APIs and the native metrics — plus 60 evaluated products and 2 planned native builds) |
 
+## Implementation status (updated 13 Oct 2026)
+
+Phases R0 and R1 were implemented in the sandbox the same day; see
+`docs/implementation/reuse-audit-r0-r1-report.md`. The registry's **Status**
+column is authoritative for what is installed.
+
+| Item | Status |
+|---|---|
+| Gitleaks, govulncheck/npm audit/pip-audit, Trivy (config) | Installed as developer tools (`scripts/security/run_security_checks.sh`, pre-commit hook); all findings fixed |
+| Next.js 14.2.15 → 16.4.0, React 19.3; Python pins; Go 1.22 → 1.26 | Done; all scanners report 0 |
+| Native route protection, named operators, CORS allow-list | Done |
+| TanStack Table + event timeline + jobs pages + paginated requests | Done |
+| Bruno collection, Mermaid diagrams, Playwright smoke tests | Done |
+| GlitchTip pilot | SDK side done and tested against a fake endpoint; GlitchTip server **not run** (sandbox has no Docker daemon) |
+| Testcontainers pilot | **Not run** (no Docker daemon in the sandbox); left for the local session |
+| Everything deferred or rejected | Unchanged |
+
 ## 0. The five most valuable decisions
 
 1. **Keep the native Next.js dashboard as the only control plane. Do not adopt a low-code admin platform.**

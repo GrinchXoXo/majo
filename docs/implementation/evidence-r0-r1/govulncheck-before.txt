@@ -1,0 +1,687 @@
+=== Symbol Results ===
+
+Vulnerability #1: GO-2026-6617
+    HTTP/2 server crash due to HPACK encoder race in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6617
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.26.9
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.CanonicalHeaderKey
+      #2: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #3: infrastructure/whatsapp/media_download.go:124:25: whatsapp.CloudAPIProvider.DownloadMedia calls http.Header.Get
+      #4: internal/httpserver/supply_listing_curation_handlers.go:368:16: httpserver.SupplyListingHandlers.Media calls http.Header.Set
+      #5: infrastructure/whatsapp/cloud_api_provider.go:222:40: whatsapp.CloudAPIProvider.UploadMedia calls http.NewRequestWithContext
+      #6: cmd/server/main.go:305:12: server.main calls http.ServeMux.Handle
+      #7: cmd/server/main.go:249:16: server.main calls http.ServeMux.HandleFunc
+      #8: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe
+      #9: infrastructure/whatsapp/whatsapptest/fakegraph.go:52:31: whatsapptest.New calls httptest.NewServer, which eventually calls http.Server.Serve
+      #10: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Server.SetKeepAlivesEnabled
+      #11: cmd/server/main.go:427:24: server.main calls http.Server.Shutdown
+      #12: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+      #13: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.body.Close
+      #14: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.body.Read
+      #15: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.bodyEOFSignal.Close
+      #16: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyEOFSignal.Read
+      #17: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyLocked.Read
+      #18: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.bufioFlushWriter.Write
+      #19: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.cancelTimerBody.Close
+      #20: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.cancelTimerBody.Read
+      #21: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.checkConnErrorWriter.Write
+      #22: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.chunkWriter.Write
+      #23: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.connReader.Read
+      #24: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.expectContinueReader.Read
+      #25: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.gzipReader.Close
+      #26: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.gzipReader.Read
+      #27: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2ConnectionError.Error
+      #28: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2ErrCode.String
+      #29: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameHeader.String
+      #30: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameType.String
+      #31: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameWriteRequest.String
+      #32: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2GoAwayError.Error
+      #33: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2Setting.String
+      #34: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2SettingID.String
+      #35: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2StreamError.Error
+      #36: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2bufferedWriterTimeoutWriter.Write
+      #37: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2chunkWriter.Write
+      #38: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2connError.Error
+      #39: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2duplicatePseudoHeaderError.Error
+      #40: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2gzipReader.Close
+      #41: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2gzipReader.Read
+      #42: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldNameError.Error
+      #43: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldValueError.Error
+      #44: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2pseudoHeaderError.Error
+      #45: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2requestBody.Read
+      #46: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.Write
+      #47: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.WriteHeader
+      #48: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.http2responseWriter.WriteString
+      #49: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2stickyErrWriter.Write
+      #50: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2transportResponseBody.Close
+      #51: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2transportResponseBody.Read
+      #52: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2writeData.String
+      #53: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which eventually calls http.loggingConn.Close
+      #54: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.loggingConn.Read
+      #55: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls http.loggingConn.Write
+      #56: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.maxBytesReader.Read
+      #57: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.onceCloseListener.Close
+      #58: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.persistConn.Read
+      #59: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.persistConnWriter.ReadFrom
+      #60: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.persistConnWriter.Write
+      #61: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readTrackingBody.Read
+      #62: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readWriteCloserBody.Read
+      #63: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.response.Write
+      #64: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.response.WriteHeader
+      #65: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.transportReadFromServerError.Error
+
+Vulnerability #2: GO-2026-6613
+    HTTP/1 server connection desynchronization after 2xx CONNECT response in
+    net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6613
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.26.9
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.CanonicalHeaderKey
+      #2: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #3: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.WriteHeader, which eventually calls http.Header.Del
+      #4: infrastructure/whatsapp/media_download.go:124:25: whatsapp.CloudAPIProvider.DownloadMedia calls http.Header.Get
+      #5: internal/httpserver/supply_listing_curation_handlers.go:368:16: httpserver.SupplyListingHandlers.Media calls http.Header.Set
+      #6: infrastructure/whatsapp/cloud_api_provider.go:222:40: whatsapp.CloudAPIProvider.UploadMedia calls http.NewRequestWithContext
+      #7: cmd/server/main.go:305:12: server.main calls http.ServeMux.Handle
+      #8: cmd/server/main.go:249:16: server.main calls http.ServeMux.HandleFunc
+      #9: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe
+      #10: infrastructure/whatsapp/whatsapptest/fakegraph.go:52:31: whatsapptest.New calls httptest.NewServer, which eventually calls http.Server.Serve
+      #11: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Server.SetKeepAlivesEnabled
+      #12: cmd/server/main.go:427:24: server.main calls http.Server.Shutdown
+      #13: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+      #14: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.body.Close
+      #15: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.body.Read
+      #16: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.bodyEOFSignal.Close
+      #17: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyEOFSignal.Read
+      #18: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyLocked.Read
+      #19: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.bufioFlushWriter.Write
+      #20: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.cancelTimerBody.Close
+      #21: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.cancelTimerBody.Read
+      #22: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.checkConnErrorWriter.Write
+      #23: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.chunkWriter.Write
+      #24: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.connReader.Read
+      #25: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2transportResponseBody.Close, which eventually calls http.expectContinueReader.Close
+      #26: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.expectContinueReader.Read
+      #27: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.gzipReader.Close
+      #28: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.gzipReader.Read
+      #29: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which eventually calls http.loggingConn.Close
+      #30: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.loggingConn.Read
+      #31: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls http.loggingConn.Write
+      #32: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.maxBytesReader.Read
+      #33: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.onceCloseListener.Close
+      #34: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.persistConn.Read
+      #35: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.persistConnWriter.ReadFrom
+      #36: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.persistConnWriter.Write
+      #37: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2transportResponseBody.Close, which eventually calls http.readTrackingBody.Close
+      #38: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readTrackingBody.Read
+      #39: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readWriteCloserBody.Read
+      #40: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.response.Write
+      #41: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.response.WriteHeader
+      #42: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.transportReadFromServerError.Error
+
+Vulnerability #3: GO-2026-6612
+    Double flow control refund on HTTP/2 server streams in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6612
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.26.9
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.CanonicalHeaderKey
+      #2: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #3: infrastructure/whatsapp/media_download.go:124:25: whatsapp.CloudAPIProvider.DownloadMedia calls http.Header.Get
+      #4: internal/httpserver/supply_listing_curation_handlers.go:368:16: httpserver.SupplyListingHandlers.Media calls http.Header.Set
+      #5: infrastructure/whatsapp/cloud_api_provider.go:222:40: whatsapp.CloudAPIProvider.UploadMedia calls http.NewRequestWithContext
+      #6: cmd/server/main.go:305:12: server.main calls http.ServeMux.Handle
+      #7: cmd/server/main.go:249:16: server.main calls http.ServeMux.HandleFunc
+      #8: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe
+      #9: infrastructure/whatsapp/whatsapptest/fakegraph.go:52:31: whatsapptest.New calls httptest.NewServer, which eventually calls http.Server.Serve
+      #10: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Server.SetKeepAlivesEnabled
+      #11: cmd/server/main.go:427:24: server.main calls http.Server.Shutdown
+      #12: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+      #13: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.body.Close
+      #14: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.body.Read
+      #15: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.bodyEOFSignal.Close
+      #16: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyEOFSignal.Read
+      #17: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyLocked.Read
+      #18: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.bufioFlushWriter.Write
+      #19: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.cancelTimerBody.Close
+      #20: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.cancelTimerBody.Read
+      #21: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.checkConnErrorWriter.Write
+      #22: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.chunkWriter.Write
+      #23: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.connReader.Read
+      #24: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.expectContinueReader.Read
+      #25: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.gzipReader.Close
+      #26: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.gzipReader.Read
+      #27: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2ConnectionError.Error
+      #28: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2ErrCode.String
+      #29: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameHeader.String
+      #30: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameType.String
+      #31: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameWriteRequest.String
+      #32: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2GoAwayError.Error
+      #33: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2Setting.String
+      #34: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2SettingID.String
+      #35: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2StreamError.Error
+      #36: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2bufferedWriterTimeoutWriter.Write
+      #37: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2chunkWriter.Write
+      #38: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2connError.Error
+      #39: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2duplicatePseudoHeaderError.Error
+      #40: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2gzipReader.Close
+      #41: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2gzipReader.Read
+      #42: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldNameError.Error
+      #43: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldValueError.Error
+      #44: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2pseudoHeaderError.Error
+      #45: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2requestBody.Read
+      #46: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.Write
+      #47: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.WriteHeader
+      #48: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.http2responseWriter.WriteString
+      #49: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2stickyErrWriter.Write
+      #50: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2transportResponseBody.Close
+      #51: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2transportResponseBody.Read
+      #52: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2writeData.String
+      #53: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which eventually calls http.loggingConn.Close
+      #54: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.loggingConn.Read
+      #55: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls http.loggingConn.Write
+      #56: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.maxBytesReader.Read
+      #57: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.onceCloseListener.Close
+      #58: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.persistConn.Read
+      #59: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.persistConnWriter.ReadFrom
+      #60: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.persistConnWriter.Write
+      #61: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readTrackingBody.Read
+      #62: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readWriteCloserBody.Read
+      #63: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.response.Write
+      #64: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.response.WriteHeader
+      #65: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.transportReadFromServerError.Error
+
+Vulnerability #4: GO-2026-6611
+    Excessive CPU consumption from repeated initial window changes in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6611
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.26.9
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.CanonicalHeaderKey
+      #2: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #3: infrastructure/whatsapp/media_download.go:124:25: whatsapp.CloudAPIProvider.DownloadMedia calls http.Header.Get
+      #4: internal/httpserver/supply_listing_curation_handlers.go:368:16: httpserver.SupplyListingHandlers.Media calls http.Header.Set
+      #5: infrastructure/whatsapp/cloud_api_provider.go:222:40: whatsapp.CloudAPIProvider.UploadMedia calls http.NewRequestWithContext
+      #6: cmd/server/main.go:305:12: server.main calls http.ServeMux.Handle
+      #7: cmd/server/main.go:249:16: server.main calls http.ServeMux.HandleFunc
+      #8: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe
+      #9: infrastructure/whatsapp/whatsapptest/fakegraph.go:52:31: whatsapptest.New calls httptest.NewServer, which eventually calls http.Server.Serve
+      #10: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Server.SetKeepAlivesEnabled
+      #11: cmd/server/main.go:427:24: server.main calls http.Server.Shutdown
+      #12: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+      #13: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.body.Close
+      #14: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.body.Read
+      #15: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.bodyEOFSignal.Close
+      #16: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyEOFSignal.Read
+      #17: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyLocked.Read
+      #18: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.bufioFlushWriter.Write
+      #19: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.cancelTimerBody.Close
+      #20: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.cancelTimerBody.Read
+      #21: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.checkConnErrorWriter.Write
+      #22: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.chunkWriter.Write
+      #23: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.connReader.Read
+      #24: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.expectContinueReader.Read
+      #25: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.gzipReader.Close
+      #26: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.gzipReader.Read
+      #27: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2ConnectionError.Error
+      #28: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2ErrCode.String
+      #29: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameHeader.String
+      #30: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameType.String
+      #31: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameWriteRequest.String
+      #32: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2GoAwayError.Error
+      #33: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2Setting.String
+      #34: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2SettingID.String
+      #35: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2StreamError.Error
+      #36: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2bufferedWriterTimeoutWriter.Write
+      #37: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2chunkWriter.Write
+      #38: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2connError.Error
+      #39: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2duplicatePseudoHeaderError.Error
+      #40: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2gzipReader.Close
+      #41: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2gzipReader.Read
+      #42: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldNameError.Error
+      #43: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldValueError.Error
+      #44: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2pseudoHeaderError.Error
+      #45: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2requestBody.Read
+      #46: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.Write
+      #47: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.WriteHeader
+      #48: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.http2responseWriter.WriteString
+      #49: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2stickyErrWriter.Write
+      #50: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2transportResponseBody.Close
+      #51: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2transportResponseBody.Read
+      #52: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2writeData.String
+      #53: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which eventually calls http.loggingConn.Close
+      #54: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.loggingConn.Read
+      #55: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls http.loggingConn.Write
+      #56: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.maxBytesReader.Read
+      #57: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.onceCloseListener.Close
+      #58: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.persistConn.Read
+      #59: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.persistConnWriter.ReadFrom
+      #60: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.persistConnWriter.Write
+      #61: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readTrackingBody.Read
+      #62: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readWriteCloserBody.Read
+      #63: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.response.Write
+      #64: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.response.WriteHeader
+      #65: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.transportReadFromServerError.Error
+
+Vulnerability #5: GO-2026-6610
+    HTTP/2 transport accepts malformed framing-related headers in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6610
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.26.9
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #2: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+
+Vulnerability #6: GO-2026-6608
+    Memory limit bypass when parsing MIME headers in net/textproto,
+    mime/multipart
+  More info: https://pkg.go.dev/vuln/GO-2026-6608
+  Standard library
+    Found in: net/textproto@go1.24.7
+    Fixed in: net/textproto@go1.26.9
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls textproto.Reader.ReadMIMEHeader
+
+Vulnerability #7: GO-2026-6607
+    Reject malformed ECH outer extension references in crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-6607
+  Standard library
+    Found in: crypto/tls@go1.24.7
+    Fixed in: crypto/tls@go1.26.9
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls tls.Conn.Handshake
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls tls.Conn.HandshakeContext
+      #3: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls tls.Conn.Read
+      #4: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls tls.Conn.Write
+      #5: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #8: GO-2026-6605
+    HTTP/1 client connection desynchronization after CONNECT rejection in
+    net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6605
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.26.9
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #2: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+
+Vulnerability #9: GO-2026-6603
+    HTTP/2 server memory exhaustion due to Trailer headers in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6603
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.26.9
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.CanonicalHeaderKey
+      #2: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #3: infrastructure/whatsapp/media_download.go:124:25: whatsapp.CloudAPIProvider.DownloadMedia calls http.Header.Get
+      #4: internal/httpserver/supply_listing_curation_handlers.go:368:16: httpserver.SupplyListingHandlers.Media calls http.Header.Set
+      #5: infrastructure/whatsapp/cloud_api_provider.go:222:40: whatsapp.CloudAPIProvider.UploadMedia calls http.NewRequestWithContext
+      #6: cmd/server/main.go:305:12: server.main calls http.ServeMux.Handle
+      #7: cmd/server/main.go:249:16: server.main calls http.ServeMux.HandleFunc
+      #8: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe
+      #9: infrastructure/whatsapp/whatsapptest/fakegraph.go:52:31: whatsapptest.New calls httptest.NewServer, which eventually calls http.Server.Serve
+      #10: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Server.SetKeepAlivesEnabled
+      #11: cmd/server/main.go:427:24: server.main calls http.Server.Shutdown
+      #12: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+      #13: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.body.Close
+      #14: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.body.Read
+      #15: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.bodyEOFSignal.Close
+      #16: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyEOFSignal.Read
+      #17: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.bodyLocked.Read
+      #18: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.bufioFlushWriter.Write
+      #19: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.cancelTimerBody.Close
+      #20: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.cancelTimerBody.Read
+      #21: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.checkConnErrorWriter.Write
+      #22: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.chunkWriter.Write
+      #23: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.connReader.Read
+      #24: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.expectContinueReader.Read
+      #25: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.gzipReader.Close
+      #26: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.gzipReader.Read
+      #27: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2ConnectionError.Error
+      #28: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2ErrCode.String
+      #29: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameHeader.String
+      #30: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameType.String
+      #31: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2FrameWriteRequest.String
+      #32: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2GoAwayError.Error
+      #33: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2Setting.String
+      #34: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2SettingID.String
+      #35: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2StreamError.Error
+      #36: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2bufferedWriterTimeoutWriter.Write
+      #37: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2chunkWriter.Write
+      #38: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2connError.Error
+      #39: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2duplicatePseudoHeaderError.Error
+      #40: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2gzipReader.Close
+      #41: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2gzipReader.Read
+      #42: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldNameError.Error
+      #43: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2headerFieldValueError.Error
+      #44: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.http2pseudoHeaderError.Error
+      #45: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2requestBody.Read
+      #46: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.Write
+      #47: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.http2responseWriter.WriteHeader
+      #48: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.http2responseWriter.WriteString
+      #49: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.http2stickyErrWriter.Write
+      #50: infrastructure/whatsapp/cloud_api_provider.go:232:2: whatsapp.CloudAPIProvider.UploadMedia calls http.http2transportResponseBody.Close
+      #51: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.http2transportResponseBody.Read
+      #52: internal/supply/curation.go:701:75: supply.ListingService.Verify calls fmt.Sprintf, which eventually calls http.http2writeData.String
+      #53: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which eventually calls http.loggingConn.Close
+      #54: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.loggingConn.Read
+      #55: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls http.loggingConn.Write
+      #56: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.maxBytesReader.Read
+      #57: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls http.onceCloseListener.Close
+      #58: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.persistConn.Read
+      #59: infrastructure/whatsapp/cloud_api_provider.go:212:27: whatsapp.CloudAPIProvider.UploadMedia calls multipart.Writer.CreatePart, which eventually calls http.persistConnWriter.ReadFrom
+      #60: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls http.persistConnWriter.Write
+      #61: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readTrackingBody.Read
+      #62: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls http.readWriteCloserBody.Read
+      #63: internal/httpserver/supply_listing_curation_handlers.go:374:16: httpserver.SupplyListingHandlers.Media calls http.response.Write
+      #64: internal/httpserver/supply_listing_curation_handlers.go:373:15: httpserver.SupplyListingHandlers.Media calls http.response.WriteHeader
+      #65: internal/httpserver/supply_listing_curation_handlers.go:232:208: httpserver.SupplyListingHandlers.Patch calls http.transportReadFromServerError.Error
+
+Vulnerability #10: GO-2026-6218
+    Avoid quadratic complexity in resolvePath in net/url
+  More info: https://pkg.go.dev/vuln/GO-2026-6218
+  Standard library
+    Found in: net/url@go1.24.7
+    Fixed in: net/url@go1.25.13
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls url.URL.Parse
+
+Vulnerability #11: GO-2026-6090
+    Limit handshake messages we are willing to accept post-handshake in
+    crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-6090
+  Standard library
+    Found in: crypto/tls@go1.24.7
+    Fixed in: crypto/tls@go1.25.13
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls tls.Conn.Handshake
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls tls.Conn.HandshakeContext
+      #3: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls tls.Conn.Read
+      #4: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls tls.Conn.Write
+      #5: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #12: GO-2026-6089
+    Apply ReadHeaderTimeout when doing unencrypted HTTP/2 check in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6089
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.25.13
+    Example traces found:
+      #1: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe
+      #2: infrastructure/whatsapp/whatsapptest/fakegraph.go:52:31: whatsapptest.New calls httptest.NewServer, which eventually calls http.Server.Serve
+
+Vulnerability #13: GO-2026-5972
+    Enforce maximum recursion depth in encoding/asn1
+  More info: https://pkg.go.dev/vuln/GO-2026-5972
+  Standard library
+    Found in: encoding/asn1@go1.24.7
+    Fixed in: encoding/asn1@go1.25.13
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls asn1.Unmarshal
+
+Vulnerability #14: GO-2026-5856
+    Invoking Encrypted Client Hello privacy leak in crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-5856
+  Standard library
+    Found in: crypto/tls@go1.24.7
+    Fixed in: crypto/tls@go1.25.12
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls tls.Conn.Handshake
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls tls.Conn.HandshakeContext
+      #3: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls tls.Conn.Read
+      #4: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls tls.Conn.Write
+      #5: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #15: GO-2026-5039
+    Arbitrary inputs are included in errors without any escaping in
+    net/textproto
+  More info: https://pkg.go.dev/vuln/GO-2026-5039
+  Standard library
+    Found in: net/textproto@go1.24.7
+    Fixed in: net/textproto@go1.25.11
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls textproto.Reader.ReadMIMEHeader
+
+Vulnerability #16: GO-2026-5037
+    Inefficient candidate hostname parsing in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2026-5037
+  Standard library
+    Found in: crypto/x509@go1.24.7
+    Fixed in: crypto/x509@go1.25.11
+    Example traces found:
+      #1: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.Verify
+      #2: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.VerifyHostname
+      #3: internal/httpserver/offer_handlers.go:220:79: httpserver.OfferHandlers.Select calls x509.HostnameError.Error
+
+Vulnerability #17: GO-2026-5026
+    Invoking failure to reject ASCII-only Punycode-encoded labels in
+    golang.org/x/net/idna
+  More info: https://pkg.go.dev/vuln/GO-2026-5026
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.25.13
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #2: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+
+Vulnerability #18: GO-2026-4971
+    Panic in Dial and LookupPort when handling NUL byte on Windows in net
+  More info: https://pkg.go.dev/vuln/GO-2026-4971
+  Standard library
+    Found in: net@go1.24.7
+    Fixed in: net@go1.25.10
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls net.Dialer.Dial
+      #2: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls net.Dialer.DialContext
+      #3: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which calls net.Listen
+
+Vulnerability #19: GO-2026-4947
+    Unexpected work during chain building in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2026-4947
+  Standard library
+    Found in: crypto/x509@go1.24.7
+    Fixed in: crypto/x509@go1.25.9
+    Example traces found:
+      #1: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.Verify
+
+Vulnerability #20: GO-2026-4946
+    Inefficient policy validation in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2026-4946
+  Standard library
+    Found in: crypto/x509@go1.24.7
+    Fixed in: crypto/x509@go1.25.9
+    Example traces found:
+      #1: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.Verify
+
+Vulnerability #21: GO-2026-4918
+    Infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE in
+    net/http/internal/http2 in golang.org/x/net
+  More info: https://pkg.go.dev/vuln/GO-2026-4918
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.25.10
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+      #2: infrastructure/whatsapp/whatsapptest/fakegraph.go:56:45: whatsapptest.FakeGraph.Close calls httptest.Server.Close, which calls http.Transport.CloseIdleConnections
+
+Vulnerability #22: GO-2026-4870
+    Unauthenticated TLS 1.3 KeyUpdate record can cause persistent connection
+    retention and DoS in crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-4870
+  Standard library
+    Found in: crypto/tls@go1.24.7
+    Fixed in: crypto/tls@go1.25.9
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls tls.Conn.Handshake
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls tls.Conn.HandshakeContext
+      #3: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls tls.Conn.Read
+      #4: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls tls.Conn.Write
+      #5: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #23: GO-2026-4602
+    FileInfo can escape from a Root in os
+  More info: https://pkg.go.dev/vuln/GO-2026-4602
+  Standard library
+    Found in: os@go1.24.7
+    Fixed in: os@go1.25.8
+    Example traces found:
+      #1: infrastructure/postgres/migrate.go:29:28: postgres.RunMigrations calls os.ReadDir
+
+Vulnerability #24: GO-2026-4601
+    Incorrect parsing of IPv6 host literals in net/url
+  More info: https://pkg.go.dev/vuln/GO-2026-4601
+  Standard library
+    Found in: net/url@go1.24.7
+    Fixed in: net/url@go1.25.8
+    Example traces found:
+      #1: infrastructure/whatsapp/media_download.go:84:25: whatsapp.CloudAPIProvider.DownloadMedia calls url.Parse
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls url.ParseRequestURI
+      #3: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls url.URL.Parse
+
+Vulnerability #25: GO-2026-4341
+    Memory exhaustion in query parameter parsing in net/url
+  More info: https://pkg.go.dev/vuln/GO-2026-4341
+  Standard library
+    Found in: net/url@go1.24.7
+    Fixed in: net/url@go1.24.12
+    Example traces found:
+      #1: internal/httpserver/discovery_handlers.go:292:21: httpserver.DiscoveryHandlers.Funnel calls url.URL.Query
+
+Vulnerability #26: GO-2026-4340
+    Handshake messages may be processed at the incorrect encryption level in
+    crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-4340
+  Standard library
+    Found in: crypto/tls@go1.24.7
+    Fixed in: crypto/tls@go1.24.12
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls tls.Conn.Handshake
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls tls.Conn.HandshakeContext
+      #3: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls tls.Conn.Read
+      #4: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls tls.Conn.Write
+      #5: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #27: GO-2026-4337
+    Unexpected session resumption in crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-4337
+  Standard library
+    Found in: crypto/tls@go1.24.7
+    Fixed in: crypto/tls@go1.24.13
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls tls.Conn.Handshake
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls tls.Conn.HandshakeContext
+      #3: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls tls.Conn.Read
+      #4: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls tls.Conn.Write
+      #5: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #28: GO-2025-4175
+    Improper application of excluded DNS name constraints when verifying
+    wildcard names in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2025-4175
+  Standard library
+    Found in: crypto/x509@go1.24.7
+    Fixed in: crypto/x509@go1.24.11
+    Example traces found:
+      #1: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.Verify
+
+Vulnerability #29: GO-2025-4155
+    Excessive resource consumption when printing error string for host
+    certificate validation in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2025-4155
+  Standard library
+    Found in: crypto/x509@go1.24.7
+    Fixed in: crypto/x509@go1.24.11
+    Example traces found:
+      #1: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.Verify
+      #2: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.VerifyHostname
+
+Vulnerability #30: GO-2025-4013
+    Panic when validating certificates with DSA public keys in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2025-4013
+  Standard library
+    Found in: crypto/x509@go1.24.7
+    Fixed in: crypto/x509@go1.24.8
+    Example traces found:
+      #1: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.Verify
+
+Vulnerability #31: GO-2025-4012
+    Lack of limit when parsing cookies can cause memory exhaustion in net/http
+  More info: https://pkg.go.dev/vuln/GO-2025-4012
+  Standard library
+    Found in: net/http@go1.24.7
+    Fixed in: net/http@go1.24.8
+    Example traces found:
+      #1: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do
+
+Vulnerability #32: GO-2025-4011
+    Parsing DER payload can cause memory exhaustion in encoding/asn1
+  More info: https://pkg.go.dev/vuln/GO-2025-4011
+  Standard library
+    Found in: encoding/asn1@go1.24.7
+    Fixed in: encoding/asn1@go1.24.8
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls asn1.Unmarshal
+
+Vulnerability #33: GO-2025-4010
+    Insufficient validation of bracketed IPv6 hostnames in net/url
+  More info: https://pkg.go.dev/vuln/GO-2025-4010
+  Standard library
+    Found in: net/url@go1.24.7
+    Fixed in: net/url@go1.24.8
+    Example traces found:
+      #1: infrastructure/whatsapp/media_download.go:84:25: whatsapp.CloudAPIProvider.DownloadMedia calls url.Parse
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls url.ParseRequestURI
+      #3: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls url.URL.Parse
+
+Vulnerability #34: GO-2025-4009
+    Quadratic complexity when parsing some invalid inputs in encoding/pem
+  More info: https://pkg.go.dev/vuln/GO-2025-4009
+  Standard library
+    Found in: encoding/pem@go1.24.7
+    Fixed in: encoding/pem@go1.24.8
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls pem.Decode
+
+Vulnerability #35: GO-2025-4008
+    ALPN negotiation error contains attacker controlled information in
+    crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2025-4008
+  Standard library
+    Found in: crypto/tls@go1.24.7
+    Fixed in: crypto/tls@go1.24.8
+    Example traces found:
+      #1: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls tls.Conn.Handshake
+      #2: cmd/server/main.go:415:31: server.main calls http.Server.ListenAndServe, which eventually calls tls.Conn.HandshakeContext
+      #3: infrastructure/whatsapp/cloud_api_provider.go:234:26: whatsapp.CloudAPIProvider.UploadMedia calls io.ReadAll, which eventually calls tls.Conn.Read
+      #4: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which calls tls.Conn.Write
+      #5: infrastructure/whatsapp/cloud_api_provider.go:228:31: whatsapp.CloudAPIProvider.UploadMedia calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #36: GO-2025-4007
+    Quadratic complexity when checking name constraints in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2025-4007
+  Standard library
+    Found in: crypto/x509@go1.24.7
+    Fixed in: crypto/x509@go1.24.9
+    Example traces found:
+      #1: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls x509.CertPool.AppendCertsFromPEM
+      #2: internal/offer/service.go:319:14: offer.FormatOfferDelivery calls fmt.Fprintf, which eventually calls x509.Certificate.Verify
+      #3: internal/distribution/config.go:55:31: distribution.ParseWindow calls time.LoadLocation, which eventually calls x509.ParseCertificate
+      #4: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls x509.ParseECPrivateKey
+      #5: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls x509.ParsePKCS1PrivateKey
+      #6: infrastructure/postgres/discovery_repository.go:889:15: postgres.DiscoveryRepository.ListInteractions calls sql.Rows.Next, which eventually calls x509.ParsePKCS8PrivateKey
+
+Your code is affected by 36 vulnerabilities from the Go standard library.
+This scan also found 7 vulnerabilities in packages you import and 15
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.

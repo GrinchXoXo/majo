@@ -1,0 +1,10 @@
+
+Running 5 tests using 1 worker
+
+  ✓  1 e2e/control-plane.spec.ts:20:5 › without a token the API refuses and the page says how to fix it (824ms)
+  ✓  2 e2e/control-plane.spec.ts:26:5 › requests list is paginated and links to the request (759ms)
+  ✓  3 e2e/control-plane.spec.ts:38:5 › event timeline shows events and filters by actor (992ms)
+  ✓  4 e2e/control-plane.spec.ts:49:5 › jobs page shows the per-type summary (731ms)
+  ✓  5 e2e/control-plane.spec.ts:55:5 › an operator can pause and resume a request (1.6s)
+
+  5 passed (6.4s)
