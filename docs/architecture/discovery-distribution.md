@@ -239,3 +239,12 @@ switch; reconfirmation SLA with vendors; monitoring of the funnel above.
 The code paths 4C needs already exist (consent, caps, atomic claim, send-time
 re-check, attribution); 4C should add the gate mode and the pilot audience, not
 new ranking or new consent rules.
+
+## 13. Phase 4C hardening note
+
+Discovery-origin requests ("Ask about it") are ordinary BuyerRequests: their
+vendor request (to the listing's vendor) now has a deadline, and if that
+vendor stays quiet the request is recovered like any other (matched
+alternatives / ask to broaden / honest status to the buyer). Discovery batch
+sending is unchanged (operator-triggered; deliveries are not auto-retried).
+The pilot remains paused.

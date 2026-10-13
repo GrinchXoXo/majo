@@ -213,3 +213,13 @@ DRAFT ──publish──▶ ACTIVE ──────────────�
   - expired-listing reincarnation or dedupe across lifecycles;
   - a dynamic policy editor or policy tables.
 - **Geography is not yet a matching filter.**
+
+## 12. Use by request recovery (Phase 4C hardening)
+
+When every vendor contacted for a buyer request goes quiet, the autonomous
+runtime runs matching again (minus the vendors already asked) through the
+same routing policy, so listing evidence is filtered by this canonical
+eligibility policy (lifecycle, freshness, expansion stage). A vendor outside
+the buyer's area is contacted without asking only if the listing's current
+expansion stage already reaches the buyer (`EvaluateForViewer`); otherwise the
+buyer is asked first. Nothing in this document's policies changed.

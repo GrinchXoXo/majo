@@ -213,6 +213,56 @@ reported as `{n, of, pct}` — raw counts always travel with the percentage.
 A transaction where an operator routed the vendor is **never** counted as
 autonomous, whatever happened afterwards.
 
+> **Correction (Phase 4C hardening).** "Clarification resolution" above counts
+> clarification *rows* ANSWERED / rows not CANCELLED (OPEN, SUPERSEDED, EXPIRED
+> and EXHAUSTED are in the denominator): it measures **questions answered**, not
+> ambiguity resolved, and re-asks are folded into one row. "Automatic
+> recovery" counts retries scheduled — only transient failures; a policy
+> refusal is never retried and never in that denominator. (The correction
+> report's sentence "the other one was a policy rejection" was wrong: it was
+> the transient failure whose retries ran out.) Both are kept for
+> compatibility; use the layered metrics below.
+
+### Layered autonomy metrics (Phase 4C hardening)
+
+Same endpoint, fields `workflow`, `questions`, `recovery`, `delivery`,
+`definitions` (the definitions are served with the numbers). One level per
+group; levels are never mixed. Everything is counted from persisted rows
+(`buyer_requests`, `transactions`, `clarifications`, `workflow_decisions`,
+`workflow_exceptions`, `workflow_holds`, `pending_notices`, `events`).
+
+| Metric | Numerator | Denominator | Level |
+|---|---|---|---|
+| workflow.started | — | buyer requests created since `since` (small talk creates none) | request |
+| workflow.completed | requests with a transaction (UNPAID) | started | request |
+| workflow.completed_autonomously | completed, no operator step, no system exception, no operator selection | started | request |
+| workflow.requiring_clarification | requests with ≥ 1 delivered question (buyer or vendor) | started | request |
+| workflow.escalated_to_operator | requests with ≥ 1 operator exception | started | request |
+| workflow.operator_performed_step | an operator confirmed / routed / asked / re-associated | started | request |
+| workflow.held | ever paused by an operator | started | request |
+| workflow.ended_without_offer | told "no match" / "no reply yet" (no transaction) | started | request |
+| workflow.abandoned | waiting on the buyer, last question EXPIRED / EXHAUSTED | started | request |
+| workflow.pending | started − completed − ended − abandoned | started | request |
+| questions.delivered | — | clarification rows except CANCELLED and undelivered | question |
+| questions.messages_sent | question messages incl. re-asks (sum of attempts) | — | message |
+| questions.answered | ANSWERED | delivered | question |
+| questions.resolved | ANSWERED and the same request+field (or vendor request+kind) not asked again | delivered | question |
+| questions.re_asked | attempts > 1, or asked again later | delivered | question |
+| questions.expired_or_gave_up | EXPIRED + EXHAUSTED | delivered | question |
+| recovery.delivery_retries | recovered | retries scheduled (transient only) | delivery attempt |
+| recovery.delivery_retries_failed | retries exhausted | — | delivery attempt |
+| recovery.vendor_requests_expired | deadline passed / never sent | — | vendor request |
+| recovery.recovery_decisions | `RECOVER_REQUEST` outcome:reason counts | — | request decision |
+| recovery.reroute_led_to_offer | re-routed requests that later got an offer | re-routed requests | request |
+| recovery.duplicate_actions_prevented | duplicate recovery / duplicate notice decisions | — | decision |
+| delivery.policy_blocked | sends refused by a messaging policy | — | message |
+| delivery.notices_* | queued / delivered late / pending / cancelled | — | message |
+| delivery.provider_failures_reported_async | classified webhook failures | — | message |
+| delivery.system_exceptions / safety_exceptions | exceptions raised | — | exception |
+
+Test runs against the fake Graph API produce **synthetic** numbers; label them
+as such wherever they are quoted.
+
 ## Controlled discovery pilot — locked metric definitions (Phase 4C)
 
 Two funnels, never one denominator. Someone can opt in and receive zero
