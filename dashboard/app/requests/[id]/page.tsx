@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import VendorResponseCard from "@/components/VendorResponseCard";
+import OperatorToken from "@/components/OperatorToken";
+import AutonomyPanel from "./AutonomyPanel";
 import {
   getRequest,
   getRequestEvents,
@@ -26,7 +28,9 @@ import {
 
 // Per PRD 1 §26-27: the operator needs to see the original message, the AI
 // extraction, the current (possibly corrected) fields, confidence, and
-// event history — and be able to edit fields and confirm.
+// event history. Phase 4C correction: Majo advances requests on its own;
+// every action on this page is a control-plane OVERRIDE, shown as such, next
+// to Majo's own decisions, questions and any exception.
 
 type EditableFields = {
   category: string;
@@ -267,8 +271,8 @@ export default function RequestDetailPage() {
             borderRadius: 12,
             fontSize: "0.85em",
             fontWeight: 600,
-            background: request.status === "CONFIRMED" ? "#dcfce7" : "#fef3c7",
-            color: request.status === "CONFIRMED" ? "#15803d" : "#b45309",
+            background: request.status === "CONFIRMED" ? "#dcfce7" : request.status === "AWAITING_BUYER" ? "#e0e7ff" : "#fef3c7",
+            color: request.status === "CONFIRMED" ? "#15803d" : request.status === "AWAITING_BUYER" ? "#3730a3" : "#b45309",
           }}
         >
           {request.status}
@@ -277,6 +281,8 @@ export default function RequestDetailPage() {
           confidence: {(request.confidence * 100).toFixed(0)}% · completeness: {request.completeness}
         </span>
       </div>
+
+      <AutonomyPanel requestId={id} refreshKey={events.length} />
 
       <section style={{ marginBottom: 20, padding: 12, background: "#f9fafb", borderRadius: 6 }}>
         <strong style={{ fontSize: "0.85em", color: "#666" }}>ORIGINAL MESSAGE</strong>
@@ -340,21 +346,27 @@ export default function RequestDetailPage() {
         </div>
       </section>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <button onClick={handleSave} disabled={saving} style={buttonStyle("#2563eb")}>
-          Save Corrections
-        </button>
-        <button
-          onClick={handleConfirm}
-          disabled={saving || request.status === "CONFIRMED"}
-          style={buttonStyle("#15803d")}
-        >
-          Confirm Request
-        </button>
-        <button onClick={handleClarify} disabled={saving} style={buttonStyle("#b45309")}>
-          Ask Buyer for Clarification
-        </button>
-      </div>
+      <section style={{ border: "1px dashed #b45309", borderRadius: 8, padding: 12, marginBottom: 20 }}>
+        <strong style={{ fontSize: "0.85em", color: "#b45309" }}>OPERATOR OVERRIDES (control plane — not needed for a healthy request)</strong>
+        <div style={{ margin: "8px 0" }}>
+          <OperatorToken />
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleSave} disabled={saving} style={buttonStyle("#2563eb")}>
+            Override: Save Corrections
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={saving || request.status === "CONFIRMED"}
+            style={buttonStyle("#15803d")}
+          >
+            Override: Confirm Request
+          </button>
+          <button onClick={handleClarify} disabled={saving} style={buttonStyle("#b45309")}>
+            Override: Ask Buyer a Question
+          </button>
+        </div>
+      </section>
 
       {message && <p style={{ color: message.includes("failed") || message.includes("Failed") ? "crimson" : "#15803d" }}>{message}</p>}
 
@@ -409,7 +421,7 @@ export default function RequestDetailPage() {
               </tbody>
             </table>
             <button onClick={handleRoute} disabled={saving || selectedVendors.size === 0} style={{ marginTop: 10, padding: "8px 16px", background: "#2563eb", color: "white", border: "none", borderRadius: 6, cursor: "pointer" }}>
-              Route to {selectedVendors.size} Selected Vendor(s)
+              Override: Route to {selectedVendors.size} Selected Vendor(s)
             </button>
           </>
         )}
@@ -459,10 +471,10 @@ export default function RequestDetailPage() {
           <button
             onClick={handleDeliverOffers}
             disabled={loadingOffers || request.status !== "CONFIRMED" || !!selection?.selection}
-            title="Offers are delivered automatically when vendors reply. Use this to retry a failed delivery; already-delivered offers are never re-sent."
+            title="Offers are delivered automatically when vendors reply, and failed deliveries are retried automatically. Use this only after an exception; already-delivered offers are never re-sent."
             style={{ padding: "4px 12px", fontSize: "0.85em", cursor: "pointer" }}
           >
-            {loadingOffers ? "Delivering..." : "Deliver pending offers"}
+            {loadingOffers ? "Delivering..." : "Override: Deliver pending offers"}
           </button>
         </div>
 
@@ -504,7 +516,7 @@ export default function RequestDetailPage() {
                   title="Operator override — normally the buyer selects by replying with the option number on WhatsApp."
                   style={{ padding: "4px 12px", background: selectable ? "#15803d" : "#9ca3af", color: "white", border: "none", borderRadius: 6, cursor: selectable ? "pointer" : "default", fontSize: "0.85em" }}
                 >
-                  Select for buyer
+                  Override: Select for buyer
                 </button>
               </div>
               <div style={{ fontSize: "0.8em", color: "#666", marginTop: 4 }}>{o.ranking_reasons.join(" · ")}</div>

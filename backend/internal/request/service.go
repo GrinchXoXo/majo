@@ -36,6 +36,26 @@ type Service struct {
 	audits     audit.Writer
 	messaging  MessagingProvider
 	logger     *slog.Logger
+	listener   Listener
+}
+
+// Listener is told when a request is ready for an autonomous decision
+// (fields known: after extraction, or created with structured fields, or
+// after a clarification answer) and when it is confirmed (by anyone). The
+// autonomous workflow implements it; nil = no autonomous runtime wired.
+// Notifications must be cheap and must not fail the caller.
+type Listener interface {
+	RequestReady(ctx context.Context, req *BuyerRequest)
+	RequestConfirmed(ctx context.Context, req *BuyerRequest, actor event.ActorType)
+}
+
+// SetListener wires the autonomous workflow.
+func (s *Service) SetListener(l Listener) { s.listener = l }
+
+func (s *Service) notifyReady(ctx context.Context, req *BuyerRequest) {
+	if s.listener != nil && req != nil {
+		s.listener.RequestReady(ctx, req)
+	}
 }
 
 func NewService(
@@ -77,6 +97,8 @@ type NewRequest struct {
 	ExtractedData map[string]any
 	// EventExtra is merged into the REQUEST_CREATED payload (attribution).
 	EventExtra map[string]any
+	// Confidence of structured fields (default 1 for curated listings).
+	Confidence float64
 }
 
 // Create creates a BuyerRequest for any origin. Message-origin demand
@@ -95,15 +117,20 @@ func (s *Service) Create(ctx context.Context, n NewRequest) (req *BuyerRequest, 
 		Origin: n.Origin, ListingID: n.ListingID, DiscoveryDeliveryID: n.DiscoveryDeliveryID,
 		Status: StatusExtracting, RawMessage: n.RawText, Currency: "NGN", ExtractedData: n.ExtractedData,
 	}
-	if n.Origin != OriginMessage {
-		if n.ListingID == nil || n.Fields == nil {
-			return nil, false, fmt.Errorf("listing-origin request needs a listing and its fields")
-		}
+	if n.Origin != OriginMessage && (n.ListingID == nil || n.Fields == nil) {
+		return nil, false, fmt.Errorf("listing-origin request needs a listing and its fields")
+	}
+	// Structured fields (a curated listing, or a request Majo derived from
+	// conversation context such as "something cheaper") skip extraction.
+	if n.Fields != nil {
 		f := n.Fields
 		r.Category, r.Product, r.Variant, r.Condition = f.Category, f.Product, f.Variant, f.Condition
 		r.BudgetMin, r.BudgetMax, r.Location, r.Quantity = f.BudgetMin, f.BudgetMax, f.Location, f.Quantity
 		r.Status = StatusNeedsReview
 		r.Confidence = 1
+		if n.Confidence > 0 {
+			r.Confidence = n.Confidence
+		}
 		r.Completeness = r.CalculateCompleteness()
 	}
 
@@ -134,6 +161,9 @@ func (s *Service) Create(ctx context.Context, n NewRequest) (req *BuyerRequest, 
 	}); err != nil {
 		s.logger.Error("writing REQUEST_CREATED event", "error", err)
 	}
+	if saved.Status == StatusNeedsReview {
+		s.notifyReady(ctx, saved)
+	}
 	return saved, true, nil
 }
 
@@ -149,7 +179,7 @@ func (s *Service) CreateFromMessage(ctx context.Context, conversationID, buyerID
 }
 
 // ConfirmAs is Confirm with an explicit actor (the system auto-confirms
-// listing-origin demand when DISCOVERY_ENQUIRY_CONFIRMATION=auto, Lock §O-1).
+// clear requests, actor SYSTEM — Phase 4C correction, AUTO_CONFIRM_CLEAR_REQUESTS).
 func (s *Service) ConfirmAs(ctx context.Context, requestID uuid.UUID, actor event.ActorType, reason string) (*BuyerRequest, error) {
 	return s.confirm(ctx, requestID, nil, actor, reason)
 }
@@ -190,6 +220,9 @@ func (s *Service) RunExtraction(ctx context.Context, requestID uuid.UUID) {
 			Payload:    map[string]any{"success": false, "error": aiErr.Error()},
 		}); err != nil {
 			s.logger.Error("writing failed REQUEST_EXTRACTED event", "error", err)
+		}
+		if failed, err := s.requests.FindByID(ctx, requestID); err == nil {
+			s.notifyReady(ctx, failed)
 		}
 		return
 	}
@@ -234,6 +267,7 @@ func (s *Service) RunExtraction(ctx context.Context, requestID uuid.UUID) {
 		"completeness", updated.Completeness,
 		"confidence", result.Confidence,
 	)
+	s.notifyReady(ctx, updated)
 }
 
 // Correct applies an operator's field-level correction, recording a
@@ -313,8 +347,47 @@ func (s *Service) confirm(ctx context.Context, requestID uuid.UUID, operatorID *
 	}); err != nil {
 		s.logger.Error("writing REQUEST_CONFIRMED event", "error", err)
 	}
-
+	if s.listener != nil {
+		s.listener.RequestConfirmed(ctx, confirmed, actor)
+	}
 	return confirmed, nil
+}
+
+// ApplyClarification merges a buyer's answer into the open request (the
+// answer continues the same request; it never becomes a new one). Only the
+// fields present in patch change; extracted_data is never touched. The
+// request returns to NEEDS_REVIEW (pending the next autonomous decision)
+// unless it is already CONFIRMED. A REQUEST_CLARIFIED event records the
+// before/after values with the buyer as the actor.
+func (s *Service) ApplyClarification(ctx context.Context, requestID uuid.UUID, patch Fields, extra map[string]any) (*BuyerRequest, error) {
+	before, err := s.requests.FindByID(ctx, requestID)
+	if err != nil {
+		return nil, fmt.Errorf("loading request before clarification: %w", err)
+	}
+	if before == nil {
+		return nil, fmt.Errorf("buyer request %s not found", requestID)
+	}
+	previous, next := diffFields(before, patch)
+	updated, err := s.requests.UpdateFields(ctx, requestID, patch)
+	if err != nil {
+		return nil, fmt.Errorf("applying clarification: %w", err)
+	}
+	buyerID := before.BuyerID
+	if err := s.events.Write(ctx, &event.Event{
+		EventType: event.RequestClarified, EntityType: "buyer_request", EntityID: &requestID,
+		ActorType: event.ActorBuyer, ActorID: &buyerID,
+		Payload: event.Merge(updated.FunnelDims(), map[string]any{"previous": previous, "new": next}, extra),
+	}); err != nil {
+		s.logger.Error("writing REQUEST_CLARIFIED event", "error", err)
+	}
+	s.notifyReady(ctx, updated)
+	return updated, nil
+}
+
+// AwaitBuyer marks a request as waiting for the buyer's answer to a
+// clarification (NEEDS_REVIEW -> AWAITING_BUYER). Not an operator state.
+func (s *Service) AwaitBuyer(ctx context.Context, requestID uuid.UUID) (*BuyerRequest, error) {
+	return s.requests.SetStatus(ctx, requestID, []Status{StatusNeedsReview, StatusAwaitingBuyer}, StatusAwaitingBuyer)
 }
 
 // Clarify sends a simple clarifying question back to the buyer when the
@@ -322,6 +395,13 @@ func (s *Service) confirm(ctx context.Context, requestID uuid.UUID, operatorID *
 // simple — no multi-turn AI orchestration, just a direct question chosen
 // based on which important field is missing.
 func (s *Service) Clarify(ctx context.Context, requestID uuid.UUID, question string) error {
+	return s.ClarifyAs(ctx, requestID, question, event.ActorOperator, nil)
+}
+
+// ClarifyAs sends a clarification question as actor (SYSTEM when Majo asks
+// on its own, OPERATOR for a dashboard question). extra is merged into the
+// outbound purpose and the event (e.g. the clarification id).
+func (s *Service) ClarifyAs(ctx context.Context, requestID uuid.UUID, question string, actor event.ActorType, extra map[string]any) error {
 	req, err := s.requests.FindByID(ctx, requestID)
 	if err != nil {
 		return fmt.Errorf("loading request for clarification: %w", err)
@@ -337,7 +417,7 @@ func (s *Service) Clarify(ctx context.Context, requestID uuid.UUID, question str
 	}
 
 	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
-		Kind: "clarification", EntityType: "buyer_request", EntityID: &requestID,
+		Kind: "clarification", EntityType: "buyer_request", EntityID: &requestID, Extra: extra,
 	})
 	if err := s.messaging.SendText(sendCtx, conv.ExternalID, question); err != nil {
 		return fmt.Errorf("sending clarification message: %w", err)
@@ -347,8 +427,8 @@ func (s *Service) Clarify(ctx context.Context, requestID uuid.UUID, question str
 		EventType:  event.ClarificationSent,
 		EntityType: "buyer_request",
 		EntityID:   &requestID,
-		ActorType:  event.ActorOperator,
-		Payload:    map[string]any{"question": question},
+		ActorType:  actor,
+		Payload:    event.Merge(map[string]any{"question": question}, extra),
 	}); err != nil {
 		s.logger.Error("writing CLARIFICATION_SENT event", "error", err)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/structid"
 	"github.com/middleman/backend/internal/transaction"
+	"github.com/middleman/backend/internal/workflow"
 )
 
 // JobEnqueuer runs work in the background (internal/jobs.Runner).
@@ -71,7 +72,18 @@ type BuyerInbound struct {
 	jobs      JobEnqueuer
 	logger    *slog.Logger
 	discovery DiscoveryInteractions // Phase 4B; nil = not wired
+	auto      Autonomy              // Phase 4C correction; nil = not wired
 }
+
+// Autonomy is the context-resolution step of the autonomous runtime
+// (workflow.Engine): answers to Majo's questions and references to things
+// already shown are taken before the ordinary path.
+type Autonomy interface {
+	HandleBuyerText(ctx context.Context, m workflow.BuyerText) bool
+}
+
+// SetAutonomy wires the autonomous runtime.
+func (b *BuyerInbound) SetAutonomy(a Autonomy) { b.auto = a }
 
 // SetDiscovery wires structured discovery interactions (Phase 4B).
 func (b *BuyerInbound) SetDiscovery(d DiscoveryInteractions) { b.discovery = d }
@@ -127,6 +139,33 @@ func (b *BuyerInbound) Handle(ctx context.Context, m InboundBuyerMessage) {
 		return
 	}
 
+	if b.auto != nil {
+		bt := workflow.BuyerText{ConversationID: m.ConversationID, BuyerID: m.BuyerID, MessageID: m.MessageID, ReplyTo: m.ReplyTo, Text: m.Text}
+		if b.auto.HandleBuyerText(ctx, bt) {
+			return
+		}
+	}
+	b.handleDefault(ctx, m)
+}
+
+func fromBuyerText(t workflow.BuyerText) InboundBuyerMessage {
+	return InboundBuyerMessage{ConversationID: t.ConversationID, BuyerID: t.BuyerID, MessageID: t.MessageID, ReplyTo: t.ReplyTo, Type: "text", Text: t.Text}
+}
+
+// HandleDefault implements workflow.BuyerPaths: the ordinary text path for a
+// message the autonomous runtime handed back.
+func (b *BuyerInbound) HandleDefault(ctx context.Context, t workflow.BuyerText) {
+	b.handleDefault(ctx, fromBuyerText(t))
+}
+
+// SelectOffer implements workflow.BuyerPaths: the buyer's explicit choice.
+func (b *BuyerInbound) SelectOffer(ctx context.Context, t workflow.BuyerText, buyerRequestID, offerID uuid.UUID, ordinal int) {
+	b.handleSelection(ctx, fromBuyerText(t), Resolution{Kind: ResolveSelectOffer, BuyerRequestID: buyerRequestID, OfferID: offerID, Ordinal: ordinal})
+}
+
+// handleDefault is the ordinary text path: an offer selection by number,
+// an unresolvable selection-shaped reply, or a new request.
+func (b *BuyerInbound) handleDefault(ctx context.Context, m InboundBuyerMessage) {
 	res, err := b.resolver.Resolve(ctx, m.ConversationID, m.Text)
 	if err != nil {
 		// Resolution failure must not lose the message: fall back to the

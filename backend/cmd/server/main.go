@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/middleman/backend/infrastructure/ai"
 	"github.com/middleman/backend/infrastructure/postgres"
 	"github.com/middleman/backend/infrastructure/storage"
@@ -35,6 +37,7 @@ import (
 	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/supply"
 	"github.com/middleman/backend/internal/transaction"
+	"github.com/middleman/backend/internal/workflow"
 )
 
 func main() {
@@ -173,6 +176,36 @@ func main() {
 	durableWorker.Register(media.JobTypeDownload, mediaIngestor.Handle, mediaIngestor.OnFailure)
 	durableWorker.RegisterFailureEvent(media.JobTypeDownload, mediaIngestor.FailureEvent)
 
+	// --- Phase 4C correction: autonomous runtime ---
+	// Majo is autonomous by default: the workflow engine confirms clear
+	// requests, asks the buyer what it needs, routes by policy, resolves
+	// vendor replies from context, asks vendors when unclear and recovers
+	// failed deliveries. Operators are the control plane (overrides and the
+	// exception queue), never a normal step.
+	autonomyRepo := postgres.NewAutonomyRepository(pool)
+	workflowRepo := postgres.NewWorkflowRepository(pool)
+	engine := workflow.New(workflow.Config{Flags: cfg.AutonomyFlags, Params: cfg.AutonomyParams, JobMaxAttempts: cfg.JobsMaxAttempts}, workflow.Deps{
+		Store: autonomyRepo, Context: workflowRepo, Requests: requestService, ReqRepo: requestRepo, Router: routingService,
+		Routes: routingRepo, Listings: listingRepo, Vendors: vendorRepo, Extractor: aiProvider, Messenger: outbound, Convs: convRepo,
+		Policy: supplyPolicy, Jobs: jobStore, Events: eventWriter, Logger: logger, Async: jobRunner.Enqueue,
+	})
+	requestService.SetListener(engine)
+	routingService.SetAutonomy(&routing.VendorAutonomy{Flags: cfg.AutonomyFlags, Params: cfg.AutonomyParams, Store: autonomyRepo,
+		Repo: routingRepo, Quoted: convRepo})
+	routingService.SetSendFailureListener(engine)
+	offerDelivery.SetFailureListener(engine)
+	engine.SetOfferDeliverer(func(ctx context.Context, id uuid.UUID) error {
+		_, err := offerDelivery.DeliverPendingOffers(ctx, id)
+		return err
+	})
+	buyerInbound.SetAutonomy(engine)
+	engine.SetBuyerPaths(buyerInbound)
+	listingService.SetDraftListener(engine)
+	engine.SetListingPublisher(listingPublisher{listingService, workflowRepo})
+	engine.Register(durableWorker)
+	logger.Info("autonomous runtime", "flags", cfg.AutonomyFlags.Map(), "route_max_vendors", cfg.AutonomyParams.RouteMaxVendors,
+		"route_min_score", cfg.AutonomyParams.RouteMinScore, "vendor_request_ttl", cfg.AutonomyParams.VendorRequestTTL.String())
+
 	// --- Phase 4A.2: vendor media + captions -> grouped SupplySignal ---
 	// routing classifies vendor content; the intake groups it (durable
 	// SUPPLY_GROUPING jobs) once media downloads are final.
@@ -196,6 +229,7 @@ func main() {
 	} else if n > 0 {
 		logger.Info("media backfill enqueued downloads", "count", n)
 	}
+	engine.Recover(ctx) // requests left mid-flow by a restart continue
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
@@ -247,9 +281,13 @@ func main() {
 	mediaPublisher := distribution.NewMediaPublisher(postgres.NewMediaAssetRepository(pool), mediaStore, whatsappProvider, cfg.DiscoveryOutboundMediaTTL)
 	distributionService := distribution.NewService(distCfg, discoveryRepo, discoveryService, outbound, mediaPublisher, requestService, eventWriter, logger)
 	buyerInbound.SetDiscovery(distributionService)
+	engine.SetEnquirer(distributionService)
+	if os.Getenv("DISCOVERY_ENQUIRY_CONFIRMATION") != "" {
+		logger.Warn("DISCOVERY_ENQUIRY_CONFIRMATION is deprecated and ignored: discovery enquiries are confirmed by the autonomous workflow (AUTO_CONFIRM_CLEAR_REQUESTS)")
+	}
 	logger.Info("discovery distribution", "mode", distCfg.Mode, "internal_recipients", len(internal), "arms", cfg.DiscoveryArms,
 		"window", window.Raw, "template_configured", distCfg.Template.Name != "", "ranking_version",
-		distCfg.Ranking.Version(supplyPolicy.Config()), "enquiry_confirmation", distCfg.EnquiryConfirmation)
+		distCfg.Ranking.Version(supplyPolicy.Config()))
 
 	webhookHandler := httpserver.NewWhatsAppWebhookHandler(
 		whatsappProvider, convRepo, convRepo, buyerRepo, vendorRepo, eventWriter, buyerInbound, routingService, jobRunner,
@@ -258,36 +296,44 @@ func main() {
 	webhookHandler.SetMediaIngestion(mediaIngestor)
 	mux.Handle("/webhooks/whatsapp", webhookHandler)
 
+	// Phase 4C correction: every operator override of the autonomous loop
+	// (correct, confirm, clarify, route, associate, deliver, select) is an
+	// authenticated control-plane action.
+	operatorAuth := httpserver.NewOperatorAuth(cfg.OperatorAPIToken)
+	if cfg.AllowUnauthenticatedOperator {
+		logger.Warn("OPERATOR_API_TOKEN is not set: operator overrides and listing curation are UNAUTHENTICATED. Development only.")
+	}
 	requestHandlers := httpserver.NewRequestHandlers(requestRepo, requestService, eventWriter)
+	if cfg.AutonomyFlags.AutoClarifyRequests {
+		requestHandlers.SetClarifier(engine) // operator questions continue the request
+	}
 	mux.HandleFunc("GET /api/requests", requestHandlers.List)
 	mux.HandleFunc("GET /api/requests/{id}", requestHandlers.Get)
-	mux.HandleFunc("PATCH /api/requests/{id}", requestHandlers.Patch)
-	mux.HandleFunc("POST /api/requests/{id}/confirm", requestHandlers.Confirm)
-	mux.HandleFunc("POST /api/requests/{id}/clarify", requestHandlers.Clarify)
+	mux.HandleFunc("PATCH /api/requests/{id}", operatorAuth.Require(requestHandlers.Patch))
+	mux.HandleFunc("POST /api/requests/{id}/confirm", operatorAuth.Require(requestHandlers.Confirm))
+	mux.HandleFunc("POST /api/requests/{id}/clarify", operatorAuth.Require(requestHandlers.Clarify))
 	mux.HandleFunc("GET /api/requests/{id}/events", requestHandlers.Events)
 
 	vendorHandlers := httpserver.NewVendorHandlers(vendorRepo, supplyRepo, eventWriter)
-	mux.HandleFunc("POST /api/vendors", vendorHandlers.Create)
+	// Phase 4C correction: vendors receive buyers' requests automatically, so
+	// creating or activating one is an authenticated control-plane action.
+	mux.HandleFunc("POST /api/vendors", operatorAuth.Require(vendorHandlers.Create))
 	mux.HandleFunc("GET /api/vendors", vendorHandlers.List)
 	mux.HandleFunc("GET /api/vendors/{id}", vendorHandlers.Get)
-	mux.HandleFunc("PATCH /api/vendors/{id}", vendorHandlers.Patch)
+	mux.HandleFunc("PATCH /api/vendors/{id}", operatorAuth.Require(vendorHandlers.Patch))
 	mux.HandleFunc("GET /api/vendors/{id}/supply", vendorHandlers.Supply)
 
 	routingHandlers := httpserver.NewRoutingHandlers(routingRepo, routingService)
 	mux.HandleFunc("GET /api/requests/{id}/matches", routingHandlers.Matches)
-	mux.HandleFunc("POST /api/requests/{id}/route", routingHandlers.Route)
+	mux.HandleFunc("POST /api/requests/{id}/route", operatorAuth.Require(routingHandlers.Route))
 	mux.HandleFunc("GET /api/requests/{id}/vendor-requests", routingHandlers.VendorRequestsForBuyerRequest)
 	mux.HandleFunc("GET /api/vendor-responses/unmatched", routingHandlers.Unmatched)
 	mux.HandleFunc("GET /api/vendor-responses/{id}", routingHandlers.GetVendorResponse)
-	mux.HandleFunc("PATCH /api/vendor-responses/{id}", routingHandlers.PatchVendorResponse)
-	mux.HandleFunc("POST /api/vendor-responses/{id}/associate", routingHandlers.AssociateResponse)
+	mux.HandleFunc("PATCH /api/vendor-responses/{id}", operatorAuth.Require(routingHandlers.PatchVendorResponse))
+	mux.HandleFunc("POST /api/vendor-responses/{id}/associate", operatorAuth.Require(routingHandlers.AssociateResponse))
 	mux.HandleFunc("GET /api/vendors/{id}/vendor-requests", routingHandlers.VendorRequestsForVendor)
 
 	// Phase 4A Step 4: listing writes and media previews are operator-only.
-	operatorAuth := httpserver.NewOperatorAuth(cfg.OperatorAPIToken)
-	if cfg.AllowUnauthenticatedOperator {
-		logger.Warn("OPERATOR_API_TOKEN is not set: listing curation (edit/publish/reject) is UNAUTHENTICATED. Development only.")
-	}
 	supplyListingHandlers := httpserver.NewSupplyListingHandlers(listingRepo, listingService, listingRepo, mediaStore, operatorAuth, logger)
 	mux.HandleFunc("POST /api/supply-listings", operatorAuth.Require(supplyListingHandlers.CreateFromSignal))
 	// Search can list drafts and rejected listings: operator-only.
@@ -306,8 +352,8 @@ func main() {
 	offerHandlers := httpserver.NewOfferHandlers(offerRepo, requestRepo, txService, txRepo, offerDelivery)
 	mux.HandleFunc("GET /api/requests/{id}/offers", offerHandlers.List) // read-only since Phase 3.1
 	mux.HandleFunc("GET /api/requests/{id}/offers/preview", offerHandlers.BuyerMessagePreview)
-	mux.HandleFunc("POST /api/requests/{id}/offers/deliver", offerHandlers.Deliver)
-	mux.HandleFunc("POST /api/requests/{id}/select", offerHandlers.Select)
+	mux.HandleFunc("POST /api/requests/{id}/offers/deliver", operatorAuth.Require(offerHandlers.Deliver))
+	mux.HandleFunc("POST /api/requests/{id}/select", operatorAuth.Require(offerHandlers.Select))
 	mux.HandleFunc("GET /api/requests/{id}/selection", offerHandlers.Selection)
 
 	// §23A: read-only core funnel, counted from system-of-record tables.
@@ -329,6 +375,14 @@ func main() {
 	mux.HandleFunc("POST /api/discovery/batches/{id}/send", operatorAuth.Require(discoveryHandlers.Send))
 	mux.HandleFunc("GET /api/discovery/deliveries/{id}", operatorAuth.Require(discoveryHandlers.Delivery))
 	mux.HandleFunc("GET /api/discovery/funnel", operatorAuth.Require(discoveryHandlers.Funnel))
+
+	autonomyHandlers := httpserver.NewAutonomyHandlers(cfg.AutonomyFlags, cfg.AutonomyParams, autonomyRepo, autonomyRepo, eventWriter, logger)
+	autonomyHandlers.SetReadvancer(engine)
+	mux.HandleFunc("GET /api/autonomy/settings", operatorAuth.Require(autonomyHandlers.Settings))
+	mux.HandleFunc("GET /api/autonomy/metrics", operatorAuth.Require(autonomyHandlers.Metrics))
+	mux.HandleFunc("GET /api/autonomy/exceptions", operatorAuth.Require(autonomyHandlers.Exceptions))
+	mux.HandleFunc("POST /api/autonomy/exceptions/{id}/resolve", operatorAuth.Require(autonomyHandlers.ResolveException))
+	mux.HandleFunc("GET /api/requests/{id}/autonomy", operatorAuth.Require(autonomyHandlers.Request))
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)
 	mux.HandleFunc("GET /api/transactions/{id}", transactionHandlers.Get)
@@ -372,4 +426,15 @@ func main() {
 	}
 
 	logger.Info("server shut down cleanly")
+}
+
+// listingPublisher adapts the curation service and the trust query for
+// trusted-vendor auto-publishing.
+type listingPublisher struct {
+	*supply.ListingService
+	trust *postgres.WorkflowRepository
+}
+
+func (p listingPublisher) VendorTrust(ctx context.Context, vendorID uuid.UUID) (workflow.VendorTrust, error) {
+	return p.trust.VendorTrust(ctx, vendorID)
 }

@@ -74,3 +74,17 @@ precedence over offer ordinals and free text. Outside the 24-hour window only an
 approved template may be sent; with no template configured, discovery fails
 closed. **Template delivery has not been tested against real Meta.** Staff-only
 (`DISCOVERY_MODE=INTERNAL`): see `docs/architecture/discovery-distribution.md`.
+
+## Reply context (Phase 4C correction)
+When someone uses WhatsApp's **Reply** on one of Majo's messages, Meta sends
+`messages[].context.id` (the wamid of the quoted message). The webhook stores
+it on the inbound message (`metadata.quoted_message_id`) and the vendor
+runtime uses it as a structured association signal: a vendor who replies to
+"Majo Request #MM-123456" is answering that request, even with several open.
+Outbound wamids are already recorded with their business entity by the
+recording sender, so the lookup needs no extra state.
+
+Send failures are classified from Meta's error: 131047/131026/131050 (window
+closed, undeliverable, user stopped) are policy rejections — never retried,
+raised to the operator; 429/5xx/network errors are retried on the durable job
+table with backoff; other 4xx are permanent.

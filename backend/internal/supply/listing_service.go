@@ -29,8 +29,9 @@ type ListingService struct {
 	policy *EligibilityPolicy
 
 	// Phase 4A.3 automatic DRAFT creation (optional; see SetDraftJobs).
-	jobs        jobs.Store
-	maxAttempts int
+	jobs          jobs.Store
+	maxAttempts   int
+	draftListener DraftListener
 }
 
 func NewListingService(signals Repository, listings ListingRepository, vendors VendorLookup, media SignalMediaReader,

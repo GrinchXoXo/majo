@@ -1,8 +1,9 @@
 import { listRequests, type BuyerRequestDTO } from "@/lib/api";
 
-// Per PRD 1 §25: requests appear in the dashboard, prioritizing those
-// needing review. The backend already orders NEEDS_REVIEW first (see
-// RequestRepository.List), so this page just renders what it's given.
+// Per PRD 1 §25: requests appear in the dashboard. Phase 4C correction: Majo
+// advances requests on its own; NEEDS_REVIEW only lingers when autonomy is
+// off or an exception is open (see /autonomy), and AWAITING_BUYER means Majo
+// asked the buyer a question — neither is an operator to-do list by itself.
 
 function statusBadgeColor(status: string): string {
   switch (status) {
@@ -12,6 +13,8 @@ function statusBadgeColor(status: string): string {
       return "#6b7280"; // gray
     case "CONFIRMED":
       return "#15803d"; // green
+    case "AWAITING_BUYER":
+      return "#3730a3"; // indigo: Majo asked the buyer
     default:
       return "#6b7280";
   }

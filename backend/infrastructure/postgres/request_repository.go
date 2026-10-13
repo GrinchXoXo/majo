@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/middleman/backend/internal/request"
 )
@@ -308,7 +309,22 @@ func (r *RequestRepository) UpdateFields(ctx context.Context, id uuid.UUID, fiel
 	return scanRequestRow(row)
 }
 
-// Confirm transitions NEEDS_REVIEW -> CONFIRMED. Confirming an already
+// SetStatus implements request.Repository.
+func (r *RequestRepository) SetStatus(ctx context.Context, id uuid.UUID, from []request.Status, to request.Status) (*request.BuyerRequest, error) {
+	fs := make([]string, len(from))
+	for i, f := range from {
+		fs[i] = string(f)
+	}
+	row := r.db.QueryRowContext(ctx, `UPDATE buyer_requests SET status = $2, updated_at = now()
+		WHERE id = $1 AND status = ANY($3) RETURNING `+requestColumns, id.String(), string(to), pq.Array(fs))
+	req, err := scanRequestRow(row)
+	if err == sql.ErrNoRows {
+		return nil, request.ErrInvalidTransition
+	}
+	return req, err
+}
+
+// Confirm transitions NEEDS_REVIEW (or AWAITING_BUYER) -> CONFIRMED. Confirming an already
 // CONFIRMED request is an idempotent no-op (confirmed_at is preserved).
 // Any other current status (e.g. EXTRACTING, before the AI result exists)
 // returns request.ErrInvalidTransition.
@@ -318,7 +334,7 @@ func (r *RequestRepository) Confirm(ctx context.Context, id uuid.UUID) (*request
 			status = 'CONFIRMED',
 			confirmed_at = COALESCE(confirmed_at, now()),
 			updated_at = now()
-		WHERE id = $1 AND status IN ('NEEDS_REVIEW', 'CONFIRMED')
+		WHERE id = $1 AND status IN ('NEEDS_REVIEW', 'AWAITING_BUYER', 'CONFIRMED')
 		RETURNING `+requestColumns,
 		id.String(),
 	)

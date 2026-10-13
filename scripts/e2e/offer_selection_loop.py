@@ -52,9 +52,17 @@ def ok(cond, label, detail=""):
         sys.exit(1)
 
 
+def _hdrs():
+    # Phase 4C correction: operator overrides are authenticated control-plane calls.
+    h = {"Content-Type": "application/json"}
+    if os.environ.get("OPERATOR_TOKEN"):
+        h["Authorization"] = "Bearer " + os.environ["OPERATOR_TOKEN"]
+    return h
+
+
 def api(method, path, body=None, expect=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(BASE + path, data=data, method=method, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(BASE + path, data=data, method=method, headers=_hdrs())
     try:
         with urllib.request.urlopen(req) as r:
             code, raw = r.status, r.read()

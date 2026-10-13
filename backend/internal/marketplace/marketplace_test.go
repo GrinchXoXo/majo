@@ -985,3 +985,7 @@ func TestFunnel_UnknownDimensionsAreOmittedNotGuessed(t *testing.T) {
 func (r reqRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
 	return nil, nil
 }
+
+func (r reqRepo) SetStatus(ctx context.Context, id uuid.UUID, from []request.Status, to request.Status) (*request.BuyerRequest, error) {
+	return nil, nil
+}

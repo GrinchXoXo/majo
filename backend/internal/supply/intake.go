@@ -61,6 +61,10 @@ type Inbound struct {
 	MessageID      uuid.UUID
 	ConversationID uuid.UUID
 	At             time.Time // vendor send time (Meta timestamp)
+	// QuotedProviderMessageID is the provider id of the message the vendor
+	// replied to (WhatsApp "context.id"), when they used Reply. Phase 4C
+	// correction: a structured association signal.
+	QuotedProviderMessageID string
 }
 
 // Source is one piece of a signal's evidence, in order.

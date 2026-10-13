@@ -69,7 +69,7 @@ func (h *DiscoveryHandlers) Settings(w http.ResponseWriter, r *http.Request) {
 		"exposure_window": c.ExposureWindow.String(), "listings_per_delivery": c.ListingsPerDelivery,
 		"delivery_window": c.Window.Raw, "delivery_window_open": c.Window.Allows(time.Now()),
 		"interaction_ttl": c.InteractionTTL.String(), "template_configured": c.Template.Name != "",
-		"consent_wording": c.ConsentWording, "enquiry_confirmation": c.EnquiryConfirmation,
+		"consent_wording": c.ConsentWording, "enquiry_confirmation": "autonomous (AUTO_CONFIRM_CLEAR_REQUESTS)",
 		"ranking_version": c.Ranking.Version(pc), "weights": c.Ranking.Weights, "exclude_stale": c.Ranking.ExcludeStale,
 		"policy": map[string]any{
 			"max_lifecycle_days": int(pc.MaxLifecycle / (24 * time.Hour)), "freshness_window": pc.FreshnessWindow.String(),

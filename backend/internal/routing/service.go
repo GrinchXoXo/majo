@@ -67,7 +67,22 @@ type Service struct {
 	// re-confirmation as freshness evidence. nil = not wired.
 	listings    ListingLookup
 	reconfirmer ListingReconfirmer
+
+	// Phase 4C correction: autonomous vendor-side runtime (nil = legacy
+	// behaviour) and the send-failure hook used for automatic retry.
+	auto         *VendorAutonomy
+	sendFailures SendFailureListener
 }
+
+// SendFailureListener is told when a VendorRequest message is rejected by
+// the channel (the autonomous runtime schedules a retry or raises an
+// exception). Must not block.
+type SendFailureListener interface {
+	VendorRequestSendFailed(ctx context.Context, vr *VendorRequest, err error)
+}
+
+// SetSendFailureListener wires automatic delivery recovery.
+func (s *Service) SetSendFailureListener(l SendFailureListener) { s.sendFailures = l }
 
 // ListingLookup reads a listing (supply.ListingRepository implements it).
 type ListingLookup interface {
@@ -256,10 +271,18 @@ func (s *Service) SuggestVendors(ctx context.Context, buyerRequestID uuid.UUID) 
 	return candidates, req, nil
 }
 
-// RouteToVendors is the operator-approval step (PRD 2 §29-33): creates a
-// VendorRequest per approved vendor and sends the WhatsApp message. Never
-// called automatically — matching only ever suggests.
+// RouteToVendors is the operator override of routing: the operator chooses
+// the vendors (control plane). See RouteAs.
 func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest, vendorIDs []uuid.UUID, scores map[uuid.UUID]int, breakdowns map[uuid.UUID]map[string]any) ([]*VendorRequest, error) {
+	return s.RouteAs(ctx, req, vendorIDs, scores, breakdowns, event.ActorOperator, "operator_override")
+}
+
+// RouteAs creates a VendorRequest per vendor and sends the WhatsApp message.
+// Automatically routed when deterministic eligibility and routing policy
+// permit (actor SYSTEM, from the autonomous workflow); operator intervention
+// remains available for exceptions (actor OPERATOR). The actor is recorded on
+// VENDORS_ROUTED so manual routing is measurable.
+func (s *Service) RouteAs(ctx context.Context, req *request.BuyerRequest, vendorIDs []uuid.UUID, scores map[uuid.UUID]int, breakdowns map[uuid.UUID]map[string]any, actor event.ActorType, reason string) ([]*VendorRequest, error) {
 	// Phase 3.1 §3A-2: never route an unconfirmed request to vendors.
 	if err := req.EnsureConfirmed(); err != nil {
 		return nil, err
@@ -308,13 +331,7 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 		}
 		ref := vr.PublicReference
 
-		message := buildVendorRequestMessage(ref, req)
-		extra := map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vendorID.String(), "reference": ref}
-		if listing != nil {
-			message = buildListingReconfirmationMessage(ref, listing)
-			extra["supply_listing_id"] = listing.ID.String()
-			extra["listing_reference"] = listing.PublicReference
-		}
+		message, extra := vendorRequestMessage(vr, req, listing)
 		vrID := vr.ID
 		sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
 			Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID, Extra: extra,
@@ -325,6 +342,9 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 			// state (SEND_FAILED), never an "awaiting reply" request.
 			if mErr := s.routing.MarkSendFailed(ctx, vr.ID, err.Error()); mErr != nil {
 				s.logger.Error("marking vendor request send-failed", "error", mErr)
+			}
+			if s.sendFailures != nil {
+				s.sendFailures.VendorRequestSendFailed(ctx, vr, err)
 			}
 			vr.Status = VendorRequestSendFailed
 			errStr := err.Error()
@@ -356,11 +376,11 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 			EventType:  event.VendorsRouted,
 			EntityType: "vendor_request",
 			EntityID:   &vr.ID,
-			ActorType:  event.ActorOperator,
+			ActorType:  actor,
 			Payload: event.Merge(req.FunnelDims(), map[string]any{
 				"vendor_request_id": vr.ID.String(), "vendor_id": vendorID.String(), "reference": ref,
 				"match_score": scorePtr, "channel": "whatsapp", "outcome": outcome,
-				"listing_reconfirmation": listing != nil,
+				"listing_reconfirmation": listing != nil, "routing": reason,
 			}),
 		}); err != nil {
 			s.logger.Error("writing VENDORS_ROUTED event", "error", err)
@@ -373,8 +393,8 @@ func (s *Service) RouteToVendors(ctx context.Context, req *request.BuyerRequest,
 		EventType:  event.VendorShortlistModified,
 		EntityType: "buyer_request",
 		EntityID:   &req.ID,
-		ActorType:  event.ActorOperator,
-		Payload:    map[string]any{"approved_vendor_count": len(created)},
+		ActorType:  actor,
+		Payload:    map[string]any{"approved_vendor_count": len(created), "routing": reason},
 	}); err != nil {
 		s.logger.Error("writing VENDOR_SHORTLIST_MODIFIED event", "error", err)
 	}
@@ -414,6 +434,10 @@ func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, ra
 // its source message. VendorRequest handling is unchanged.
 func (s *Service) ProcessVendorMessageFrom(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, rawText string) *VendorResponse {
 	_ = s.vendors.RecordMessageActivity(ctx, v.ID)
+	if s.autoOn() {
+		// Phase 4C correction: context-aware association and clarification.
+		return s.processVendorTextAutonomous(ctx, v, ref, rawText)
+	}
 
 	active, err := s.routing.ListActiveByVendor(ctx, v.ID)
 	if err != nil {
@@ -465,7 +489,9 @@ func (s *Service) ProcessVendorMessageFrom(ctx context.Context, v *vendor.Vendor
 		return resp
 	default:
 		// Priority 4: multiple active requests, no reference to
-		// disambiguate. PRD 2.1 §4 is explicit: DO NOT AUTO-ASSOCIATE.
+		// disambiguate. Legacy path (AUTO_RESOLVE_VENDOR_CONTEXT=false): never
+		// guess. With the autonomous runtime on, Majo resolves from context or
+		// asks the vendor instead (see autonomy.go).
 		s.logger.Info("vendor has multiple active requests and no reference, persisting unmatched",
 			"vendor_id", v.ID, "active_count", len(active))
 		return s.processAsVendorResponse(ctx, v, nil, rawText)
@@ -743,6 +769,13 @@ func (s *Service) processAsSupplySubmission(ctx context.Context, v *vendor.Vendo
 // preserved either way.
 func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor, vr *VendorRequest, rawText string) *VendorResponse {
 	result, err := s.aiProvider.ExtractVendorResponse(ctx, rawText)
+	return s.persistVendorResponse(ctx, v, vr, rawText, result, err, nil)
+}
+
+// persistVendorResponse records an already-classified vendor reply (vr nil =
+// unmatched). extra is merged into extracted_data and the event (e.g. how the
+// reply was associated).
+func (s *Service) persistVendorResponse(ctx context.Context, v *vendor.Vendor, vr *VendorRequest, rawText string, result *ai.VendorResponseExtractionResult, err error, extra map[string]any) *VendorResponse {
 
 	status := ResponseUnclassified
 	reviewState := ReviewNeedsReview
@@ -773,6 +806,9 @@ func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor,
 			"condition": result.Condition, "price": result.Price, "quantity": result.Quantity,
 			"location": result.Location, "notes": result.Notes,
 		}
+	}
+	for k, val := range extra {
+		extractedData[k] = val
 	}
 
 	var vendorRequestID *uuid.UUID
@@ -809,7 +845,7 @@ func (s *Service) processAsVendorResponse(ctx context.Context, v *vendor.Vendor,
 		"status": string(status), "review_state": string(reviewState), "raw_message": rawText, "matched": vr != nil,
 		"vendor_id": v.ID.String(), "vendor_response_id": resp.ID.String(), "price": price,
 		"extraction_method": string(extractionMethod), "channel": "whatsapp",
-	})
+	}, extra)
 	if vr != nil {
 		payload["vendor_request_id"] = vr.ID.String()
 		payload["buyer_request_id"] = vr.BuyerRequestID.String()
@@ -1123,6 +1159,20 @@ func (s *Service) maybeReconfirmListing(ctx context.Context, vr *VendorRequest, 
 	if _, err := s.reconfirmer.ReconfirmFromVendor(ctx, *vr.SupplyListingID, vr.VendorID, resp.ID); err != nil {
 		s.logger.Warn("listing re-confirmation not recorded", "supply_listing_id", *vr.SupplyListingID, "error", err)
 	}
+}
+
+// vendorRequestMessage is the message (and outbound purpose extras) for a
+// VendorRequest: a listing re-confirmation when the request carries the
+// vendor's own listing, otherwise the buyer's request.
+func vendorRequestMessage(vr *VendorRequest, req *request.BuyerRequest, listing *supply.Listing) (string, map[string]any) {
+	ref := vr.PublicReference
+	extra := map[string]any{"buyer_request_id": req.ID.String(), "vendor_id": vr.VendorID.String(), "reference": ref}
+	if listing != nil {
+		extra["supply_listing_id"] = listing.ID.String()
+		extra["listing_reference"] = listing.PublicReference
+		return buildListingReconfirmationMessage(ref, listing), extra
+	}
+	return buildVendorRequestMessage(ref, req), extra
 }
 
 // buildListingReconfirmationMessage asks a vendor to re-confirm their own

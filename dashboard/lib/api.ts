@@ -49,7 +49,7 @@ export type BuyerRequestDTO = {
   id: string;
   conversation_id: string;
   buyer_id: string;
-  status: "EXTRACTING" | "NEEDS_REVIEW" | "CONFIRMED";
+  status: "EXTRACTING" | "NEEDS_REVIEW" | "AWAITING_BUYER" | "CONFIRMED";
   category: string | null;
   product: string | null;
   variant: string | null;
@@ -116,7 +116,7 @@ export type PatchRequestBody = Partial<{
 export async function patchRequest(id: string, body: PatchRequestBody): Promise<BuyerRequestDTO> {
   const res = await fetch(`${API_URL}/api/requests/${id}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`failed to update request: ${res.status}`);
@@ -124,7 +124,7 @@ export async function patchRequest(id: string, body: PatchRequestBody): Promise<
 }
 
 export async function confirmRequest(id: string): Promise<BuyerRequestDTO> {
-  const res = await fetch(`${API_URL}/api/requests/${id}/confirm`, { method: "POST" });
+  const res = await fetch(`${API_URL}/api/requests/${id}/confirm`, { method: "POST", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(`failed to confirm request: ${res.status}`);
   return res.json();
 }
@@ -132,7 +132,7 @@ export async function confirmRequest(id: string): Promise<BuyerRequestDTO> {
 export async function clarifyRequest(id: string, question?: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/requests/${id}/clarify`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify({ question: question ?? "" }),
   });
   if (!res.ok) throw new Error(`failed to send clarification: ${res.status}`);
@@ -242,7 +242,7 @@ export type CreateVendorBody = {
 export async function createVendor(body: CreateVendorBody): Promise<VendorDTO> {
   const res = await fetch(`${API_URL}/api/vendors`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`failed to create vendor: ${res.status}`);
@@ -252,7 +252,7 @@ export async function createVendor(body: CreateVendorBody): Promise<VendorDTO> {
 export async function patchVendor(id: string, body: Partial<CreateVendorBody & { status: string }>): Promise<VendorDTO> {
   const res = await fetch(`${API_URL}/api/vendors/${id}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`failed to update vendor: ${res.status}`);
@@ -274,7 +274,7 @@ export async function getMatches(requestId: string): Promise<MatchCandidateDTO[]
 export async function routeToVendors(requestId: string, vendorIds: string[]): Promise<VendorRequestDTO[]> {
   const res = await fetch(`${API_URL}/api/requests/${requestId}/route`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify({ vendor_ids: vendorIds }),
   });
   if (!res.ok) throw new Error(`failed to route to vendors: ${res.status}`);
@@ -315,7 +315,7 @@ export type PatchVendorResponseBody = Partial<{
 export async function patchVendorResponse(id: string, body: PatchVendorResponseBody): Promise<VendorResponseDTO> {
   const res = await fetch(`${API_URL}/api/vendor-responses/${id}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -328,7 +328,7 @@ export async function patchVendorResponse(id: string, body: PatchVendorResponseB
 export async function associateVendorResponse(id: string, vendorRequestId: string): Promise<VendorResponseDTO> {
   const res = await fetch(`${API_URL}/api/vendor-responses/${id}/associate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify({ vendor_request_id: vendorRequestId }),
   });
   if (!res.ok) {
@@ -633,7 +633,7 @@ export type DeliveryResultDTO = {
 // not-yet-delivered ones (e.g. retry after a failed send). Idempotent —
 // already-delivered offers are never re-sent.
 export async function deliverOffers(requestId: string): Promise<DeliveryResultDTO> {
-  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers/deliver`, { method: "POST" });
+  const res = await fetch(`${API_URL}/api/requests/${requestId}/offers/deliver`, { method: "POST", headers: operatorHeaders(false) });
   if (!res.ok) throw new Error(await errorText(res, "failed to deliver offers"));
   return res.json();
 }
@@ -678,7 +678,7 @@ export async function getOfferPreview(requestId: string): Promise<string> {
 export async function selectOffer(requestId: string, offerId: string, buyerId: string): Promise<{ transaction_id: string; payment_status: string; gross_amount: number }> {
   const res = await fetch(`${API_URL}/api/requests/${requestId}/select`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: operatorHeaders(),
     body: JSON.stringify({ offer_id: offerId, buyer_id: buyerId }),
   });
   if (!res.ok) throw new Error(await errorText(res, "failed to select offer"));
@@ -694,3 +694,85 @@ export async function operatorCall<T>(path: string, method: "GET" | "POST" = "GE
     body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
   });
 }
+
+// --- Phase 4C correction: autonomous runtime (control plane) ---
+
+export type Rate = { n: number; of: number; pct: number | null };
+
+export type AutonomyMetrics = {
+  since: string | null;
+  total_workflows: number;
+  workflows_by_class: Record<string, number>;
+  autonomous_request_handling: Rate;
+  autonomous_completion: Rate;
+  clarification_resolution: Rate;
+  clarification_resolution_by_party: Record<string, Rate>;
+  operator_intervention: Rate;
+  interventions_by_reason: Record<string, number>;
+  manual_routing: Rate;
+  manual_confirmation: Rate;
+  automatic_recovery: Rate;
+  failures_by_category: Record<string, number>;
+  open_exceptions: number;
+  exceptions_by_reason: Record<string, number>;
+  decisions: Record<string, number>;
+};
+
+export type AutonomySettings = {
+  operating_model: string;
+  flags: Record<string, boolean>;
+  policy_version: string;
+  params: Record<string, string | number>;
+};
+
+export type WorkflowException = {
+  id: string;
+  class: string;
+  reason: string;
+  subject_type: string;
+  subject_id: string;
+  buyer_request_id: string | null;
+  detail: Record<string, unknown>;
+  status: string;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by?: string;
+  resolution?: string;
+};
+
+export type WorkflowDecision = {
+  id: string;
+  workflow_type: string;
+  subject_type: string;
+  decision: string;
+  outcome: string;
+  fallback?: string;
+  reason?: string;
+  confidence: number | null;
+  inputs: Record<string, unknown>;
+  result: Record<string, unknown>;
+  actor: string;
+  created_at: string;
+};
+
+export type Clarification = {
+  id: string;
+  party: string;
+  kind: string;
+  field?: string;
+  question: string;
+  status: string;
+  attempts: number;
+  answer_text?: string;
+  asked_at: string;
+  resolved_at: string | null;
+};
+
+export type RequestAutonomy = { decisions: WorkflowDecision[]; clarifications: Clarification[]; exceptions: WorkflowException[] };
+
+export const getAutonomySettings = () => operatorCall<AutonomySettings>("/api/autonomy/settings");
+export const getAutonomyMetrics = () => operatorCall<AutonomyMetrics>("/api/autonomy/metrics");
+export const getExceptions = (status = "OPEN") => operatorCall<WorkflowException[]>(`/api/autonomy/exceptions?status=${status}`);
+export const resolveException = (id: string, resolution: string) =>
+  operatorCall<{ resolved: boolean }>(`/api/autonomy/exceptions/${id}/resolve`, "POST", { resolution });
+export const getRequestAutonomy = (id: string) => operatorCall<RequestAutonomy>(`/api/requests/${id}/autonomy`);

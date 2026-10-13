@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -234,4 +235,24 @@ func (r *ConversationRepository) ApplyDeliveryStatus(ctx context.Context, extern
 	}
 	t.Message = msg
 	return t, nil
+}
+
+// OutboundEntityByProviderID implements routing.QuotedLookup (Phase 4C
+// correction): the business entity an outbound message was about, from its
+// provider message id (recorded by the recording sender).
+func (r *ConversationRepository) OutboundEntityByProviderID(ctx context.Context, providerMessageID string) (string, *uuid.UUID, error) {
+	var et, eid sql.NullString
+	err := r.db.QueryRowContext(ctx, `SELECT metadata->>'entity_type', metadata->>'entity_id' FROM messages
+		WHERE direction = 'OUTBOUND' AND external_message_id = $1 ORDER BY created_at DESC LIMIT 1`, providerMessageID).Scan(&et, &eid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	id, perr := uuid.Parse(eid.String)
+	if perr != nil {
+		return et.String, nil, nil
+	}
+	return et.String, &id, nil
 }

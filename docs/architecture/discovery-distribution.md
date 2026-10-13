@@ -166,9 +166,12 @@ BuyerRequests (WhatsApp free text uses it too). The new request has
 `origin=discovery`, `listing_id`, `discovery_delivery_id`, and a unique partial
 index makes the tap idempotent per (delivery, listing).
 
-* **Confirmation rule preserved.** The request starts `NEEDS_REVIEW` and is
-  never auto-confirmed (`DISCOVERY_ENQUIRY_CONFIRMATION=operator`); matching,
-  routing and offers still refuse a non-confirmed request.
+* **Autonomous from here (Phase 4C correction).** The request names one
+  curated listing, so the workflow confirms it (actor SYSTEM) and routes it to
+  the listing's own vendor; matching, routing and offers still refuse a
+  non-confirmed request (`EnsureConfirmed`). See `autonomous-runtime.md`.
+  Typed references ("I want that one", "is it still available?") reach the
+  same path through `EnquireFromContext`, with the same ownership checks.
 * The buyer gets an honest acknowledgement: nothing is reserved or paid.
 * **Listing provenance** flows forward without becoming a second source of
   truth: `VendorRequest.supply_listing_id` → `Offer.supply_listing_id` (inherited)

@@ -30,6 +30,11 @@ type InboundMessage struct {
 	// structured interaction ID Majo put on that button; Text carries the
 	// visible title.
 	Interaction *Interaction
+
+	// QuotedMessageID is the provider id of the message this one replies to
+	// (WhatsApp "context.id"), when the sender used Reply. Phase 4C
+	// correction: a structured signal for associating vendor replies.
+	QuotedMessageID string
 }
 
 // Interaction is a parsed interactive reply.

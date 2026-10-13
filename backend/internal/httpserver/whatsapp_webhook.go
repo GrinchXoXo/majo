@@ -255,6 +255,9 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 		content["interaction"] = map[string]any{"kind": msg.Interaction.Kind, "id": msg.Interaction.ID, "title": msg.Interaction.Title}
 	}
 	metadata := map[string]any{}
+	if msg.QuotedMessageID != "" {
+		metadata["quoted_message_id"] = msg.QuotedMessageID
+	}
 	if msg.ProfileName != "" {
 		metadata["profile_name"] = msg.ProfileName
 	}
@@ -332,7 +335,7 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 			"vendor_id", v.ID, "vendor_name", v.BusinessName)
 		vendorRef := v
 		text := msg.Text
-		ref := supply.Inbound{MessageID: savedMsg.ID, ConversationID: conv.ID, At: sentAt}
+		ref := supply.Inbound{MessageID: savedMsg.ID, ConversationID: conv.ID, At: sentAt, QuotedProviderMessageID: msg.QuotedMessageID}
 		h.jobs.Enqueue(func(bgCtx context.Context) {
 			// ProcessVendorMessage notifies the marketplace offer loop
 			// (ResponseListener) once the response is persisted.

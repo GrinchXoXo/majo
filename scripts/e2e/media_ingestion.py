@@ -55,9 +55,17 @@ def sql(q):
     return out
 
 
+def _hdrs():
+    # Phase 4C correction: operator overrides are authenticated control-plane calls.
+    h = {"Content-Type": "application/json"}
+    if os.environ.get("OPERATOR_TOKEN"):
+        h["Authorization"] = "Bearer " + os.environ["OPERATOR_TOKEN"]
+    return h
+
+
 def api(method, path, body=None):
     req = urllib.request.Request(BASE + path, data=json.dumps(body).encode() if body is not None else None,
-                                 method=method, headers={"Content-Type": "application/json"})
+                                 method=method, headers=_hdrs())
     with urllib.request.urlopen(req) as r:
         return json.loads(r.read() or b"null")
 

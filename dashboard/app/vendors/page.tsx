@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { listVendors, createVendor, patchVendor, type VendorDTO } from "@/lib/api";
+import OperatorToken from "@/components/OperatorToken";
 
 // Per PRD 2 §6, §51: operator-driven vendor onboarding. No public
 // registration flow — this page IS the onboarding mechanism.
@@ -71,6 +72,7 @@ export default function VendorsPage() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1>Vendors</h1>
+        <OperatorToken />
         <button onClick={() => setShowForm(!showForm)} style={{ padding: "8px 16px", background: "#2563eb", color: "white", border: "none", borderRadius: 6, cursor: "pointer" }}>
           {showForm ? "Cancel" : "+ Add Vendor"}
         </button>

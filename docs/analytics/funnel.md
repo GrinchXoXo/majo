@@ -189,3 +189,55 @@ chain: delivery → message(s) → interaction → BuyerRequest(`origin=discover
 Known limits: delivered/read depend on Meta status callbacks; with the fake
 Graph API they are not produced. Arm comparisons need far more volume than a
 staff proof can give; Phase 4B proves the measurement exists, not that an arm wins.
+
+## Autonomy (Phase 4C correction)
+
+`GET /api/autonomy/metrics[?since=RFC3339]` (operator-only), counted from
+system-of-record tables: events **with their actor**, clarifications, the
+decision log, exceptions, vendor requests and selections. Every rate is
+reported as `{n, of, pct}` — raw counts always travel with the percentage.
+
+| Metric | Definition |
+|---|---|
+| Total workflows | BuyerRequests created in the period (one workflow per request) |
+| Workflow class (exactly one each) | `system_failure` (a SYSTEM_EXCEPTION was raised) > `operator_intervention` (an operator confirmed, routed, asked a question or associated a reply) > `operator_override` (an operator corrected the request or a vendor reply, or selected for the buyer) > `automatic_retry` (a failed delivery recovered automatically) > `clarification_assisted` (a buyer or vendor question was answered) > `autonomous` |
+| Autonomous request handling | requests in an autonomous class (`autonomous`, `clarification_assisted`, `automatic_retry`) that progressed (routed, told "no match", or asked to broaden) / all requests |
+| Autonomous completion | transactions whose workflow is in an autonomous class / all transactions |
+| Clarification resolution | clarifications ANSWERED / clarifications issued (not CANCELLED), also per party |
+| Operator intervention | workflows classed `operator_intervention` / all workflows; by reason: manual_confirmation, manual_routing, ambiguous_intent, vendor_association, operator_correction, operator_selection, system_failure |
+| Manual routing | `VENDORS_ROUTED` events with actor OPERATOR / all `VENDORS_ROUTED` (never hidden inside the generic intervention rate; target 0% in normal operation) |
+| Manual confirmation | `REQUEST_CONFIRMED` with actor OPERATOR / all `REQUEST_CONFIRMED` |
+| Automatic recovery | delivery retries that recovered / retries scheduled |
+| Failures by category | decision-log fallbacks other than clarification/retry (POLICY_REJECTION, TEMPORARY_PROVIDER_FAILURE, GENUINE_AMBIGUITY, SAFETY_EXCEPTION, SYSTEM_EXCEPTION) |
+
+A transaction where an operator routed the vendor is **never** counted as
+autonomous, whatever happened afterwards.
+
+## Controlled discovery pilot — locked metric definitions (Phase 4C)
+
+Two funnels, never one denominator. Someone can opt in and receive zero
+discovery (no eligible supply): they count toward opt-in, not toward tap rate.
+
+**Consent funnel:** eligible buyer → opt-in invitation delivered → explicit opt-in → opted-in audience.
+**Discovery performance funnel:** opted-in buyer → discovery delivered → interaction → listing enquiry → offer → selection → transaction.
+
+| Metric | Definition |
+|---|---|
+| Eligible buyers | buyers who meet the pilot's eligibility criteria and are permitted to receive an opt-in invitation |
+| Opt-in invitation delivered | unique eligible buyers who successfully received the opt-in invitation |
+| Opted-in buyers | unique buyers who explicitly accepted proactive discovery |
+| **Opt-in rate** | opted_in_buyers / opt_in_invitation_delivered — not all users, not all contacts, not deliveries, not buyers who merely received an invitation in the numerator, not taps |
+| Opt-out rate | buyers who opted out / buyers who received proactive discovery |
+| Tap rate | unique buyers with ≥ 1 discovery interaction / unique delivered discovery recipients |
+| Enquiry rate | unique discovery-origin BuyerRequests / unique delivered discovery recipients |
+| Transaction rate | unique discovery-attributed Transactions / unique delivered discovery recipients |
+
+Gate wording: **Opt-in gate: ≥ 25% of unique eligible buyers who receive an
+opt-in invitation explicitly opt in, measured per pilot round and
+cumulatively.** "Tap ≥ 20% delivered" means ≥ 20% of unique opted-in buyers who
+received a discovery delivery interact at least once. Every report shows the
+numerator and denominator (e.g. `opt_in_invited=40, opted_in=12, rate=30%`)
+with sample-size context; a gate is never declared passed on a percentage
+alone when the sample is too small to mean anything. The thresholds are
+targets/hypotheses, not automatic expansion triggers: expansion weighs opt-in,
+tap, opt-out, enquiry, transaction and operational burden together.

@@ -38,7 +38,18 @@ type OfferDelivery struct {
 	events     event.Writer
 	logger     *slog.Logger
 	now        func() time.Time
+	failures   OfferFailureListener
 }
+
+// OfferFailureListener is told when an automatic offer delivery was rejected
+// by the channel (Phase 4C correction: the autonomous runtime retries it, so
+// the operator is not the retry mechanism).
+type OfferFailureListener interface {
+	OfferDeliveryFailed(ctx context.Context, buyerRequestID uuid.UUID, err error)
+}
+
+// SetFailureListener wires automatic delivery recovery.
+func (d *OfferDelivery) SetFailureListener(l OfferFailureListener) { d.failures = l }
 
 func NewOfferDelivery(
 	requests request.Repository,
@@ -218,6 +229,9 @@ func (d *OfferDelivery) VendorResponseChanged(ctx context.Context, resp *routing
 			return
 		}
 		d.logger.Error("delivering offers after vendor response", "buyer_request_id", vr.BuyerRequestID, "error", err)
+		if errors.Is(err, ErrDeliveryFailed) && d.failures != nil {
+			d.failures.OfferDeliveryFailed(ctx, vr.BuyerRequestID, err)
+		}
 	}
 }
 

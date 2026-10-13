@@ -146,6 +146,35 @@ const (
 	DiscoveryInteractionUnresolved Type = "DISCOVERY_INTERACTION_UNRESOLVED"
 	// ListingEnquiry: "Ask about it" created (or re-found) a discovery-origin BuyerRequest.
 	ListingEnquiry Type = "LISTING_ENQUIRY"
+
+	// --- Phase 4C correction: autonomous runtime ---
+	// RequestClarified: a buyer's answer to a clarification was merged into
+	// the open request (actor BUYER; payload carries previous/new values).
+	RequestClarified Type = "REQUEST_CLARIFIED"
+	// ClarificationAnswered / ClarificationClosed: the outcome of a question
+	// Majo put to a buyer or vendor.
+	ClarificationAnswered Type = "CLARIFICATION_ANSWERED"
+	ClarificationClosed   Type = "CLARIFICATION_CLOSED"
+	// VendorClarificationSent: Majo asked a vendor which request they meant,
+	// or to confirm an unclear reply.
+	VendorClarificationSent Type = "VENDOR_CLARIFICATION_SENT"
+	// VendorResponseAssociated: Majo attached a reply to a request from
+	// context (actor SYSTEM; payload carries the association rule used).
+	VendorResponseAssociated Type = "VENDOR_RESPONSE_ASSOCIATED"
+	// VendorRequestExpired: a SENT request passed VENDOR_REQUEST_TTL.
+	VendorRequestExpired Type = "VENDOR_REQUEST_EXPIRED"
+	// NoMatchNotified: Majo told the buyer no suitable seller was found.
+	NoMatchNotified Type = "NO_MATCH_NOTIFIED"
+	// ContextAnswerSent: Majo answered a buyer question from context
+	// ("how much is the black one?").
+	ContextAnswerSent Type = "CONTEXT_ANSWER_SENT"
+	// Delivery recovery.
+	DeliveryRetryScheduled Type = "DELIVERY_RETRY_SCHEDULED"
+	DeliveryRecovered      Type = "DELIVERY_RECOVERED"
+	DeliveryRetryExhausted Type = "DELIVERY_RETRY_EXHAUSTED"
+	// WorkflowExceptionRaised / Resolved: the operator exception queue.
+	WorkflowExceptionRaised   Type = "WORKFLOW_EXCEPTION_RAISED"
+	WorkflowExceptionResolved Type = "WORKFLOW_EXCEPTION_RESOLVED"
 )
 
 // ActorType identifies who/what caused an event.

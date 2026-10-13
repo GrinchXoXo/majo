@@ -347,12 +347,34 @@ func (s *Service) applyAsk(ctx context.Context, in Inbound, d *Delivery, rec *In
 		"listing_reference": l.PublicReference, "needs_reconfirmation": c.NeedsReconfirmation(),
 		"freshness": string(c.Eligibility.Freshness.State),
 	}))
-	if s.cfg.EnquiryConfirmation == ConfirmAuto {
-		if _, err := s.requests.ConfirmAs(ctx, req.ID, event.ActorSystem, "auto_listing_origin"); err != nil {
-			s.logger.Error("auto-confirming discovery request", "buyer_request_id", req.ID, "error", err)
+	// Confirmation and routing are the autonomous workflow's job (Phase 4C
+	// correction): request.Create notified it that this request is ready.
+	s.replyText(ctx, in, d, presentation.AskAck(cardsFor(dc.cands, dc.media)[0]))
+}
+
+// EnquireFromContext is "Ask about it" reached by text instead of a tap
+// ("I want that one", "is it still available?" about a listing the buyer was
+// shown). The same ownership rules apply: the delivery must be this buyer's,
+// sent, unexpired, and must contain the listing. false = not applicable
+// (nothing was done; the caller answers).
+func (s *Service) EnquireFromContext(ctx context.Context, buyerID, conversationID, messageID uuid.UUID, replyTo string, deliveryID, listingID uuid.UUID) bool {
+	d, err := s.store.FindDelivery(ctx, deliveryID)
+	if err != nil || d == nil || d.BuyerID != buyerID || d.Status != DeliverySent || d.SentAt == nil ||
+		s.now().UTC().Sub(*d.SentAt) > s.cfg.InteractionTTL || !contains(d.ListingIDs, listingID) {
+		return false
+	}
+	ref := ""
+	for _, c := range d.Candidates {
+		if c.ListingID == listingID {
+			ref = c.PublicReference
 		}
 	}
-	s.replyText(ctx, in, d, presentation.AskAck(cardsFor(dc.cands, dc.media)[0]))
+	lid, did := listingID, d.ID
+	rec := &Interaction{InboundMessageID: messageID, BuyerID: buyerID, DeliveryID: &did, RawID: truncate("context:ask:"+ref, 300),
+		Action: string(structid.ActionAsk), ListingRef: ref, ListingID: &lid, Outcome: OutcomeUnresolved}
+	in := Inbound{BuyerID: buyerID, ConversationID: conversationID, MessageID: messageID, ReplyTo: replyTo, RawID: rec.RawID}
+	s.applyAsk(ctx, in, d, rec, listingID)
+	return true
 }
 
 // record persists an interaction once per inbound message. false = this

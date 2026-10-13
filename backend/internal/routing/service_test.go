@@ -760,3 +760,7 @@ func TestRouteToVendors_RetriesOnReferenceCollisionAndUsesSixDigits(t *testing.T
 func (r *fakeRequestRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
 	return nil, nil
 }
+
+func (f *fakeRequestRepo) SetStatus(ctx context.Context, id uuid.UUID, from []request.Status, to request.Status) (*request.BuyerRequest, error) {
+	return nil, nil
+}

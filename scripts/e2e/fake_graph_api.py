@@ -33,6 +33,26 @@ TOKEN = os.environ.get("ACCESS_TOKEN", "")
 
 
 UPLOAD_LOG = os.environ.get("UPLOAD_LOG", "uploads.jsonl")
+# Phase 4C correction: scripted transient failures. FAIL_PLAN is a JSON file
+# {"<recipient>": [503, 503]}: each send to that recipient pops one status
+# and fails with it (an empty list = succeed). Used to prove automatic retry.
+FAIL_PLAN = os.environ.get("FAIL_PLAN", "")
+
+
+def planned_failure(to):
+    if not FAIL_PLAN or not os.path.exists(FAIL_PLAN):
+        return None
+    try:
+        plan = json.load(open(FAIL_PLAN))
+    except ValueError:
+        return None
+    codes = plan.get(to) or []
+    if not codes:
+        return None
+    code = codes.pop(0)
+    plan[to] = codes
+    json.dump(plan, open(FAIL_PLAN, "w"))
+    return int(code)
 FAIL_UPLOADS = os.environ.get("FAIL_UPLOADS", "") == "1"
 
 
@@ -53,6 +73,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, {"id": media_id})
         body = json.loads(raw)
         to = body.get("to", "")
+        planned = planned_failure(to)
+        if planned:
+            with open(LOG, "a") as f:
+                f.write(json.dumps({"path": self.path, "to": to, "failed": True, "planned": planned, "wamid": "", "body": body}) + "\n")
+            return self._json(planned, {"error": {"message": "scripted transient failure", "code": 1}})
         failed = to in FAIL
         wamid = "" if failed else "wamid.fake." + uuid.uuid4().hex
         with open(LOG, "a") as f:

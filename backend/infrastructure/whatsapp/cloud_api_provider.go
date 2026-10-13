@@ -347,6 +347,12 @@ func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage
 						Text      struct {
 							Body string `json:"body"`
 						} `json:"text"`
+						// Context is set when the sender used WhatsApp "Reply"
+						// on one of our messages: id is that message's wamid.
+						Context *struct {
+							From string `json:"from"`
+							ID   string `json:"id"`
+						} `json:"context"`
 						Interactive struct {
 							Type        string `json:"type"`
 							ButtonReply *struct {
@@ -392,6 +398,9 @@ func (p *CloudAPIProvider) ParseWebhookPayload(payload []byte) ([]InboundMessage
 					Text:              m.Text.Body,
 					Timestamp:         m.Timestamp,
 					ProfileName:       profileNames[m.From],
+				}
+				if m.Context != nil {
+					msg.QuotedMessageID = m.Context.ID
 				}
 				switch {
 				case m.Type == "interactive" && m.Interactive.ButtonReply != nil:

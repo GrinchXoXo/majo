@@ -13,14 +13,20 @@ import (
 )
 
 // Status is the request lifecycle. CORRECTED is intentionally not a
-// status (per PRD 1 §6) — corrections are tracked via audit/events while
-// the status remains NEEDS_REVIEW until the operator confirms.
+// status (per PRD 1 §6) — corrections are tracked via audit/events.
+// NEEDS_REVIEW means "fields known, awaiting a decision": the autonomous
+// workflow confirms a clear request within seconds; it only lingers there
+// when autonomy is switched off or an exception is open.
 type Status string
 
 const (
 	StatusExtracting  Status = "EXTRACTING"
 	StatusNeedsReview Status = "NEEDS_REVIEW"
 	StatusConfirmed   Status = "CONFIRMED"
+	// StatusAwaitingBuyer (Phase 4C correction): Majo asked the buyer a
+	// clarification question and is waiting for the answer. It is part of
+	// the autonomous flow, not an operator queue.
+	StatusAwaitingBuyer Status = "AWAITING_BUYER"
 )
 
 // ErrNotConfirmed is returned whenever an unconfirmed BuyerRequest would
@@ -198,4 +204,7 @@ type Repository interface {
 	// a follow-up buyer message should continue the same request rather than
 	// always starting a new one, if one is still open (not yet confirmed).
 	FindLatestOpenByConversation(ctx context.Context, conversationID uuid.UUID) (*BuyerRequest, error)
+	// SetStatus moves a request from one of from to to (ErrInvalidTransition
+	// otherwise). Used for AWAITING_BUYER only; confirmation uses Confirm.
+	SetStatus(ctx context.Context, id uuid.UUID, from []Status, to Status) (*BuyerRequest, error)
 }

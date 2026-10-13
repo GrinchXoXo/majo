@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/middleman/backend/internal/autonomy"
 	"os"
 	"strconv"
 	"strings"
@@ -119,6 +120,12 @@ type Config struct {
 	// DiscoveryOutboundMediaTTL: how long an uploaded outbound media ID is
 	// reused before re-uploading the stored asset.
 	DiscoveryOutboundMediaTTL time.Duration
+
+	// --- Phase 4C correction: autonomous runtime (all [PARAM]) ---
+	// Majo is autonomous by default; each flag can switch one autonomous
+	// path off (the path still exists). See internal/autonomy.
+	AutonomyFlags  autonomy.Flags
+	AutonomyParams autonomy.Params
 }
 
 // Load reads configuration from environment variables.
@@ -241,6 +248,10 @@ func Load() (*Config, error) {
 		}
 	}
 
+	if err := loadAutonomy(cfg); err != nil {
+		return nil, err
+	}
+
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
@@ -320,4 +331,91 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadAutonomy reads the autonomous-runtime flags and parameters.
+func loadAutonomy(cfg *Config) error {
+	f := autonomy.AllOn()
+	flags := []struct {
+		key  string
+		dest *bool
+	}{
+		{"AUTO_CONFIRM_CLEAR_REQUESTS", &f.AutoConfirmClearRequests},
+		{"AUTO_ROUTE_DISCOVERY_REQUESTS", &f.AutoRouteDiscoveryRequests},
+		{"AUTO_ROUTE_MATCHED_REQUESTS", &f.AutoRouteMatchedRequests},
+		{"AUTO_RESOLVE_VENDOR_CONTEXT", &f.AutoResolveVendorContext},
+		{"AUTO_CLARIFY_REQUESTS", &f.AutoClarifyRequests},
+		{"AUTO_CLARIFY_VENDOR_RESPONSES", &f.AutoClarifyVendorResponses},
+		{"AUTO_RETRY_DELIVERY", &f.AutoRetryDelivery},
+		{"AUTO_PUBLISH_TRUSTED_VENDOR_LISTINGS", &f.AutoPublishTrustedVendorLists},
+	}
+	for _, fl := range flags {
+		v, err := getBool(fl.key, *fl.dest)
+		if err != nil {
+			return err
+		}
+		*fl.dest = v
+	}
+	if f.AutoClarifyVendorResponses && !f.AutoResolveVendorContext {
+		return fmt.Errorf("AUTO_CLARIFY_VENDOR_RESPONSES=true requires AUTO_RESOLVE_VENDOR_CONTEXT=true (the vendor's answer is read through the context resolver)")
+	}
+	p := autonomy.DefaultParams()
+	if v := os.Getenv("AUTO_CONFIRM_MIN_CONFIDENCE"); v != "" {
+		x, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("AUTO_CONFIRM_MIN_CONFIDENCE must be a number between 0 and 1, got %q", v)
+		}
+		p.ConfirmMinConfidence = x
+	}
+	ints := []struct {
+		key  string
+		dest *int
+	}{
+		{"AUTO_CLARIFY_MAX_QUESTIONS", &p.MaxClarifications},
+		{"AUTO_ROUTE_MIN_SCORE", &p.RouteMinScore},
+		{"AUTO_ROUTE_MAX_VENDORS", &p.RouteMaxVendors},
+		{"AUTO_ROUTE_VENDOR_MAX_OPEN", &p.RouteVendorMaxOpen},
+		{"AUTO_VENDOR_CLARIFY_MAX_ROUNDS", &p.VendorClarifyMaxRounds},
+		{"AUTO_RETRY_MAX_ATTEMPTS", &p.RetryMaxAttempts},
+	}
+	for _, i := range ints {
+		n, err := getInt(i.key, int64(*i.dest))
+		if err != nil {
+			return err
+		}
+		*i.dest = int(n)
+	}
+	durs := []struct {
+		key  string
+		dest *time.Duration
+	}{
+		{"AUTO_CLARIFICATION_TTL", &p.ClarificationTTL},
+		{"VENDOR_REQUEST_TTL", &p.VendorRequestTTL},
+		{"AUTO_CONTEXT_WINDOW", &p.ContextWindow},
+	}
+	for _, d := range durs {
+		v, err := getDuration(d.key, *d.dest)
+		if err != nil {
+			return err
+		}
+		*d.dest = v
+	}
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	cfg.AutonomyFlags, cfg.AutonomyParams = f, p
+	return nil
+}
+
+func getBool(key string, fallback bool) (bool, error) {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "":
+		return fallback, nil
+	case "true", "1", "on", "yes":
+		return true, nil
+	case "false", "0", "off", "no":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s must be true or false, got %q", key, os.Getenv(key))
 }

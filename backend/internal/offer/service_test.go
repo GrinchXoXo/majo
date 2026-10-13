@@ -369,3 +369,7 @@ func strings_Contains(s, substr string) bool {
 func (r *fakeRequestRepoForOffers) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*request.BuyerRequest, error) {
 	return nil, nil
 }
+
+func (f *fakeRequestRepoForOffers) SetStatus(ctx context.Context, id uuid.UUID, from []request.Status, to request.Status) (*request.BuyerRequest, error) {
+	return nil, nil
+}

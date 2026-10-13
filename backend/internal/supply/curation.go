@@ -555,6 +555,14 @@ var errFactsOutdated = errors.New("publication facts outdated")
 // transaction as the transition, so concurrent publishes yield one event.
 // Publishing sends nothing to anyone and creates no offer or request.
 func (s *ListingService) Publish(ctx context.Context, listingID uuid.UUID, expectedUpdatedAt *time.Time, operatorID *uuid.UUID) (*Listing, error) {
+	return s.PublishAs(ctx, listingID, expectedUpdatedAt, operatorID, event.ActorOperator)
+}
+
+// PublishAs is Publish with an explicit actor: SYSTEM when the autonomous
+// runtime auto-publishes a trusted vendor's draft (Phase 4C correction,
+// AUTO_PUBLISH_TRUSTED_VENDOR_LISTINGS), OPERATOR for curation. The same
+// publication gate applies either way.
+func (s *ListingService) PublishAs(ctx context.Context, listingID uuid.UUID, expectedUpdatedAt *time.Time, operatorID *uuid.UUID, actor event.ActorType) (*Listing, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		pre, err := s.listings.FindByID(ctx, listingID)
 		if err != nil {
@@ -567,7 +575,7 @@ func (s *ListingService) Publish(ctx context.Context, listingID uuid.UUID, expec
 		if err != nil {
 			return nil, err
 		}
-		l, err := s.publishLocked(ctx, listingID, facts, expectedUpdatedAt, operatorID)
+		l, err := s.publishLocked(ctx, listingID, facts, expectedUpdatedAt, operatorID, actor)
 		if errors.Is(err, errFactsOutdated) {
 			continue
 		}
@@ -576,7 +584,7 @@ func (s *ListingService) Publish(ctx context.Context, listingID uuid.UUID, expec
 	return nil, ErrStale
 }
 
-func (s *ListingService) publishLocked(ctx context.Context, listingID uuid.UUID, facts *publishFacts, expectedUpdatedAt *time.Time, operatorID *uuid.UUID) (*Listing, error) {
+func (s *ListingService) publishLocked(ctx context.Context, listingID uuid.UUID, facts *publishFacts, expectedUpdatedAt *time.Time, operatorID *uuid.UUID, actor event.ActorType) (*Listing, error) {
 	return s.listings.Curate(ctx, listingID, func(cur *Listing) (*CurationChange, error) {
 		if cur.Status == ListingActive {
 			return nil, nil // already published: idempotent, nothing re-emitted
@@ -609,7 +617,7 @@ func (s *ListingService) publishLocked(ctx context.Context, listingID uuid.UUID,
 		return &CurationChange{
 			Publish: true, At: at, LifecycleCeiling: s.policy.CeilingFrom(at),
 			Audit: &audit.Entry{
-				ActorType: "OPERATOR", ActorID: operatorID, Action: "SUPPLY_LISTING_PUBLISHED",
+				ActorType: string(actor), ActorID: operatorID, Action: "SUPPLY_LISTING_PUBLISHED",
 				EntityType: "supply_listing", EntityID: &id,
 				PreviousValue: map[string]any{"status": string(cur.Status)},
 				NewValue:      map[string]any{"status": string(ListingActive)},
@@ -617,7 +625,7 @@ func (s *ListingService) publishLocked(ctx context.Context, listingID uuid.UUID,
 			},
 			Event: &event.Event{
 				EventType: event.SupplyListingPublished, EntityType: "supply_listing", EntityID: &id,
-				ActorType: event.ActorOperator, ActorID: operatorID, Payload: payload,
+				ActorType: actor, ActorID: operatorID, Payload: payload,
 			},
 		}, nil
 	})

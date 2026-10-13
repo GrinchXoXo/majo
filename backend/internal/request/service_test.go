@@ -316,3 +316,7 @@ func TestServiceClarify_SendsQuestionAndRecordsEvent(t *testing.T) {
 func (r *fakeRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uuid.UUID) (*BuyerRequest, error) {
 	return nil, nil
 }
+
+func (f *fakeRepo) SetStatus(ctx context.Context, id uuid.UUID, from []Status, to Status) (*BuyerRequest, error) {
+	return nil, nil
+}

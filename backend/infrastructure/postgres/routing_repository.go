@@ -483,3 +483,53 @@ func listingIDArg(id *uuid.UUID) any {
 	}
 	return id.String()
 }
+
+// ExpireStale implements routing.VendorAutonomyRepository (Phase 4C
+// correction): this vendor's SENT requests sent before `before` stop
+// awaiting a reply.
+func (r *RoutingRepository) ExpireStale(ctx context.Context, vendorID uuid.UUID, before time.Time) ([]*routing.VendorRequest, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		UPDATE vendor_requests SET status = 'EXPIRED', expired_at = now()
+		WHERE vendor_id = $1 AND status = 'SENT' AND sent_at < $2
+		RETURNING `+vendorRequestColumns, vendorID.String(), before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*routing.VendorRequest
+	for rows.Next() {
+		vr, err := scanVendorRequestRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, vr)
+	}
+	return out, rows.Err()
+}
+
+// CountOpenByVendor counts each vendor's SENT (awaiting reply) requests
+// sent at or after since (routing policy: per-vendor open-request limit).
+func (r *RoutingRepository) CountOpenByVendor(ctx context.Context, vendorIDs []uuid.UUID, since time.Time) (map[uuid.UUID]int, error) {
+	ids := make([]string, len(vendorIDs))
+	for i, id := range vendorIDs {
+		ids[i] = id.String()
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT vendor_id, count(*) FROM vendor_requests
+		WHERE vendor_id = ANY($1::uuid[]) AND status = 'SENT' AND sent_at >= $2 GROUP BY vendor_id`, pq.Array(ids), since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		if u, err := uuid.Parse(id); err == nil {
+			out[u] = n
+		}
+	}
+	return out, rows.Err()
+}

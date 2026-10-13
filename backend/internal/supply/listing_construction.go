@@ -259,6 +259,15 @@ func uuidStrings(ids []uuid.UUID) []string {
 	return out
 }
 
+// DraftListener is told when a DRAFT listing exists for a vendor's signal
+// (the autonomous runtime evaluates trusted-vendor auto-publishing).
+type DraftListener interface {
+	DraftReady(ctx context.Context, l *Listing)
+}
+
+// SetDraftListener wires the autonomous runtime.
+func (s *ListingService) SetDraftListener(l DraftListener) { s.draftListener = l }
+
 // SetDraftJobs enables automatic DRAFT creation (composition root).
 func (s *ListingService) SetDraftJobs(js jobs.Store, maxAttempts int) {
 	s.jobs, s.maxAttempts = js, maxAttempts
@@ -289,7 +298,10 @@ func (s *ListingService) HandleDraftJob(ctx context.Context, j *jobs.Job) error 
 	if err != nil {
 		return jobs.Permanent(fmt.Errorf("malformed listing draft payload: %w", err))
 	}
-	_, _, err = s.CreateFromSignal(ctx, id, event.ActorSystem, nil)
+	l, _, err := s.CreateFromSignal(ctx, id, event.ActorSystem, nil)
+	if err == nil && l != nil && l.Status == ListingDraft && s.draftListener != nil {
+		s.draftListener.DraftReady(ctx, l)
+	}
 	var inel ErrIneligible
 	switch {
 	case errors.As(err, &inel):

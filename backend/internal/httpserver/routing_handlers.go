@@ -95,7 +95,9 @@ type routeRequestBody struct {
 	VendorIDs []string `json:"vendor_ids"`
 }
 
-// Route handles POST /api/requests/:id/route — the operator-approval step
+// Route handles POST /api/requests/:id/route — the operator OVERRIDE of
+// routing (Majo routes automatically when policy permits; this remains for
+// exceptions)
 // (PRD 2 §29-33): creates VendorRequests for the approved vendors and
 // sends them via WhatsApp.
 func (h *RoutingHandlers) Route(w http.ResponseWriter, r *http.Request) {

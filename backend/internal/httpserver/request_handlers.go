@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -21,10 +22,20 @@ import (
 //	POST   /api/requests/:id/clarify
 //	GET    /api/requests/:id/events
 type RequestHandlers struct {
-	requests request.Repository
-	service  *request.Service
-	events   event.Reader
+	requests  request.Repository
+	service   *request.Service
+	events    event.Reader
+	clarifier Clarifier
 }
+
+// Clarifier records an operator question as an open clarification so the
+// buyer's answer continues the request (workflow.Engine).
+type Clarifier interface {
+	OperatorClarify(ctx context.Context, requestID uuid.UUID, question string) error
+}
+
+// SetClarifier wires the autonomous runtime's clarification state.
+func (h *RequestHandlers) SetClarifier(c Clarifier) { h.clarifier = c }
 
 func NewRequestHandlers(requests request.Repository, service *request.Service, events event.Reader) *RequestHandlers {
 	return &RequestHandlers{requests: requests, service: service, events: events}
@@ -223,7 +234,11 @@ func (h *RequestHandlers) Clarify(w http.ResponseWriter, r *http.Request) {
 	var body clarifyBody
 	_ = json.NewDecoder(r.Body).Decode(&body) // question is optional; empty uses the default
 
-	if err := h.service.Clarify(r.Context(), id, body.Question); err != nil {
+	clarify := h.service.Clarify
+	if h.clarifier != nil {
+		clarify = h.clarifier.OperatorClarify
+	}
+	if err := clarify(r.Context(), id, body.Question); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to send clarification")
 		return
 	}
