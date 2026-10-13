@@ -1113,3 +1113,37 @@ func TestHardening_MetricsHaveOneLevelEachAndRawCounts(t *testing.T) {
 		t.Fatalf("delivery: %+v", m.Delivery)
 	}
 }
+
+func TestHardening_RecoveryOffIsRecordedOnly(t *testing.T) {
+	env := newHardeningEnv(t, "2348073000001", "SENT", overdue, func(c *workflow.Config) { c.Flags.AutoRecoverStalledRequests = false })
+	if err := env.engine.HandleVendorTimeout(context.Background(), env.s.vr, "deadline"); err != nil {
+		t.Fatal(err)
+	}
+	if st := env.vrStatus(t, env.s.vr); st != "EXPIRED" {
+		t.Fatalf("the deadline still expires the request, got %s", st)
+	}
+	if r := env.recoveries(t); r["REJECTED:"+autonomy.RecoverDisabled] != 1 || len(env.msgr.sent) != 0 || env.router.routeCall != 0 {
+		t.Fatalf("flag off: recorded, nothing sent, nobody contacted: %v %+v", r, env.msgr.sent)
+	}
+}
+
+func TestHardening_QueuedUpdateOvertakenByProgressIsNotSent(t *testing.T) {
+	env := newHardeningEnv(t, "2348073000002", "SENT", overdue, nil)
+	ctx := context.Background()
+	env.msgr.fail = func(to, body, kind string) error { return graphErr(400, 131047) }
+	if err := env.engine.HandleVendorTimeout(ctx, env.s.vr, "deadline"); err != nil {
+		t.Fatal(err)
+	}
+	env.msgr.fail = nil
+	// The vendor answers late; the buyer now has an option.
+	mustExec(t, env.db, `INSERT INTO vendor_responses (id, vendor_request_id, vendor_id, status, review_state, price, raw_message) VALUES ($1, $2, $3, 'AVAILABLE', 'REVIEWED', 600000, 'late yes')`,
+		uuid.New(), env.s.vr, env.s.vendor)
+	env.engine.BuyerWrote(ctx, env.s.conv, uuid.New())
+	env.drain(t)
+	if len(env.msgr.byKind(workflow.KindVendorTimeoutNotice)) != 0 {
+		t.Fatalf("a 'no reply yet' update is never sent after a reply arrived")
+	}
+	if n := env.count(t, `SELECT count(*) FROM pending_notices WHERE buyer_request_id = $1 AND status = 'CANCELLED'`, env.s.req); n != 1 {
+		t.Fatalf("cancelled, got %d", n)
+	}
+}

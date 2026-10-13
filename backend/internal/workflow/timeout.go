@@ -326,7 +326,14 @@ func (e *Engine) RecoverRequest(ctx context.Context, buyerRequestID uuid.UUID, t
 		p := e.cfg.Params
 		inputs["rounds"] = rounds
 		switch {
-		case !e.cfg.Flags.AutoRecoverStalledRequests || !e.cfg.Flags.AutoRouteMatchedRequests:
+		case !e.cfg.Flags.AutoRecoverStalledRequests:
+			// Recovery switched off: the operator runs this step (control
+			// plane); the silence is recorded, nothing is sent.
+			rec(autonomy.OutcomeRejected, autonomy.PolicyRejection, autonomy.RecoverDisabled, nil)
+			return nil
+		case !e.cfg.Flags.AutoRouteMatchedRequests:
+			// Nobody new may be contacted automatically, but the buyer is
+			// not left in a silent dead end.
 			return e.tellBuyerNoReply(ctx, req, facts, rec, autonomy.RecoverDisabled)
 		case rounds >= p.RecoveryMaxRounds:
 			return e.tellBuyerNoReply(ctx, req, facts, rec, autonomy.RecoverMaxRounds)

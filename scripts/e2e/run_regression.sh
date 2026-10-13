@@ -9,7 +9,7 @@
 E2E=${E2E:-/tmp/claude-0/e2e4}; export PGPASSWORD=middleman
 HERE=$(cd $(dirname $0) && pwd)
 (cd $HERE/../../backend && go build -o $E2E/majo-server ./cmd/server) || exit 1
-LEGACY="AUTO_CONFIRM_CLEAR_REQUESTS=false AUTO_ROUTE_DISCOVERY_REQUESTS=false AUTO_ROUTE_MATCHED_REQUESTS=false AUTO_RESOLVE_VENDOR_CONTEXT=false AUTO_CLARIFY_REQUESTS=false AUTO_CLARIFY_VENDOR_RESPONSES=false AUTO_RETRY_DELIVERY=false"
+LEGACY="AUTO_CONFIRM_CLEAR_REQUESTS=false AUTO_ROUTE_DISCOVERY_REQUESTS=false AUTO_ROUTE_MATCHED_REQUESTS=false AUTO_RESOLVE_VENDOR_CONTEXT=false AUTO_CLARIFY_REQUESTS=false AUTO_CLARIFY_VENDOR_RESPONSES=false AUTO_RETRY_DELIVERY=false AUTO_RECOVER_STALLED_REQUESTS=false"
 run() { # name script mode(extra env...)
   local NAME=$1 SCRIPT=$2; shift 2
   [ -f $E2E/backend.pid ] && kill $(cat $E2E/backend.pid) 2>/dev/null; sleep 1

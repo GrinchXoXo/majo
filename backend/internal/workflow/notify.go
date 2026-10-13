@@ -49,6 +49,9 @@ var channelSubject = uuid.NewSHA1(uuid.NameSpaceURL, []byte("majo:channel:whatsa
 var requeueKinds = map[string]bool{"routing_update": true, "no_match": true, KindVendorTimeoutNotice: true,
 	"clarification_exhausted": true, "context_answer": true}
 
+// staleableKinds are status updates that progress can make wrong.
+var staleableKinds = map[string]bool{"routing_update": true, "no_match": true, KindVendorTimeoutNotice: true}
+
 // KindVendorTimeoutNotice is the outbound kind of the "no reply yet" update.
 const KindVendorTimeoutNotice = "vendor_timeout"
 
@@ -216,6 +219,18 @@ func (e *Engine) deliverNotice(ctx context.Context, n *autonomy.Notice) (channel
 	}
 	if n.BuyerRequestID != nil && e.held(ctx, *n.BuyerRequestID) {
 		return channel.Failure{}, false // stays PENDING; delivered after the hold is released
+	}
+	if staleableKinds[n.Kind] && n.BuyerRequestID != nil && e.recovery != nil {
+		// A status update overtaken by progress (an option arrived, or the
+		// buyer chose one) would mislead: it is cancelled, not sent late.
+		if f, err := e.recovery.RecoveryFacts(ctx, *n.BuyerRequestID, unsentGrace); err == nil && f != nil &&
+			(f.HasSelection || f.HasTransaction || f.ActiveOffers > 0 || f.Usable > 0) {
+			if ok, _ := e.notices.MarkNotice(ctx, n.ID, autonomy.NoticeCancelled, "overtaken by progress"); ok {
+				e.recordNotice(ctx, n.ConversationID, n.BuyerRequestID, autonomy.OutcomeRejected, "", "notice_overtaken_by_progress",
+					map[string]any{"notice_id": n.ID.String(), "kind": n.Kind})
+			}
+			return channel.Failure{}, false
+		}
 	}
 	var err error
 	if n.Kind == autonomy.NoticeKindOffers {
