@@ -1,4 +1,4 @@
-// Package config centralizes environment configuration for the Middleman backend.
+// Package config centralizes environment configuration for the Majo backend.
 // Phase 0 rule: all env vars are loaded once, at startup, in one place.
 package config
 

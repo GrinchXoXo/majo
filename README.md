@@ -1,4 +1,4 @@
-# Middleman — Phase 0 + Phase 1 + Phase 2
+# Majo — Phase 0 + Phase 1 + Phase 2
 
 WhatsApp-native demand aggregation and procurement platform.
 This repository implements **Phase 0** (foundation), **Phase 1** (core

@@ -1,5 +1,5 @@
 // Package postgres wraps database connectivity and migration execution.
-// PostgreSQL is the system of record for Middleman (per PRD 0.2 §8-10):
+// PostgreSQL is the system of record for Majo (per PRD 0.2 §8-10):
 // if losing another store would permanently lose business data, that data
 // belongs here instead.
 //

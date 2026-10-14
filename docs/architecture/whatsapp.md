@@ -5,7 +5,7 @@ Middleman_Technical_Spec_v1 §1.
 
 ## What you need from Meta Business Manager
 
-1. **Meta Business Account** — verified business, owned by Middleman
+1. **Meta Business Account** — verified business, owned by Majo
    (not an individual's personal account).
 2. **WhatsApp Business Account (WABA)** with a dedicated phone number.
 3. **App** created in Meta for Developers, with the WhatsApp product added.

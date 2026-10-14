@@ -1,4 +1,4 @@
-// Package logging provides structured logging for the Middleman backend.
+// Package logging provides structured logging for the Majo backend.
 // Phase 0 requirement: logs must include timestamp, level, service, request_id,
 // event_type, entity_id and message where relevant, without standing up a full
 // observability platform.

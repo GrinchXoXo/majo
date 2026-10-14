@@ -72,7 +72,7 @@ type SignalFields struct {
 
 // --- Phase 3: SupplyListing ---
 //
-// Listing is durable marketplace supply — "Middleman currently considers
+// Listing is durable marketplace supply — "Majo currently considers
 // this available for discovery/matching" — distinct from Signal, which
 // only records "the vendor told us this" (PRD 3 §5). A Listing always
 // traces back to the Signal that produced it (SignalID), preserving

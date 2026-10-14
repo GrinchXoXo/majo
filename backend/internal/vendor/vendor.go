@@ -20,7 +20,7 @@ const (
 )
 
 // Vendor is a person or business that can supply products relevant to
-// Middleman requests. Only ACTIVE vendors are eligible for matching
+// Majo requests. Only ACTIVE vendors are eligible for matching
 // (PRD 2 §5.1).
 type Vendor struct {
 	ID                  uuid.UUID

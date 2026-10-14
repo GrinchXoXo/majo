@@ -1,6 +1,6 @@
 // Package conversation owns WhatsApp (and future channel) conversation state.
 // Per PRD 0.2 §28: WhatsApp itself is not treated as the source of truth for
-// conversation state — Middleman maintains its own record of what it is
+// conversation state — Majo maintains its own record of what it is
 // currently waiting for.
 package conversation
 
@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Status represents what Middleman is currently doing within a conversation.
+// Status represents what Majo is currently doing within a conversation.
 // This is intentionally small in Phase 0/1; more states are added as the
 // request lifecycle (Phase 1) and offer lifecycle (later phases) are built.
 type Status string
@@ -34,7 +34,7 @@ type Conversation struct {
 	UpdatedAt  time.Time
 }
 
-// Direction distinguishes inbound (from user) vs outbound (from Middleman) messages.
+// Direction distinguishes inbound (from user) vs outbound (from Majo) messages.
 type Direction string
 
 const (

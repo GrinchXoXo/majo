@@ -1,5 +1,5 @@
 """
-Extraction logic for Middleman's AI service.
+Extraction logic for Majo's AI service.
 
 Per PRD 1 §13 and Middleman_Technical_Spec_v1 §3, this module is the
 implementation behind the AIProvider Go interface — it can change entirely
@@ -395,7 +395,7 @@ class HeuristicExtractor:
 
 ANTHROPIC_EXTRACTION_SYSTEM_PROMPT = """You extract structured buyer intent \
 from informal Nigerian WhatsApp messages for a procurement platform called \
-Middleman. Respond ONLY with a JSON object matching this exact schema, no \
+Majo. Respond ONLY with a JSON object matching this exact schema, no \
 other text:
 
 {
@@ -586,7 +586,7 @@ ALTERNATIVE_PATTERN = re.compile(
     r"\bno\s+dey\s+but\b|\bdon'?t\s+have\s+that\s+but\b|\binstead\b|\bonly\s+have\b", re.I
 )
 ANTHROPIC_VENDOR_RESPONSE_SYSTEM_PROMPT = """You classify a Nigerian WhatsApp vendor's reply to a product \
-availability request for a procurement platform called Middleman. Respond \
+availability request for a procurement platform called Majo. Respond \
 ONLY with a JSON object matching this exact schema, no other text:
 
 {

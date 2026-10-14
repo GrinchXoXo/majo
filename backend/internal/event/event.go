@@ -1,4 +1,4 @@
-// Package event defines Middleman's append-only business event model.
+// Package event defines Majo's append-only business event model.
 // Per PRD 0.2 §15-17: events are persisted directly to PostgreSQL for now.
 // No broker (Kafka/NATS/RabbitMQ) is introduced until there is measurable
 // evidence it is needed.
@@ -41,7 +41,7 @@ const (
 	// is introduced in Phase 1 per PRD 1 §22 ("the event vocabulary may
 	// evolve when actual product workflows require it").
 	RequestConfirmed Type = "REQUEST_CONFIRMED"
-	// ClarificationSent is fired when Middleman asks the buyer a
+	// ClarificationSent is fired when Majo asks the buyer a
 	// clarifying question because the request was too ambiguous (PRD 1 §28).
 	ClarificationSent Type = "CLARIFICATION_SENT"
 

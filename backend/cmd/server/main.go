@@ -1,4 +1,4 @@
-// Middleman backend entrypoint.
+// Majo backend entrypoint.
 //
 // This is the composition root (PRD 0 FINAL §19): the only place where
 // infrastructure implementations are instantiated and wired into domain

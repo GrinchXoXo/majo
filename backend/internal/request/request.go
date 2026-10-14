@@ -1,7 +1,7 @@
 // Package request owns BuyerRequest: the structured representation of what
 // a buyer is looking for. Per PRD 1 §5-6/§48: this is deliberately separate
 // from the raw WhatsApp message and from the AI's extraction — "AI
-// extracted something != Middleman confirmed the request."
+// extracted something != Majo confirmed the request."
 package request
 
 import (
