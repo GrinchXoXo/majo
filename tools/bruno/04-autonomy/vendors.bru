@@ -10,6 +10,12 @@ get {
   auth: inherit
 }
 
+script:post-response {
+  if (Array.isArray(res.getBody()) && res.getBody().length > 0) {
+    bru.setVar("vendorId", res.getBody()[0].id);
+  }
+}
+
 tests {
   test("answers 200", function () {
     expect(res.getStatus()).to.equal(200);
