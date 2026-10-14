@@ -52,6 +52,7 @@ export default function DiscoveryPage() {
 
   return (
     <div>
+      <title>Discovery · Majo</title>
       <h1>Discovery (staff-only)</h1>
       {error && <p style={{ color: "#b91c1c" }} data-testid="discovery-error">{error}</p>}
 

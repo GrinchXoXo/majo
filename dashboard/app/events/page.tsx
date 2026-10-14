@@ -22,6 +22,14 @@ function payloadSummary(p: Record<string, unknown>): string {
   return s === "{}" ? "" : s.length > 160 ? s.slice(0, 157) + "…" : s;
 }
 
+const MAX_KEYS = 6;
+const MAX_VALUE = 72;
+
+function truncatedValue(v: unknown): string {
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.length > MAX_VALUE ? s.slice(0, MAX_VALUE - 1) + "…" : s;
+}
+
 const col = createColumnHelper<Features, TimelineEvent>();
 const columns = col.columns([
   col.accessor((e) => new Date(e.created_at), {
@@ -49,7 +57,20 @@ const columns = col.columns([
     id: "details",
     header: "Details",
     enableSorting: false,
-    cell: (c) => <span style={{ color: "#555", fontSize: "0.85em", wordBreak: "break-word" }}>{c.getValue()}</span>,
+    cell: (c) => {
+      const entries = Object.entries(c.row.original.payload ?? {});
+      if (entries.length === 0) return <span style={{ color: "#999" }}>—</span>;
+      return (
+        <span style={{ display: "inline-block", maxWidth: 380, fontSize: "0.8em", lineHeight: 1.45, wordBreak: "break-word" }}>
+          {entries.slice(0, MAX_KEYS).map(([k, v]) => (
+            <span key={k} style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <span style={{ color: "#6b7280" }}>{k}:</span> {truncatedValue(v)}
+            </span>
+          ))}
+          {entries.length > MAX_KEYS && <span style={{ color: "#9ca3af" }}>+{entries.length - MAX_KEYS} more…</span>}
+        </span>
+      );
+    },
   }),
 ]);
 
@@ -88,6 +109,7 @@ export default function EventsPage() {
 
   return (
     <div>
+      <title>Events · Majo</title>
       <h1>Events</h1>
       <p style={{ color: "#666" }}>Every business event Majo recorded, newest first, and who caused it.</p>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: "0.9em" }}>

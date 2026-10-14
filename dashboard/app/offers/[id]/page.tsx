@@ -259,6 +259,7 @@ export default function ListingCurationPage() {
 
   return (
     <div style={{ maxWidth: 1100 }}>
+      <title>Supply listing · Majo</title>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <a href="/offers">← Supply listings</a>
       </div>

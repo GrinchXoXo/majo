@@ -93,6 +93,7 @@ export default function RequestsPage() {
 
   return (
     <div>
+      <title>Requests · Majo</title>
       <h1>Requests</h1>
       <p style={{ color: "#666" }}>Buyer requests, most in need of review first. Click a row to inspect, correct, or confirm.</p>
       <label style={{ fontSize: "0.9em" }}>

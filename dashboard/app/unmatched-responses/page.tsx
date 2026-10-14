@@ -103,6 +103,7 @@ export default function UnmatchedResponsesPage() {
 
   return (
     <div>
+      <title>Unmatched Responses · Majo</title>
       <h1>Unmatched Vendor Responses</h1>
       <p style={{ color: "#555", fontSize: "0.9em" }}>
         Majo first resolves a vendor reply from context and asks the vendor which request they mean. A reply lands here only if the

@@ -77,6 +77,7 @@ export default function AutonomyPage() {
 
   return (
     <div style={{ maxWidth: 1100 }}>
+      <title>Autonomy · Majo</title>
       <h1>Autonomy</h1>
       <p style={{ color: "#555", maxWidth: 760 }}>
         Majo is autonomous by default: it confirms clear requests, asks buyers and vendors what it needs, routes by policy and recovers

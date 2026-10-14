@@ -69,6 +69,7 @@ export default function VendorsPage() {
 
   return (
     <div>
+      <title>Vendors · Majo</title>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1>Vendors</h1>
         <button onClick={() => setShowForm(!showForm)} style={{ padding: "8px 16px", background: "#2563eb", color: "white", border: "none", borderRadius: 6, cursor: "pointer" }}>
@@ -126,7 +127,13 @@ export default function VendorsPage() {
             </tr>
           ))}
           {vendors.length === 0 && (
-            <tr><td colSpan={6} style={{ color: "#666", padding: 16 }}>No vendors yet.</td></tr>
+            <tr>
+              <td colSpan={6} style={{ padding: 0 }}>
+                <div className="empty-state" style={{ margin: 12 }}>
+                  No vendors yet — use “+ Add Vendor” to onboard the first one.
+                </div>
+              </td>
+            </tr>
           )}
         </tbody>
       </table>

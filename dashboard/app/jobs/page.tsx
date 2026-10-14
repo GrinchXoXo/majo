@@ -69,6 +69,7 @@ export default function JobsPage() {
   const cell: React.CSSProperties = { padding: "4px 10px", borderBottom: "1px solid #eee", textAlign: "right" };
   return (
     <div>
+      <title>Jobs · Majo</title>
       <h1>Jobs</h1>
       <p style={{ color: "#666" }}>Majo&apos;s durable background work. Majo retries and recovers on its own; this page is for seeing that it does.</p>
       {error && <p style={{ color: "crimson" }}>Could not load jobs: {error}</p>}

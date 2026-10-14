@@ -65,6 +65,7 @@ export default function SupplyListingsPage() {
 
   return (
     <div>
+      <title>Supply Listings · Majo</title>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <h1 style={{ margin: "8px 0" }}>Supply Listings</h1>
       </div>

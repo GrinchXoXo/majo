@@ -56,6 +56,7 @@ export default function BatchPage() {
 
   return (
     <div>
+      <title>Discovery batch · Majo</title>
       <p>
         <a href="/discovery">← Discovery</a>
       </p>

@@ -257,6 +257,7 @@ export default function RequestDetailPage() {
 
   return (
     <div style={{ maxWidth: 900 }}>
+      <title>Request · Majo</title>
       <a href="/requests" style={{ fontSize: "0.9em" }}>&larr; back to requests</a>
       <h1 style={{ marginTop: 8 }}>
         Request{" "}

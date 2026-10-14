@@ -36,6 +36,7 @@ export default function DashboardPage() {
 
   return (
     <div>
+      <title>Dashboard · Majo</title>
       <h1>Dashboard</h1>
       <p>Backend connectivity check (Phase 0 smoke test).</p>
 

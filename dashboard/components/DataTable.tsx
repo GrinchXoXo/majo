@@ -40,7 +40,7 @@ export default function DataTable<T extends RowData>({
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const table = useTable({ features, columns, data, state: { sorting }, onSortingChange: setSorting });
-  if (data.length === 0) return <p style={{ color: "#666" }}>{empty}</p>;
+  if (data.length === 0) return <div className="empty-state">{empty}</div>;
   return (
     <table aria-label={label} style={{ borderCollapse: "collapse", width: "100%", fontSize: "0.9em" }}>
       <thead>
