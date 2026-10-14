@@ -1,0 +1,17 @@
+meta {
+  name: Request offers
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/api/requests/{{requestId}}/offers
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

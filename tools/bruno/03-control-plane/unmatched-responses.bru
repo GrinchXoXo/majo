@@ -1,0 +1,17 @@
+meta {
+  name: Unmatched vendor responses
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/api/vendor-responses/unmatched
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

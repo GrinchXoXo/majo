@@ -1,0 +1,17 @@
+meta {
+  name: Get vendor
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/api/vendors/{{vendorId}}
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}

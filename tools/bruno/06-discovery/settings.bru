@@ -1,0 +1,17 @@
+meta {
+  name: Discovery settings
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/discovery/settings
+  body: none
+  auth: inherit
+}
+
+tests {
+  test("answers 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+}
