@@ -21,7 +21,8 @@
     "preferences": [],
     "confidence": 0.85,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -44,7 +45,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -68,7 +70,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -92,7 +95,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -115,7 +119,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -138,7 +143,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -161,7 +167,8 @@
     "preferences": [],
     "confidence": 0.85,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -185,7 +192,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -198,7 +206,7 @@
    "expect": "clear",
    "extraction": {
     "category": "furniture",
-    "product": "chair",
+    "product": "office chair",
     "variant": null,
     "budget_min": null,
     "budget_max": null,
@@ -209,7 +217,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -233,7 +242,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -257,7 +267,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -269,7 +280,7 @@
    "expect": "clear",
    "extraction": {
     "category": "furniture",
-    "product": "chair",
+    "product": "office chair",
     "variant": null,
     "budget_min": null,
     "budget_max": null,
@@ -280,7 +291,8 @@
     "preferences": [],
     "confidence": 0.7,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -303,7 +315,8 @@
     "preferences": [],
     "confidence": 0.65,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -326,7 +339,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -349,7 +363,8 @@
     "preferences": [],
     "confidence": 0.9,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -374,7 +389,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -397,7 +413,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -421,7 +438,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -433,7 +451,7 @@
    "expect": "clear",
    "extraction": {
     "category": "electronics",
-    "product": "tecno",
+    "product": "tecno camon",
     "variant": null,
     "budget_min": null,
     "budget_max": null,
@@ -444,7 +462,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -467,7 +486,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -490,7 +510,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -513,7 +534,8 @@
     "preferences": [],
     "confidence": 0.85,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -537,7 +559,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -562,7 +585,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -586,7 +610,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -610,7 +635,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -634,7 +660,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -659,7 +686,8 @@
     "preferences": [],
     "confidence": 0.85,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -684,7 +712,8 @@
     "preferences": [],
     "confidence": 0.5,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -709,7 +738,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -734,7 +764,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -759,7 +790,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -783,7 +815,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -807,7 +840,8 @@
     "preferences": [],
     "confidence": 0.15,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -831,7 +865,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -856,7 +891,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -880,7 +916,8 @@
     "preferences": [],
     "confidence": 0.15,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -904,7 +941,8 @@
     "preferences": [],
     "confidence": 0.15,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -928,7 +966,8 @@
     "preferences": [],
     "confidence": 0.15,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -954,7 +993,8 @@
     "other_products": [
      "laptop"
     ],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -980,7 +1020,8 @@
     "other_products": [
      "freezer"
     ],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1006,7 +1047,8 @@
     "other_products": [
      "tv"
     ],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1033,7 +1075,8 @@
      "bed",
      "wardrobe"
     ],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1059,7 +1102,8 @@
     "other_products": [],
     "ambiguities": [
      "condition_conflict"
-    ]
+    ],
+    "headcount": null
    }
   },
   {
@@ -1085,7 +1129,8 @@
     "other_products": [],
     "ambiguities": [
      "location_alternatives"
-    ]
+    ],
+    "headcount": null
    }
   },
   {
@@ -1108,7 +1153,8 @@
     "preferences": [],
     "confidence": 0.65,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1132,7 +1178,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1156,7 +1203,8 @@
     "preferences": [],
     "confidence": 0.15,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1180,7 +1228,8 @@
     "preferences": [],
     "confidence": 0.05,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1205,7 +1254,8 @@
     "preferences": [],
     "confidence": 0.15,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1229,7 +1279,8 @@
     "preferences": [],
     "confidence": 0.6,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1252,7 +1303,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1275,7 +1327,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1298,7 +1351,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1322,7 +1376,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1345,7 +1400,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1368,7 +1424,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1391,7 +1448,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1414,7 +1472,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1437,7 +1496,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1460,7 +1520,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1483,7 +1544,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1507,7 +1569,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1530,7 +1593,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1554,7 +1618,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1578,7 +1643,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1602,7 +1668,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1627,7 +1694,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   }
  ],
@@ -1657,7 +1725,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1685,7 +1754,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1714,7 +1784,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1742,7 +1813,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1770,7 +1842,8 @@
     "preferences": [],
     "confidence": 0.25,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1798,7 +1871,8 @@
     "preferences": [],
     "confidence": 0.25,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1827,7 +1901,8 @@
     "preferences": [],
     "confidence": 0.15,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1855,7 +1930,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1883,7 +1959,8 @@
     "preferences": [],
     "confidence": 0.05,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1911,7 +1988,8 @@
     "preferences": [],
     "confidence": 0.05,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1939,7 +2017,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1967,7 +2046,8 @@
     "preferences": [],
     "confidence": 0.0,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -1995,7 +2075,8 @@
     "preferences": [],
     "confidence": 0.45,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   },
   {
@@ -2024,7 +2105,8 @@
     "preferences": [],
     "confidence": 0.25,
     "other_products": [],
-    "ambiguities": []
+    "ambiguities": [],
+    "headcount": null
    }
   }
  ],

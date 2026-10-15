@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -763,4 +764,14 @@ func (r *fakeRequestRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, list
 
 func (f *fakeRequestRepo) SetStatus(ctx context.Context, id uuid.UUID, from []request.Status, to request.Status) (*request.BuyerRequest, error) {
 	return nil, nil
+}
+
+// Pilot batch: a headcount the buyer stated reaches the vendor.
+func TestVendorRequestMessageCarriesPreferences(t *testing.T) {
+	p := "small chops"
+	max := int64(45000)
+	msg := buildVendorRequestMessage("MM-123456", &request.BuyerRequest{Product: &p, BudgetMax: &max, Preferences: []string{"for 20 people", " "}})
+	if !strings.Contains(msg, "small chops") || !strings.Contains(msg, "Up to ₦45000") || !strings.Contains(msg, "\nfor 20 people\n") {
+		t.Fatalf("message: %q", msg)
+	}
 }

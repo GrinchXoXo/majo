@@ -32,6 +32,12 @@ type ExtractionResult struct {
 	// them; the deterministic policy decides). Empty when not provided.
 	OtherProducts []string `json:"other_products,omitempty"`
 	Ambiguities   []string `json:"ambiguities,omitempty"`
+	// Pilot batch: people the order is for (also carried in Preferences as
+	// "for N people"), and which extractor produced the result. Both are
+	// kept in buyer_requests.extracted_data for evaluation.
+	Headcount        *int   `json:"headcount,omitempty"`
+	ExtractionMethod string `json:"extraction_method,omitempty"`
+	Model            string `json:"model,omitempty"`
 }
 
 // Provider is the interface all business logic depends on.

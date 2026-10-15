@@ -47,6 +47,9 @@ class ExtractionResult:
     #                "location_alternatives" (two places offered as options)
     other_products: List[str] = field(default_factory=list)
     ambiguities: List[str] = field(default_factory=list)
+    # Pilot batch: how many people the order is for ("small chops for 20
+    # people"). Never a price and never an item quantity.
+    headcount: Optional[int] = None
 
 
 # --- Reference data for the heuristic extractor ---
@@ -64,13 +67,40 @@ CATEGORY_KEYWORDS = {
     "furniture": [
         "mattress", "bed", "table", "chair", "fan", "wardrobe", "cupboard",
         "fridge", "refrigerator", "freezer", "cooker", "microwave",
-        "kitchen", "sofa", "shelf",
+        "kitchen", "sofa", "shelf", "rice cooker",
     ],
     "fashion": [
         "shoe", "shoes", "sneaker", "sneakers", "clothes", "clothing",
         "shirt", "bag", "watch", "dress", "wig", "perfume",
+        # Pilot batch: common campus fashion items.
+        "jeans", "jacket", "gown", "cap", "trainers", "trainer", "hoodie",
+        "trouser", "trousers", "skirt", "heels", "slippers", "sandals", "jersey",
+        "ankara gown",
+        "handbag",
+    ],
+    # Pilot batch: the three categories the 60 pilot samples showed the
+    # extractor could not read at all.
+    "food": [
+        "small chops", "jollof rice", "fried rice", "rice", "chicken", "chinchin",
+        "popcorn", "cake", "suya", "amala", "shawarma", "pizza", "puff puff",
+        "meat pie", "noodles", "pounded yam", "catering",
+    ],
+    "services": [
+        "barber", "laundry", "phone screen repair", "laptop repair", "phone repair",
+        "nails", "electrician", "plumber", "tailor", "moving help", "gele",
+        "printing", "photographer", "makeup", "hairdresser",
+    ],
+    "school": [
+        "calculator", "lab coat", "a4 paper", "paper", "biro", "drawing board",
+        "textbook", "laptop stand",
     ],
 }
+# Electronics additions kept separate so the original list above stays
+# readable; merged into the category map below.
+CATEGORY_KEYWORDS["electronics"] += [
+    "power bank", "controller", "ps5 controller", "monitor", "keyboard", "mouse",
+    "camon", "tecno camon", "tecno spark", "earphones",
+]
 
 PRODUCT_HINTS = [
     "iphone 13", "iphone 12", "iphone 14", "iphone 15", "iphone 11",
@@ -89,6 +119,40 @@ PRODUCT_HINTS = [
     "gas cylinder", "washing machine",
     # Phone brands common in Nigeria (Phase 4C hardening).
     "tecno", "infinix", "itel", "redmi", "xiaomi", "oppo", "nokia", "pixel",
+]
+# Pilot batch: every category keyword not already a hint is a product word
+# too (food, school items, more fashion and electronics).
+PRODUCT_HINTS += [k for kws in CATEGORY_KEYWORDS.values() for k in kws
+                  if k not in PRODUCT_HINTS and k not in ("clothing", "television", "refrigerator",
+                                                          "kitchen", "smartphone")]
+
+# Pilot batch: services are recognised by what the buyer asks someone to do,
+# not by a noun alone ("fix my phone screen" is a repair, not a phone).
+# Checked before product words; the first match wins.
+SERVICE_PATTERNS = [
+    (re.compile(r"\b(?:fix|repair|replace|change)\b[^.!?]{0,30}\bscreen\b|\bscreen\s+(?:repair|replacement)\b", re.I),
+     "phone screen repair"),
+    (re.compile(r"\blaptop\b[^.!?]{0,40}\b(?:slow|virus|clean|format|repair|fix)\b"
+                r"|\b(?:fix|repair|clean|format)\b[^.!?]{0,20}\blaptop\b", re.I), "laptop repair"),
+    (re.compile(r"\b(?:fix|repair)\b[^.!?]{0,20}\bphone\b", re.I), "phone repair"),
+    (re.compile(r"\bcaterers?\b|\bcatering\b", re.I), "catering"),
+    (re.compile(r"\bbarbers?\b", re.I), "barber"),
+    (re.compile(r"\blaundry\b|\bdry\s*clean", re.I), "laundry"),
+    (re.compile(r"\bnail\s+tech|\bnails?\b|\bgel\s+nails?\b", re.I), "nails"),
+    (re.compile(r"\belectricians?\b", re.I), "electrician"),
+    (re.compile(r"\bplumbers?\b", re.I), "plumber"),
+    (re.compile(r"\btailors?\b", re.I), "tailor"),
+    (re.compile(r"\bhelp\s+(?:me\s+)?(?:to\s+)?move\b|\bmovers?\b|\bmoving\b|\brelocat", re.I), "moving help"),
+    (re.compile(r"\bgele\b", re.I), "gele"),
+    (re.compile(r"\bprinting\b|\bprint\s+(?:out|copies)\b|\bphotocop", re.I), "printing"),
+    (re.compile(r"\bphotographers?\b", re.I), "photographer"),
+    (re.compile(r"\bmake\s*-?up\s+artist|\bmakeup\b", re.I), "makeup"),
+]
+
+# Spelling variants buyers use for product words.
+PRODUCT_ALIASES = [
+    (re.compile(r"\btechno\b", re.I), "tecno"),
+    (re.compile(r"\bgen\b", re.I), "generator"),
 ]
 
 # A brand directly followed by a product noun qualifies it ("samsung tv" is
@@ -124,7 +188,35 @@ BARE_PRICE_PATTERN = re.compile(r"\bfor\s+(\d{2,3})\b(?!\s*k)", re.I)
 # Explicit Naira symbol / comma-formatted amounts are literal Naira
 # values, NOT multiplied by 1000 (unlike the "k" shorthand above):
 # "₦620,000", "620,000", or a bare 5-7 digit number like "620000".
-NAIRA_SYMBOL_PATTERN = re.compile(r"₦\s*([\d,]{4,})")
+NAIRA_SYMBOL_PATTERN = re.compile(r"[₦#]\s*([\d,]{4,})")
+
+# Pilot batch: numbers that are NOT money. "small chops for 20 people" was
+# read as ₦20,000 (the bare "for 20" vendor shorthand) and "20,000mah" could
+# be read as ₦20,000. These spans are blanked out before any budget pattern
+# runs, so a headcount, a size or a unit count can never become a price.
+HEADCOUNT_PATTERN = re.compile(
+    r"\b(\d{1,5})\s*(?:people|persons|person|guests|guest|pax|heads|attendees|students)\b", re.I)
+_NON_MONEY_PATTERNS = [
+    HEADCOUNT_PATTERN,
+    re.compile(r"\d[\d,.]*\s*(?:mah|gb|tb|mb|inch(?:es)?|kg|kgs|kva|watts?|w|cm|mm|ltrs?|litres?|liters?|ft|feet|yards?)(?![a-z])|\d+\s*\"", re.I),
+    re.compile(r"\b\d+\s*(?:pairs?|pieces?|pcs|reams?|sticks?|copies|cartons?|packs?|plates?|units?|crates?|dozens?|sockets?|bottles?|portions?)\b", re.I),
+    re.compile(r"\bsize\s*\d+|\b\d+\s*size\b", re.I),
+]
+
+
+def mask_non_money(text: str) -> str:
+    """Blank out (same length) every span that is a count, size or unit."""
+    out = list(text)
+    for pat in _NON_MONEY_PATTERNS:
+        for m in pat.finditer(text):
+            for i in range(m.start(), m.end()):
+                out[i] = " "
+    return "".join(out)
+
+
+def extract_headcount(text: str) -> Optional[int]:
+    m = HEADCOUNT_PATTERN.search(text)
+    return int(m.group(1)) if m else None
 COMMA_THOUSANDS_PATTERN = re.compile(r"\b(\d{1,3}(?:,\d{3})+)\b")
 BARE_LITERAL_AMOUNT_PATTERN = re.compile(r"\b(\d{5,7})\b")
 
@@ -154,6 +246,7 @@ def _to_naira(amount_str: str) -> int:
 
 
 def extract_budget(text: str) -> tuple[Optional[int], Optional[int]]:
+    text = mask_non_money(text)
     m = RANGE_PATTERN.search(text)
     if m:
         lo, hi = _to_naira(m.group(1)), _to_naira(m.group(2))
@@ -240,12 +333,64 @@ def find_products(text: str) -> List[str]:
     return out
 
 
-def extract_category_and_product(text: str) -> tuple[Optional[str], Optional[str]]:
-    product = None
-    for hint, pat in _HINT_PATTERNS:
+def _apply_aliases(text: str) -> str:
+    for pat, repl in PRODUCT_ALIASES:
+        text = pat.sub(repl, text)
+    return text
+
+
+def _keyword_category():
+    out = {}
+    for cat, kws in CATEGORY_KEYWORDS.items():
+        for k in kws:
+            out.setdefault(k, cat)
+    return out
+
+
+_KEYWORD_CATEGORY = _keyword_category()
+_SERVICE_PRODUCTS = {p for _, p in SERVICE_PATTERNS}
+
+
+def category_of(product: Optional[str]) -> Optional[str]:
+    """The category a product word belongs to: the product itself, then
+    its last word ("school bag" -> bag), then any word in it."""
+    if not product:
+        return None
+    if product in _SERVICE_PRODUCTS:
+        return "services"
+    if product in _KEYWORD_CATEGORY:
+        return _KEYWORD_CATEGORY[product]
+    words = product.split(" ")
+    for w in [words[-1]] + words[:-1]:
+        if w in _KEYWORD_CATEGORY:
+            return _KEYWORD_CATEGORY[w]
+    return None
+
+
+def pick_product(text: str) -> Optional[str]:
+    """The product the buyer is asking for.
+
+    Pilot batch: a service request wins over a bare noun; otherwise the
+    first product named in the message wins (the old rule took the first
+    word in the vocabulary list, so "laptop stand nd mouse" became
+    "laptop"). A later, more specific name for the same thing still wins
+    ("phone, iphone 13" -> "iphone 13")."""
+    for pat, product in SERVICE_PATTERNS:
         if pat.search(text):
-            product = hint
-            break
+            return product
+    cands = find_products(_apply_aliases(text))
+    if not cands:
+        return None
+    first = cands[0]
+    for c in cands[1:]:
+        if (_family(c) == _family(first) or first in c.split(" ")) and len(c) > len(first):
+            first = c
+    return first
+
+
+def extract_category_and_product(text: str) -> tuple[Optional[str], Optional[str]]:
+    product = pick_product(text)
+    text = _apply_aliases(text)
     if product in BRAND_HINTS:
         m = _word_pattern(product).search(text)
         if m:
@@ -257,11 +402,12 @@ def extract_category_and_product(text: str) -> tuple[Optional[str], Optional[str
                         product = product + " " + hint
                         break
 
-    category = None
-    for cat, pats in _CATEGORY_PATTERNS.items():
-        if any(p.search(text) for p in pats):
-            category = cat
-            break
+    category = category_of(product)
+    if category is None:
+        for cat, pats in _CATEGORY_PATTERNS.items():
+            if any(p.search(text) for p in pats):
+                category = cat
+                break
 
     return category, product
 
@@ -276,6 +422,49 @@ def _family(p: str) -> str:
     return _FAMILY.get(p, _FAMILY.get(head, head))
 
 
+# Pilot batch: accessories bought WITH a product are part of the same
+# request ("ps5 plus 2 controllers"), not a second product to ask about.
+ACCESSORY_OF = {
+    "controller": {"ps5", "ps4", "xbox", "playstation", "console"},
+    "ps5 controller": {"ps5", "playstation", "console"},
+    "charger": {"phone", "iphone", "samsung", "tecno", "infinix", "itel", "laptop", "power bank"},
+    "mouse": {"laptop", "macbook"},
+    "keyboard": {"laptop", "macbook"},
+    "laptop stand": {"laptop", "macbook"},
+}
+
+
+def _is_accessory_of(p: str, product: str) -> bool:
+    parents = ACCESSORY_OF.get(p, set())
+    head = product.split(" ")[0]
+    return product in parents or head in parents or _family(product) in parents
+
+
+# Pilot batch: when several things are named, some are still ONE order:
+# - a service's other products are what the service is about ("tailor to
+#   sew 2 gowns", "fix my phone screen, Tecno spark", "caterer ... small chops");
+# - several food items are one meal order ("jollof rice and chicken");
+# - several school items are one stationery order ("A4 paper ... and biro");
+# - a product named as a description ("bag wey fit laptop", "charger for my
+#   iphone") is not a second product.
+BUNDLE_CATEGORIES = {"food", "school"}
+_DESCRIPTOR_BEFORE = re.compile(r"(?:\bfit|\bfor(?:\s+my)?|\bto\s+fit|\bthat\s+fits?|\bwey\s+fit)\s*$", re.I)
+
+
+def _is_descriptor(text: str, p: str) -> bool:
+    m = _word_pattern(p).search(text)
+    return bool(m and _DESCRIPTOR_BEFORE.search(text[:m.start()].rstrip()))
+
+
+def _same_order(text: str, p: str, product: str) -> bool:
+    if product in _SERVICE_PRODUCTS:
+        return True
+    cat = category_of(product)
+    if cat in BUNDLE_CATEGORIES and category_of(p) == cat:
+        return True
+    return _is_accessory_of(p, product) or _is_descriptor(text, p)
+
+
 def other_products(text: str, product: Optional[str]) -> List[str]:
     """Products named besides the main one ("iphone and laptop"). A more
     specific name of the same thing ("phone ... iphone 13") or a brand
@@ -284,7 +473,7 @@ def other_products(text: str, product: Optional[str]) -> List[str]:
         return []
     parts = product.split(" ")
     return [p for p in find_products(text) if p != product and p not in parts and _family(p) != _family(product)
-            and not (p in product or product in p)]
+            and not (p in product or product in p) and not _same_order(text, p, product)]
 
 
 _CONDITION_EITHER = re.compile(r"\b(new|used)\s+or\s+(new|used|fairly used)\b|\beither\b|\bany condition\b|used\s+(is\s+)?(fine|ok|okay)", re.I)
@@ -325,7 +514,25 @@ def extract_condition(text: str) -> Optional[str]:
     return None
 
 
+# Pilot batch: counted units ("two pairs", "5 reams", "10 sticks", "100
+# copies") and a bare count after need/want ("PS5 controller I need 2").
+_QTY_UNITS = r"(?:pairs?|pieces?|pcs|reams?|sticks?|copies|cartons?|packs?|plates?|units?|crates?|dozens?|bottles?|portions?)"
+QUANTITY_UNIT_PATTERN = re.compile(
+    r"\b(\d{1,4}|" + "|".join(_NUMBER_WORDS.keys()) + r")\s+" + _QTY_UNITS + r"\b", re.I)
+QUANTITY_NEED_PATTERN = re.compile(r"\b(?:need|want|buy)\s+(\d{1,3})\s*(?=$|[.,!?])", re.I)
+
+
+def _as_int(tok: str) -> int:
+    return _NUMBER_WORDS[tok.lower()] if tok.lower() in _NUMBER_WORDS else int(tok)
+
+
 def extract_quantity(text: str) -> Optional[int]:
+    m = QUANTITY_UNIT_PATTERN.search(text)
+    if m:
+        return _as_int(m.group(1))
+    m = QUANTITY_NEED_PATTERN.search(text)
+    if m:
+        return int(m.group(1))
     for m in QUANTITY_PATTERN.finditer(text):
         # "iphone 13 and a laptop": 13 is the iPhone's model, not a quantity.
         before = text[:m.start()].rstrip().lower()
@@ -348,6 +555,8 @@ def extract_urgency(text: str) -> Optional[str]:
 class HeuristicExtractor:
     """Zero-cost, rule-based extraction. Default for the pilot."""
 
+    method = "heuristic"
+
     def extract(self, text: str) -> ExtractionResult:
         category, product = extract_category_and_product(text)
         budget_min, budget_max = extract_budget(text)
@@ -358,6 +567,8 @@ class HeuristicExtractor:
         variant = extract_variant(text, product)
         others = other_products(text, product)
         ambiguities = extract_ambiguities(text)
+        headcount = extract_headcount(text)
+        preferences = [f"for {headcount} people"] if headcount else []
 
         # Confidence is informational only (PRD 1 §18) — never used to
         # auto-route in Phase 1. Weighted by how many signals were found.
@@ -386,80 +597,189 @@ class HeuristicExtractor:
             condition=condition,
             quantity=quantity,
             urgency=urgency,
-            preferences=[],
+            preferences=preferences,
             confidence=confidence,
             other_products=others,
             ambiguities=ambiguities,
+            headcount=headcount,
         )
 
 
 ANTHROPIC_EXTRACTION_SYSTEM_PROMPT = """You extract structured buyer intent \
-from informal Nigerian WhatsApp messages for a procurement platform called \
-Majo. Respond ONLY with a JSON object matching this exact schema, no \
-other text:
+from informal Nigerian WhatsApp messages (English, Pidgin, campus slang, typos) \
+for a buying assistant called Majo. Respond ONLY with a JSON object matching \
+this exact schema, no other text:
 
 {
-  "category": string or null,
-  "product": string or null,
-  "variant": string or null,
+  "category": one of "electronics", "fashion", "furniture", "food", "services", "school", "other", or null,
+  "product": string or null (short lowercase noun phrase, e.g. "iphone 13", "small chops", "laptop repair"),
+  "variant": string or null (e.g. "128GB"),
   "budget_min": integer or null (in Naira),
   "budget_max": integer or null (in Naira),
   "location": string or null,
-  "condition": string or null ("new", "used", or "used_or_new"),
-  "quantity": integer or null,
-  "urgency": string or null,
-  "preferences": array of strings,
+  "condition": "new", "used", "used_or_new", or null,
+  "quantity": integer or null (number of items),
+  "headcount": integer or null (number of PEOPLE the order is for),
+  "urgency": "urgent" or null,
+  "preferences": array of short strings (stated details with no field of their own),
   "confidence": float between 0 and 1,
-  "other_products": array of strings (further products named besides "product"),
+  "other_products": array of strings (further, SEPARATE products named besides "product"),
   "ambiguities": array of strings, from "condition_conflict" (asks for new AND used),
                  "location_alternatives" (offers two places as options)
 }
 
 Rules:
-- Never invent a value that isn't clearly stated or strongly implied.
-- If information is missing, use null rather than guessing.
-- "k" suffix means thousands of Naira (e.g. "400k" = 400000).
-- Nigerian English, pidgin, and abbreviations are expected input.
+- Never invent a value that isn't clearly stated. Missing means null.
+- Money: "k" means thousands of Naira ("650k" = 650000); "#" and "₦" mean Naira
+  ("#85,000" = 85000). A range ("35-40k") sets budget_min and budget_max.
+- People are NEVER money and NEVER quantity: "small chops for 20 people" has
+  headcount 20 and no budget from that number.
+- Sizes and units are never money: "20,000mAh", "43 inch", "3kg", "size 42",
+  "128gb", "5 reams" (quantity 5).
+- Unclear shorthand ("my budget 6.5") is not a budget: leave it null.
+- Greetings, thanks, jokes, complaints and questions about Majo itself are not
+  requests: product null, confidence 0.
+- A service request names the service as the product ("barber", "laundry",
+  "phone screen repair", "catering"); what it is for is not another product.
+- A meal ("jollof rice and chicken"), a stationery list, or an accessory bought
+  with a product ("ps5 plus 2 controllers") is ONE order: do not list the
+  other items in other_products.
 """
+
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
+
+
+def anthropic_model() -> str:
+    """Pilot batch: the model is configuration (ANTHROPIC_MODEL), not code."""
+    return (os.getenv("ANTHROPIC_MODEL") or "").strip() or DEFAULT_ANTHROPIC_MODEL
+
+
+def anthropic_timeout() -> float:
+    try:
+        return float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "10"))
+    except ValueError:
+        return 10.0
+
+
+def _parse_json_object(raw_text: str) -> dict:
+    """The model is told to answer with JSON only; tolerate a code fence or
+    a sentence around it, never anything that is not one JSON object."""
+    t = raw_text.strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        t = t[t.find("{"):] if "{" in t else t
+    start, end = t.find("{"), t.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object in model output")
+    obj = json.loads(t[start:end + 1])
+    if not isinstance(obj, dict):
+        raise ValueError("model output is not a JSON object")
+    return obj
+
+
+def _call_anthropic(api_key: str, system: str, text: str, max_tokens: int) -> str:
+    import httpx
+
+    resp = httpx.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": anthropic_model(),
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": text}],
+        },
+        timeout=anthropic_timeout(),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return "".join(block["text"] for block in data["content"] if block["type"] == "text")
+
+
+# Amounts a message can support: every number, read as plain Naira, as "k"
+# thousands and as "m" millions, after counts/sizes/units are blanked out.
+_AMOUNT_TOKEN = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(k|m|million)?\b", re.I)
+
+
+def supported_amounts(text: str) -> set:
+    out = set()
+    masked = mask_non_money(text)
+    for m in RANGE_PATTERN.finditer(masked):  # "35-40k": the "k" covers both ends
+        out.update({_to_naira(m.group(1)), _to_naira(m.group(2))})
+    for m in _AMOUNT_TOKEN.finditer(masked):
+        try:
+            n = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        unit = (m.group(2) or "").lower()
+        if unit == "k":
+            out.add(int(round(n * 1000)))
+        elif unit in ("m", "million"):
+            out.add(int(round(n * 1_000_000)))
+        else:
+            out.add(int(round(n)))
+    return out
+
+
+def guard_llm_result(text: str, r: ExtractionResult) -> ExtractionResult:
+    """Deterministic checks on what the model proposed (it interprets; it
+    never decides). A budget the message cannot support is dropped, never
+    kept: a missing budget costs one question, an invented one misleads
+    vendors."""
+    amounts = supported_amounts(text)
+    for name in ("budget_min", "budget_max"):
+        v = getattr(r, name)
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v <= 0 or v not in amounts):
+            r.budget_min, r.budget_max = None, None
+            break
+    if r.budget_min is not None and r.budget_max is not None and r.budget_min > r.budget_max:
+        r.budget_min, r.budget_max = r.budget_max, r.budget_min
+    hc = extract_headcount(text)
+    if not isinstance(r.headcount, int) or isinstance(r.headcount, bool) or r.headcount <= 0:
+        r.headcount = hc
+    if r.headcount and r.quantity == r.headcount and hc == r.headcount:
+        r.quantity = None
+    if not isinstance(r.quantity, int) or isinstance(r.quantity, bool) or r.quantity <= 0:
+        r.quantity = None
+    r.preferences = [str(p) for p in (r.preferences or []) if str(p).strip()]
+    if r.headcount and f"for {r.headcount} people" not in r.preferences:
+        r.preferences.append(f"for {r.headcount} people")
+    r.other_products = [str(p).lower() for p in (r.other_products or []) if str(p).strip()]
+    r.ambiguities = [a for a in (r.ambiguities or []) if a in ("condition_conflict", "location_alternatives")]
+    if r.product is not None:
+        r.product = str(r.product).strip().lower() or None
+    if r.condition not in (None, "new", "used", "used_or_new"):
+        r.condition = None
+    try:
+        r.confidence = round(max(0.0, min(float(r.confidence or 0.0), 1.0)), 2)
+    except (TypeError, ValueError):
+        r.confidence = 0.0
+    if not r.product:
+        r.confidence = 0.0
+    return r
 
 
 class AnthropicExtractor:
     """
     LLM-backed extractor using the Anthropic API. Only used when
-    ANTHROPIC_API_KEY is present. Per Middleman_Technical_Spec_v1 §3,
-    this should be the "cheapest reliable" model — Haiku-class models are
-    the appropriate choice for this task's cost/quality tradeoff.
+    ANTHROPIC_API_KEY is present. The model is ANTHROPIC_MODEL (default
+    claude-haiku-5-5): the cheapest reliable model for this task. Its output
+    passes guard_llm_result before anything reaches the Go side.
     """
+
+    method = "anthropic"
 
     def __init__(self, api_key: str):
         self.api_key = api_key
 
     def extract(self, text: str) -> ExtractionResult:
-        import httpx
-
-        resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 500,
-                "system": ANTHROPIC_EXTRACTION_SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": text}],
-            },
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw_text = "".join(
-            block["text"] for block in data["content"] if block["type"] == "text"
-        )
-        parsed = json.loads(raw_text)
+        parsed = _parse_json_object(_call_anthropic(self.api_key, ANTHROPIC_EXTRACTION_SYSTEM_PROMPT, text, 500))
         known = set(ExtractionResult.__dataclass_fields__)
-        return ExtractionResult(**{k: v for k, v in parsed.items() if k in known})
+        return guard_llm_result(text, ExtractionResult(**{k: v for k, v in parsed.items() if k in known}))
 
 
 def get_extractor():
@@ -467,10 +787,11 @@ def get_extractor():
     Composition point: returns the AnthropicExtractor if a key is
     configured, otherwise falls back to the free heuristic extractor.
     Callers should still catch exceptions from .extract() and fall back
-    to the heuristic result — see main.py.
+    to the heuristic result — see main.py. EXTRACTOR=heuristic forces the
+    heuristic even with a key set (a switch for the pilot).
     """
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    if api_key:
+    if api_key and os.getenv("EXTRACTOR", "").strip().lower() != "heuristic":
         return AnthropicExtractor(api_key)
     return HeuristicExtractor()
 
@@ -623,27 +944,14 @@ class AnthropicVendorResponseExtractor:
         self.api_key = api_key
 
     def extract(self, text: str) -> VendorResponseExtractionResult:
-        import httpx
-
-        resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 300,
-                "system": ANTHROPIC_VENDOR_RESPONSE_SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": text}],
-            },
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw_text = "".join(b["text"] for b in data["content"] if b["type"] == "text")
-        parsed = json.loads(raw_text)
+        parsed = _parse_json_object(_call_anthropic(self.api_key, ANTHROPIC_VENDOR_RESPONSE_SYSTEM_PROMPT, text, 300))
+        known = set(VendorResponseExtractionResult.__dataclass_fields__) - {"review_state"}
+        parsed = {k: v for k, v in parsed.items() if k in known}
+        if parsed.get("status") not in ("AVAILABLE", "UNAVAILABLE", "CAN_SOURCE", "ALTERNATIVE", "UNCLASSIFIED"):
+            parsed["status"] = "UNCLASSIFIED"
+        price = parsed.get("price")
+        if price is not None and (not isinstance(price, int) or isinstance(price, bool) or price not in supported_amounts(text)):
+            parsed["price"] = None  # a price the reply cannot support is dropped (pilot batch)
         review_state = "NEEDS_REVIEW" if parsed.get("status") == "UNCLASSIFIED" else "REVIEWED"
         return VendorResponseExtractionResult(review_state=review_state, **parsed)
 

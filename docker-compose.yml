@@ -24,6 +24,11 @@ services:
       # Sentry-protocol endpoint) only when SENTRY_DSN is set.
       SENTRY_DSN: ${AI_SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
+      # Pilot batch: the AI extractor. Without a key the free heuristic runs.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
+      ANTHROPIC_TIMEOUT_SECONDS: ${ANTHROPIC_TIMEOUT_SECONDS:-10}
+      EXTRACTOR: ${EXTRACTOR:-}
     ports:
       - "8000:8000"
     healthcheck:

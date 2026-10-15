@@ -422,6 +422,7 @@ func loadAutonomy(cfg *Config) error {
 		}
 		*d.dest = v
 	}
+	p.DefaultLocation = strings.TrimSpace(os.Getenv("PILOT_DEFAULT_LOCATION"))
 	if v := os.Getenv("AUTO_BROADEN_EXCLUDED_CATEGORIES"); v != "" {
 		for _, c := range splitList(v) {
 			p.BroadenExcludedCategories = append(p.BroadenExcludedCategories, strings.ToLower(c))

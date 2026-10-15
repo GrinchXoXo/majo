@@ -323,6 +323,20 @@ func (e *Engine) Recover(ctx context.Context) {
 
 // ---- confirmation --------------------------------------------------------------
 
+// KnownLocation is where Majo takes a request to be when the buyer did not
+// say: what it already knows about the buyer first, then the one-campus
+// pilot default (PILOT_DEFAULT_LOCATION), else nothing (Majo asks). The
+// second value records the source in the decision log.
+func KnownLocation(fromContext, pilotDefault string) (string, string) {
+	if fromContext != "" {
+		return fromContext, "buyer_context"
+	}
+	if pilotDefault != "" {
+		return pilotDefault, "pilot_default"
+	}
+	return "", ""
+}
+
 func (e *Engine) decideConfirmation(ctx context.Context, req *request.BuyerRequest) error {
 	f, p := e.cfg.Flags, e.cfg.Params
 	if !f.AutoConfirmClearRequests {
@@ -334,14 +348,18 @@ func (e *Engine) decideConfirmation(ctx context.Context, req *request.BuyerReque
 		return err
 	}
 	h := HistoryFrom(cs)
-	known := ""
+	fromContext := ""
 	if bc, err := e.ctxStore.BuyerContext(ctx, req.ConversationID, req.BuyerID, e.now().Add(-p.ContextWindow)); err == nil && bc != nil {
-		known = bc.KnownLocation
+		fromContext = bc.KnownLocation
 	}
+	known, locSource := KnownLocation(fromContext, p.DefaultLocation)
 	a := Assess(req, known, h, p)
 	conf := req.Confidence
 	inputs := map[string]any{"completeness": string(req.Completeness), "asked": h.Asked, "skipped": h.Skipped, "known_location": known,
 		"understanding": a.Outcome}
+	if locSource != "" {
+		inputs["known_location_source"] = locSource
+	}
 	if a.Hold {
 		// Restricted item: never confirmed or routed automatically. The
 		// request stays in review; an operator decides (override confirm,

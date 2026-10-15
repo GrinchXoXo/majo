@@ -52,7 +52,9 @@ def test_vague_request_extracts_nothing_confidently():
 def test_quantity_word_form():
     result = extractor.extract("I need two office chairs in Benin")
     assert result.quantity == 2
-    assert result.product == "chair"
+    # Pilot batch: the more specific name the buyer used ("office chair"),
+    # not the first vocabulary word ("chair").
+    assert result.product == "office chair"
     assert result.location == "Benin City"
 
 

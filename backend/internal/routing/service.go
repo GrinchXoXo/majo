@@ -1225,6 +1225,13 @@ func buildVendorRequestMessage(ref string, req *request.BuyerRequest) string {
 	if req.Location != nil {
 		msg += fmt.Sprintf("\n%s", *req.Location)
 	}
+	// Pilot batch: details the buyer stated that have no field of their own
+	// ("for 20 people") so a caterer can quote.
+	for _, p := range req.Preferences {
+		if strings.TrimSpace(p) != "" {
+			msg += "\n" + p
+		}
+	}
 	msg += "\n\nCan you supply this? (Available / Can Source / Unavailable)"
 	return msg
 }

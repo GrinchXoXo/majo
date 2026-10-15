@@ -45,7 +45,8 @@ def test_location_alternatives():
 
 def test_nigerian_phone_brands():
     r = h.extract("tecno camon 20 in benin")
-    assert r.product == "tecno" and r.category == "electronics" and r.location == "Benin City"
+    # Pilot batch: the brand qualifies the model ("tecno camon"), like "samsung tv".
+    assert r.product == "tecno camon" and r.category == "electronics" and r.location == "Benin City"
 
 
 def test_supply_extraction_uses_whole_words_too():

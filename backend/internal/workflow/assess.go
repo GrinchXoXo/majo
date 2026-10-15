@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/middleman/backend/internal/autonomy"
 	"github.com/middleman/backend/internal/request"
@@ -366,5 +367,62 @@ func SmallTalk(text string) string {
 	case greetings[t] || greetings[autonomy.Normalize(text)]:
 		return "greeting"
 	}
-	return ""
+	return smallTalkClauses(raw)
+}
+
+// Pilot batch: Nigerian small talk rarely arrives as one bare phrase. "good
+// morning o, how una dey", "thank you jare 🙏", "lol" and "una dey there?"
+// each opened a BuyerRequest and got "what are you looking for?". A message
+// is small talk when EVERY clause is a greeting, a courtesy, a presence check
+// or laughter once Pidgin particles and emoji are removed. Any other word
+// ("good morning, I need a fridge") still makes it a request.
+var presenceChecks = map[string]bool{"una dey there": true, "you dey there": true, "are you there": true, "anybody there": true,
+	"is anyone there": true, "how una dey": true, "how body": true, "how una": true, "how your side": true, "hope you dey fine": true,
+	"hope una dey fine": true, "how is it going": true, "how you doing": true, "how u dey": true, "hw far": true, "how far na": true}
+var laughter = map[string]bool{"lol": true, "lmao": true, "lmfao": true, "haha": true, "hahaha": true, "hehe": true, "rofl": true}
+var trailingParticles = []string{" ooo", " oo", " o", " jare", " sef", " abeg", " please", " pls", " biko", " my guy", " boss",
+	" bro", " guys", " una", " sir", " ma", " dear"}
+
+func smallTalkClauses(raw string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '\'' || r == ' ':
+			b.WriteRune(r)
+		case r == ',' || r == '.' || r == '!' || r == '?' || r == ';' || r == '\n':
+			b.WriteRune('|')
+		default:
+			b.WriteRune(' ')
+		}
+	}
+	kind, seen := "ack", false
+	for _, clause := range strings.Split(b.String(), "|") {
+		c := strings.Join(strings.Fields(clause), " ")
+		if c == "" {
+			continue
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, p := range trailingParticles {
+				if strings.HasSuffix(c, p) && len(c) > len(p) {
+					c, changed = strings.TrimSuffix(c, p), true
+				}
+			}
+		}
+		seen = true
+		switch {
+		case greetings[c] || presenceChecks[c]:
+			kind = "greeting"
+		case acknowledgements[c] || laughter[c]:
+		default:
+			return ""
+		}
+	}
+	if !seen {
+		if strings.TrimSpace(raw) == "" {
+			return ""
+		}
+		return "ack" // only emoji / punctuation ("😂😂", "🙏🏾")
+	}
+	return kind
 }

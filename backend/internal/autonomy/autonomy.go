@@ -92,6 +92,11 @@ type Params struct {
 	// names it is still taken as its reply for this long (the buyer's
 	// request must still be open). AUTO_LATE_REPLY_WINDOW.
 	LateReplyWindow time.Duration
+	// DefaultLocation (PILOT_DEFAULT_LOCATION, pilot batch): in a one-campus
+	// pilot, a request with no location and nothing known about the buyer's
+	// area is taken to be for this place instead of asking "where are you?".
+	// Empty (the default) keeps asking.
+	DefaultLocation string
 }
 
 // DefaultParams are the starting hypotheses (documented in .env.example).

@@ -1,0 +1,813 @@
+[
+ {
+  "id": 1,
+  "category": "phones/electronics",
+  "message": "abeg I need used iPhone 13 128gb around 650k",
+  "intent": "Used iPhone 13 128GB, budget ~₦650k",
+  "kind": "request",
+  "product_any": [
+   "iphone 13"
+  ],
+  "budget": [
+   650000,
+   650000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 2,
+  "category": "phones/electronics",
+  "message": "Good morning, I want to buy a laptop for school, budget 250,000 naira, fairly used is fine",
+  "intent": "Fairly used laptop for school, ₦250k",
+  "kind": "request",
+  "product_any": [
+   "laptop"
+  ],
+  "budget": [
+   250000,
+   250000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 3,
+  "category": "phones/electronics",
+  "message": "hw far, I get 450k, I wan get brand new Techno Camon, sharp one",
+  "intent": "Brand new Tecno Camon, ~₦450k",
+  "kind": "request",
+  "product_any": [
+   "tecno",
+   "camon"
+  ],
+  "budget": [
+   450000,
+   450000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 4,
+  "category": "phones/electronics",
+  "message": "pls am looking for a power bank 20,000mah nd a fast charger",
+  "intent": "20,000mAh power bank + fast charger",
+  "kind": "request",
+  "product_any": [
+   "power bank"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 5,
+  "category": "phones/electronics",
+  "message": "I need tv 43 inch smart TV budget #85,000",
+  "intent": "43-inch smart TV, ₦85k",
+  "kind": "request",
+  "product_any": [
+   "tv"
+  ],
+  "budget": [
+   85000,
+   85000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 6,
+  "category": "phones/electronics",
+  "message": "anyone selling fairly used PS5 controller I need 2",
+  "intent": "2 fairly used PS5 controllers",
+  "kind": "request",
+  "product_any": [
+   "controller"
+  ],
+  "budget": null,
+  "quantity": 2,
+  "headcount": null
+ },
+ {
+  "id": 7,
+  "category": "phones/electronics",
+  "message": "monitor 24inch HDMI dey? my budget be 60k",
+  "intent": "24-inch monitor with HDMI, ~₦60k",
+  "kind": "request",
+  "product_any": [
+   "monitor"
+  ],
+  "budget": [
+   60000,
+   60000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 8,
+  "category": "phones/electronics",
+  "message": "person dey sell original iphone 14 pro? my budget 6.5, abeg",
+  "intent": "iPhone 14 Pro, budget written \"6.5\"",
+  "kind": "request",
+  "product_any": [
+   "iphone 14"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 9,
+  "category": "fashion",
+  "message": "abeg I wan buy sneaker, size 43, budget 35k, sharp one",
+  "intent": "Sneakers size 43, ~₦35k",
+  "kind": "request",
+  "product_any": [
+   "sneaker"
+  ],
+  "budget": [
+   35000,
+   35000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 10,
+  "category": "fashion",
+  "message": "Good evening. Please I need two pairs of straight-fit jeans for ladies, size 12, within 40k",
+  "intent": "2 pairs ladies' straight jeans size 12, ≤₦40k",
+  "kind": "request",
+  "product_any": [
+   "jean"
+  ],
+  "budget": [
+   40000,
+   40000
+  ],
+  "quantity": 2,
+  "headcount": null
+ },
+ {
+  "id": 11,
+  "category": "fashion",
+  "message": "where una dey sell fine jacket, the leather one, I get 28k",
+  "intent": "Leather jacket, ~₦28k",
+  "kind": "request",
+  "product_any": [
+   "jacket"
+  ],
+  "budget": [
+   28000,
+   28000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 12,
+  "category": "fashion",
+  "message": "hw much be this ankara gown wey dey trending? I want one for owambe, budget 20k",
+  "intent": "Ankara gown ~₦20k for a party",
+  "kind": "request",
+  "product_any": [
+   "gown",
+   "ankara"
+  ],
+  "budget": [
+   20000,
+   20000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 13,
+  "category": "fashion",
+  "message": "pls I need cap, new era one, 8k no more",
+  "intent": "Cap (New Era style), ~₦8k",
+  "kind": "request",
+  "product_any": [
+   "cap"
+  ],
+  "budget": [
+   8000,
+   8000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 14,
+  "category": "fashion",
+  "message": "size 42 trainers, white, abeg price no pass 15k",
+  "intent": "White trainers size 42, ≤₦15k",
+  "kind": "request",
+  "product_any": [
+   "trainer"
+  ],
+  "budget": [
+   15000,
+   15000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 15,
+  "category": "fashion",
+  "message": "am looking for perfume, the sweet one, ladies, 10-15k range",
+  "intent": "Ladies' perfume, ₦10–15k",
+  "kind": "request",
+  "product_any": [
+   "perfume"
+  ],
+  "budget": [
+   10000,
+   15000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 16,
+  "category": "fashion",
+  "message": "bag bag bag!! I need school bag wey fit laptop, 12k",
+  "intent": "School bag that fits a laptop, ~₦12k",
+  "kind": "request",
+  "product_any": [
+   "bag"
+  ],
+  "budget": [
+   12000,
+   12000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 17,
+  "category": "food/catering",
+  "message": "abeg I need small chops for 20 people on Saturday, budget 45,000",
+  "intent": "Small chops catering for 20, ~₦45k",
+  "kind": "request",
+  "product_any": [
+   "small chops"
+  ],
+  "budget": [
+   45000,
+   45000
+  ],
+  "quantity": null,
+  "headcount": 20
+ },
+ {
+  "id": 18,
+  "category": "food/catering",
+  "message": "pls I wan order jollof rice and chicken, family size, for hostel",
+  "intent": "Family-size jollof rice + chicken for hostel",
+  "kind": "request",
+  "product_any": [
+   "jollof",
+   "rice",
+   "chicken"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 19,
+  "category": "food/catering",
+  "message": "we need chinchin and popcorn in bulk for event, 500 people, hw much",
+  "intent": "Bulk chinchin/popcorn for ~500-person event",
+  "kind": "request",
+  "product_any": [
+   "chinchin",
+   "popcorn"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": 500
+ },
+ {
+  "id": 20,
+  "category": "food/catering",
+  "message": "any caterer wey dey do small chops for birthday party? 30 guests I get 60k abeg no disappoint we go pay sharp sharp on the day just tell me wetin you need from us",
+  "intent": "Birthday catering, 30 guests ~₦60k",
+  "kind": "request",
+  "product_any": [
+   "small chops",
+   "catering"
+  ],
+  "budget": [
+   60000,
+   60000
+  ],
+  "quantity": null,
+  "headcount": 30
+ },
+ {
+  "id": 21,
+  "category": "food/catering",
+  "message": "I dey look for person wey fit bake cake, chocolate, 3kg, 15k",
+  "intent": "3kg chocolate cake, ~₦15k",
+  "kind": "request",
+  "product_any": [
+   "cake"
+  ],
+  "budget": [
+   15000,
+   15000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 22,
+  "category": "food/catering",
+  "message": "need suya for tonight, big portion, like 10 sticks, abeg",
+  "intent": "Suya, ~10 sticks, tonight",
+  "kind": "request",
+  "product_any": [
+   "suya"
+  ],
+  "budget": null,
+  "quantity": 10,
+  "headcount": null
+ },
+ {
+  "id": 23,
+  "category": "food/catering",
+  "message": "Hello, please how much for a drum of fried rice for 50 people?",
+  "intent": "Fried rice catering for 50, price inquiry",
+  "kind": "request",
+  "product_any": [
+   "rice"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": 50
+ },
+ {
+  "id": 24,
+  "category": "food/catering",
+  "message": "I wan chop, where I fit buy amala around here, cheap cheap",
+  "intent": "Nearby affordable amala",
+  "kind": "request",
+  "product_any": [
+   "amala"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 25,
+  "category": "second-hand",
+  "message": "abeg I need fairly used fridge, small one, 45k",
+  "intent": "Fairly used mini fridge ~₦45k",
+  "kind": "request",
+  "product_any": [
+   "fridge"
+  ],
+  "budget": [
+   45000,
+   45000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 26,
+  "category": "second-hand",
+  "message": "anyone selling okrika clothes in bulk? I wan start small business",
+  "intent": "Bulk second-hand clothes for resale",
+  "kind": "request",
+  "product_any": [
+   "clothes",
+   "okrika"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 27,
+  "category": "second-hand",
+  "message": "I get 30k, I wan get fairly used blender wey work well",
+  "intent": "Fairly used working blender, ₦30k",
+  "kind": "request",
+  "product_any": [
+   "blender"
+  ],
+  "budget": [
+   30000,
+   30000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 28,
+  "category": "second-hand",
+  "message": "pls I need fairly used mattress, 619 size, 18k",
+  "intent": "Fairly used mattress (619) ~₦18k",
+  "kind": "request",
+  "product_any": [
+   "mattress"
+  ],
+  "budget": [
+   18000,
+   18000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 29,
+  "category": "second-hand",
+  "message": "second hand shoe size 41, no be okrika oh, neat one, 10k",
+  "intent": "Neat second-hand shoes size 41 ~₦10k",
+  "kind": "request",
+  "product_any": [
+   "shoe"
+  ],
+  "budget": [
+   10000,
+   10000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 30,
+  "category": "second-hand",
+  "message": "my lodgemate say him get fairly used standing fan, 12k, I need am",
+  "intent": "Fairly used standing fan ~₦12k",
+  "kind": "request",
+  "product_any": [
+   "fan"
+  ],
+  "budget": [
+   12000,
+   12000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 31,
+  "category": "second-hand",
+  "message": "abeg anyone wey dey sell used generator, small gen, 35-40k",
+  "intent": "Small fairly used generator ₦35–40k",
+  "kind": "request",
+  "product_any": [
+   "generator"
+  ],
+  "budget": [
+   35000,
+   40000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 32,
+  "category": "second-hand",
+  "message": "I need fairly used office chair, leather, 20k max",
+  "intent": "Fairly used leather office chair ≤₦20k",
+  "kind": "request",
+  "product_any": [
+   "chair"
+  ],
+  "budget": [
+   20000,
+   20000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 33,
+  "category": "services",
+  "message": "abeg I need barber wey fit come hostel, sharp sharp, I dey ready",
+  "intent": "Barber willing to come to the hostel",
+  "kind": "request",
+  "product_any": [
+   "barber"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 34,
+  "category": "services",
+  "message": "pls I wan fix my phone screen, Tecno spark, how much dey cost",
+  "intent": "Phone screen replacement, price inquiry",
+  "kind": "request",
+  "product_any": [
+   "screen"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 35,
+  "category": "services",
+  "message": "I dey look for laundry wey dey wash bedsheet, 2 pieces, 2k",
+  "intent": "Laundry for 2 bedsheets ~₦2k",
+  "kind": "request",
+  "product_any": [
+   "laundry"
+  ],
+  "budget": [
+   2000,
+   2000
+  ],
+  "quantity": 2,
+  "headcount": null
+ },
+ {
+  "id": 36,
+  "category": "services",
+  "message": "my laptop dey slow, virus dey inside, I need person wey fit clean am",
+  "intent": "Laptop cleaning / virus removal",
+  "kind": "request",
+  "product_any": [
+   "laptop"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 37,
+  "category": "services",
+  "message": "any good nail technician around, I wan do gel, tomorrow, 5k budget",
+  "intent": "Gel nails tomorrow ~₦5k",
+  "kind": "request",
+  "product_any": [
+   "nail"
+  ],
+  "budget": [
+   5000,
+   5000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 38,
+  "category": "services",
+  "message": "electrician wey wan wire my room, 2 sockets + light, how much",
+  "intent": "Electrician: 2 sockets + wiring, price check",
+  "kind": "request",
+  "product_any": [
+   "electrician"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 39,
+  "category": "services",
+  "message": "please I need someone to help me move small things from lodge to another lodge, 5k",
+  "intent": "Small moving help ~₦5k",
+  "kind": "request",
+  "product_any": [
+   "moving"
+  ],
+  "budget": [
+   5000,
+   5000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 40,
+  "category": "services",
+  "message": "stylist wey dey do gele for event, I need am Saturday morning, 3k",
+  "intent": "Gele tying for event Saturday ~₦3k",
+  "kind": "request",
+  "product_any": [
+   "gele"
+  ],
+  "budget": [
+   3000,
+   3000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 41,
+  "category": "school items",
+  "message": "abeg I need calculator, fx-991ex, original, 15k",
+  "intent": "Original fx-991EX calculator ~₦15k",
+  "kind": "request",
+  "product_any": [
+   "calculator"
+  ],
+  "budget": [
+   15000,
+   15000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 42,
+  "category": "school items",
+  "message": "where I fit buy lab coat, size M, chemistry dept",
+  "intent": "Lab coat size M",
+  "kind": "request",
+  "product_any": [
+   "lab coat"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 43,
+  "category": "school items",
+  "message": "I need A4 paper, 5 reams, and biro, thick one, for handout",
+  "intent": "5 reams A4 paper + thick pens",
+  "kind": "request",
+  "product_any": [
+   "paper"
+  ],
+  "budget": null,
+  "quantity": 5,
+  "headcount": null
+ },
+ {
+  "id": 44,
+  "category": "school items",
+  "message": "pls I wan buy drawing board and instruments, engineering, 8k",
+  "intent": "Engineering drawing board + instruments ~₦8k",
+  "kind": "request",
+  "product_any": [
+   "drawing board"
+  ],
+  "budget": [
+   8000,
+   8000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 45,
+  "category": "school items",
+  "message": "anyone dey sell laptop stand nd mouse, 4k total",
+  "intent": "Laptop stand + mouse ~₦4k",
+  "kind": "request",
+  "product_any": [
+   "laptop stand"
+  ],
+  "budget": [
+   4000,
+   4000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 46,
+  "category": "school items",
+  "message": "I need school shoes, black, size 40, for industrial training",
+  "intent": "Black school shoes size 40 for IT",
+  "kind": "request",
+  "product_any": [
+   "shoe"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 47,
+  "category": "school items",
+  "message": "abeg textbook for calculus 1, fairly used ok, 6k",
+  "intent": "Fairly used calculus textbook ~₦6k",
+  "kind": "request",
+  "product_any": [
+   "textbook"
+  ],
+  "budget": [
+   6000,
+   6000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 48,
+  "category": "school items",
+  "message": "we need printing, handout, 100 copies, colour, hw much",
+  "intent": "100 colour copies, price inquiry",
+  "kind": "request",
+  "product_any": [
+   "printing"
+  ],
+  "budget": null,
+  "quantity": 100,
+  "headcount": null
+ },
+ {
+  "id": 49,
+  "category": "random",
+  "message": "hi",
+  "intent": "not a request",
+  "kind": "non_request"
+ },
+ {
+  "id": 50,
+  "category": "random",
+  "message": "thanks so much",
+  "intent": "not a request",
+  "kind": "non_request"
+ },
+ {
+  "id": 51,
+  "category": "random",
+  "message": "ok",
+  "intent": "not a request",
+  "kind": "non_request"
+ },
+ {
+  "id": 52,
+  "category": "random",
+  "message": "abeg this service no dey work, I don send message since, nobody answer me o",
+  "intent": "not a request (complaint)",
+  "kind": "non_request"
+ },
+ {
+  "id": 53,
+  "category": "random",
+  "message": "if na shopping na me be CEO 😂😂",
+  "intent": "not a request (joke)",
+  "kind": "non_request"
+ },
+ {
+  "id": 54,
+  "category": "random",
+  "message": "good morning o, how una dey",
+  "intent": "not a request (greeting)",
+  "kind": "non_request"
+ },
+ {
+  "id": 55,
+  "category": "random",
+  "message": "hw far, e get small thing wey I wan buy but I no sure wetin e be yet",
+  "intent": "unclear",
+  "kind": "vague"
+ },
+ {
+  "id": 56,
+  "category": "random",
+  "message": "abeg na foodstuff I wan buy but I forgor the name 😅, I go check",
+  "intent": "unclear",
+  "kind": "vague"
+ },
+ {
+  "id": 57,
+  "category": "random",
+  "message": "my friend say una dey sell phone wey cheap, na true?",
+  "intent": "unclear (question about the service)",
+  "kind": "vague_soft",
+  "product_any": [
+   "phone"
+  ]
+ },
+ {
+  "id": 58,
+  "category": "random",
+  "message": "this thing dey work? I dey try since morning",
+  "intent": "unclear (question)",
+  "kind": "vague"
+ },
+ {
+  "id": 59,
+  "category": "random",
+  "message": "when una go open for Port Harcourt?",
+  "intent": "unclear (coverage question)",
+  "kind": "vague"
+ },
+ {
+  "id": 60,
+  "category": "random",
+  "message": "one day na una I go buy car 😂",
+  "intent": "not a request (joke)",
+  "kind": "non_request"
+ }
+]

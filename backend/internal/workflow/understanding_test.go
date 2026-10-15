@@ -73,6 +73,21 @@ func TestSmallTalkIsExactWholeMessage(t *testing.T) {
 	}
 }
 
+// Pilot batch: Pidgin small talk is not demand.
+func TestSmallTalkPidginAndClauses(t *testing.T) {
+	for in, want := range map[string]string{
+		"good morning o, how una dey": "greeting", "una dey there?": "greeting", "hw far boss": "greeting",
+		"thank you jare 🙏": "ack", "lol": "ack", "😂😂": "ack", "thanks o, noted": "ack", "🙏🏾": "ack",
+		// still requests / not small talk
+		"good morning, I need a fridge": "", "how far, I need iphone 13": "", "ok": "", "yes o": "",
+		"lol I need shoes": "", "one day na una I go buy car 😂": "",
+	} {
+		if got := SmallTalk(in); got != want {
+			t.Fatalf("%q: got %q want %q", in, got, want)
+		}
+	}
+}
+
 func TestProductChoiceAnswers(t *testing.T) {
 	opts := []autonomy.Option{{Key: "1", Label: "iphone 13"}, {Key: "2", Label: "laptop"}}
 	for in, want := range map[string]string{"2": "laptop", "the laptop": "laptop", "iphone first": "iphone 13", "#1": "iphone 13"} {
@@ -99,5 +114,33 @@ func TestFirstReadingNeverCreatesJunkRequests(t *testing.T) {
 	}
 	if FirstReading("how much is the iphone 13 in lagos", 0) != "" {
 		t.Fatalf("a named product is a request")
+	}
+}
+
+// Pilot batch: PILOT_DEFAULT_LOCATION fills a missing location instead of
+// asking, but never overrides what the buyer said or what Majo knows.
+func TestPilotDefaultLocation(t *testing.T) {
+	if loc, src := KnownLocation("Lagos", "Benin City"); loc != "Lagos" || src != "buyer_context" {
+		t.Fatalf("known context wins: %s %s", loc, src)
+	}
+	if loc, src := KnownLocation("", "Benin City"); loc != "Benin City" || src != "pilot_default" {
+		t.Fatalf("default used: %s %s", loc, src)
+	}
+	if loc, src := KnownLocation("", ""); loc != "" || src != "" {
+		t.Fatalf("no default: keep asking")
+	}
+	p := autonomy.DefaultParams()
+	h := History{Asked: map[string]int{}, Skipped: map[string]bool{}}
+	req := reqWith("abeg I need small chops for 20 people, budget 45,000", "small chops", "", nil)
+	if a := Assess(req, "", h, p); a.Outcome != OutcomeMissing || a.Missing != "location" {
+		t.Fatalf("without a default Majo asks for the location: %+v", a)
+	}
+	loc, _ := KnownLocation("", "Benin City")
+	if a := Assess(req, loc, h, p); a.Outcome != OutcomeClear || a.FillLocation != "Benin City" {
+		t.Fatalf("with the default the request is clear and filled: %+v", a)
+	}
+	said := reqWith("I need fridge in lagos", "fridge", "Lagos", nil)
+	if a := Assess(said, loc, h, p); a.FillLocation != "" {
+		t.Fatalf("the buyer's own location is never replaced: %+v", a)
 	}
 }

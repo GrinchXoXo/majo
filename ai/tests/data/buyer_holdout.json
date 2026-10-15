@@ -1,0 +1,509 @@
+[
+ {
+  "id": 101,
+  "category": "phones/electronics",
+  "message": "abeg who get clean iphone 11, 64gb, 220k max",
+  "kind": "request",
+  "product_any": [
+   "iphone 11"
+  ],
+  "budget": [
+   220000,
+   220000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 102,
+  "category": "phones/electronics",
+  "message": "I need ring light for my content, around 15k",
+  "kind": "request",
+  "product_any": [
+   "ring light"
+  ],
+  "budget": [
+   15000,
+   15000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 103,
+  "category": "phones/electronics",
+  "message": "samsung a14 fairly used, budget 120,000",
+  "kind": "request",
+  "product_any": [
+   "samsung"
+  ],
+  "budget": [
+   120000,
+   120000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 104,
+  "category": "phones/electronics",
+  "message": "need earpiece wey get mic, 5k",
+  "kind": "request",
+  "product_any": [
+   "earpiece"
+  ],
+  "budget": [
+   5000,
+   5000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 105,
+  "category": "phones/electronics",
+  "message": "bluetooth speaker sharp one, 25k to 30k",
+  "kind": "request",
+  "product_any": [
+   "speaker"
+  ],
+  "budget": [
+   25000,
+   30000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 106,
+  "category": "phones/electronics",
+  "message": "who dey sell airpods pro? original abeg",
+  "kind": "request",
+  "product_any": [
+   "airpods"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 107,
+  "category": "fashion",
+  "message": "I wan buy native wear for my convocation, 30k",
+  "kind": "request",
+  "product_any": [
+   "native"
+  ],
+  "budget": [
+   30000,
+   30000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 108,
+  "category": "fashion",
+  "message": "crocs size 44 abeg, 18k",
+  "kind": "request",
+  "product_any": [
+   "crocs"
+  ],
+  "budget": [
+   18000,
+   18000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 109,
+  "category": "fashion",
+  "message": "need 3 plain t-shirts black, size L",
+  "kind": "request",
+  "product_any": [
+   "t-shirt",
+   "shirt"
+  ],
+  "budget": null,
+  "quantity": 3,
+  "headcount": null
+ },
+ {
+  "id": 110,
+  "category": "fashion",
+  "message": "pls I need wristwatch for my guy, birthday, 25k",
+  "kind": "request",
+  "product_any": [
+   "watch"
+  ],
+  "budget": [
+   25000,
+   25000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 111,
+  "category": "fashion",
+  "message": "hair attachment, bone straight, 40k",
+  "kind": "request",
+  "product_any": [
+   "hair",
+   "attachment",
+   "wig"
+  ],
+  "budget": [
+   40000,
+   40000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 112,
+  "category": "food/catering",
+  "message": "pls I need shawarma, 2 plates, beef, tonight",
+  "kind": "request",
+  "product_any": [
+   "shawarma"
+  ],
+  "budget": null,
+  "quantity": 2,
+  "headcount": null
+ },
+ {
+  "id": 113,
+  "category": "food/catering",
+  "message": "can anyone bake birthday cake for 15 people? budget 25k",
+  "kind": "request",
+  "product_any": [
+   "cake"
+  ],
+  "budget": [
+   25000,
+   25000
+  ],
+  "quantity": null,
+  "headcount": 15
+ },
+ {
+  "id": 114,
+  "category": "food/catering",
+  "message": "I need fried rice and turkey for 40 guests on sunday",
+  "kind": "request",
+  "product_any": [
+   "rice"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": 40
+ },
+ {
+  "id": 115,
+  "category": "food/catering",
+  "message": "where I fit get bread wey dey fresh near school",
+  "kind": "request",
+  "product_any": [
+   "bread"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 116,
+  "category": "food/catering",
+  "message": "puff puff for party, 100 pieces, how much",
+  "kind": "request",
+  "product_any": [
+   "puff puff"
+  ],
+  "budget": null,
+  "quantity": 100,
+  "headcount": null
+ },
+ {
+  "id": 117,
+  "category": "food/catering",
+  "message": "we dey find caterer for 200 people dinner, budget 500k",
+  "kind": "request",
+  "product_any": [
+   "catering",
+   "cater"
+  ],
+  "budget": [
+   500000,
+   500000
+  ],
+  "quantity": null,
+  "headcount": 200
+ },
+ {
+  "id": 118,
+  "category": "second-hand",
+  "message": "fairly used rice cooker abeg, 15k",
+  "kind": "request",
+  "product_any": [
+   "rice cooker",
+   "cooker"
+  ],
+  "budget": [
+   15000,
+   15000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 119,
+  "category": "second-hand",
+  "message": "tokunbo laptop core i5, 180k",
+  "kind": "request",
+  "product_any": [
+   "laptop"
+  ],
+  "budget": [
+   180000,
+   180000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 120,
+  "category": "second-hand",
+  "message": "used reading table and chair, 25k for both",
+  "kind": "request",
+  "product_any": [
+   "table"
+  ],
+  "budget": [
+   25000,
+   25000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 121,
+  "category": "second-hand",
+  "message": "I need second hand microwave, 30k",
+  "kind": "request",
+  "product_any": [
+   "microwave"
+  ],
+  "budget": [
+   30000,
+   30000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 122,
+  "category": "second-hand",
+  "message": "fairly used iron, philips, 7k",
+  "kind": "request",
+  "product_any": [
+   "iron"
+  ],
+  "budget": [
+   7000,
+   7000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 123,
+  "category": "services",
+  "message": "I need makeup artist for my dinner on friday, 15k",
+  "kind": "request",
+  "product_any": [
+   "makeup"
+  ],
+  "budget": [
+   15000,
+   15000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 124,
+  "category": "services",
+  "message": "any plumber around? my tap dey leak",
+  "kind": "request",
+  "product_any": [
+   "plumber"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 125,
+  "category": "services",
+  "message": "I want tailor to sew 2 gowns for me, 20k",
+  "kind": "request",
+  "product_any": [
+   "tailor"
+  ],
+  "budget": [
+   20000,
+   20000
+  ],
+  "quantity": 2,
+  "headcount": null
+ },
+ {
+  "id": 126,
+  "category": "services",
+  "message": "photographer for convocation pictures, 50k",
+  "kind": "request",
+  "product_any": [
+   "photographer"
+  ],
+  "budget": [
+   50000,
+   50000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 127,
+  "category": "services",
+  "message": "pls who fit repair my phone charging port",
+  "kind": "request",
+  "product_any": [
+   "repair"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 128,
+  "category": "services",
+  "message": "I need person to braid my hair, knotless, 12k",
+  "kind": "request",
+  "product_any": [
+   "braid",
+   "hair"
+  ],
+  "budget": [
+   12000,
+   12000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 129,
+  "category": "school items",
+  "message": "I need scientific calculator, cheap one",
+  "kind": "request",
+  "product_any": [
+   "calculator"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 130,
+  "category": "school items",
+  "message": "2 packs of A4 paper abeg",
+  "kind": "request",
+  "product_any": [
+   "paper"
+  ],
+  "budget": null,
+  "quantity": 2,
+  "headcount": null
+ },
+ {
+  "id": 131,
+  "category": "school items",
+  "message": "where I fit buy chemistry textbook, fairly used",
+  "kind": "request",
+  "product_any": [
+   "textbook"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 132,
+  "category": "school items",
+  "message": "lab coat size L and goggles",
+  "kind": "request",
+  "product_any": [
+   "lab coat"
+  ],
+  "budget": null,
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 133,
+  "category": "school items",
+  "message": "I need flash drive 32gb, 4k",
+  "kind": "request",
+  "product_any": [
+   "flash"
+  ],
+  "budget": [
+   4000,
+   4000
+  ],
+  "quantity": null,
+  "headcount": null
+ },
+ {
+  "id": 134,
+  "category": "random",
+  "message": "good evening",
+  "kind": "non_request"
+ },
+ {
+  "id": 135,
+  "category": "random",
+  "message": "thank you jare 🙏",
+  "kind": "non_request"
+ },
+ {
+  "id": 136,
+  "category": "random",
+  "message": "lol",
+  "kind": "non_request"
+ },
+ {
+  "id": 137,
+  "category": "random",
+  "message": "una dey there?",
+  "kind": "non_request"
+ },
+ {
+  "id": 138,
+  "category": "random",
+  "message": "I wan buy something but make I think am first",
+  "kind": "vague"
+ },
+ {
+  "id": 139,
+  "category": "random",
+  "message": "how this thing dey work sef?",
+  "kind": "vague"
+ },
+ {
+  "id": 140,
+  "category": "random",
+  "message": "Am I talking to a bot?",
+  "kind": "vague"
+ }
+]

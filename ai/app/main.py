@@ -21,6 +21,7 @@ from app.extraction import (
     extract_supply,
     extract_vendor_response,
     classify_vendor_response,
+    anthropic_model,
 )
 
 from app.errortrack import init_error_tracking
@@ -56,6 +57,12 @@ class ExtractionResult(BaseModel):
     confidence: float = 0.0
     other_products: List[str] = []
     ambiguities: List[str] = []
+    # Pilot batch: people the order is for, and which extractor produced
+    # this result (heuristic | anthropic | heuristic_fallback). The Go side
+    # stores the whole result in buyer_requests.extracted_data.
+    headcount: Optional[int] = None
+    extraction_method: str = "heuristic"
+    model: Optional[str] = None
 
 
 @app.get("/health")
@@ -75,12 +82,15 @@ def extract(req: ExtractionRequest) -> ExtractionResult:
     usable (if less confident) result, and the operator reviews it either way.
     """
     extractor = get_extractor()
+    method = getattr(extractor, "method", "heuristic")
 
     try:
         result = extractor.extract(req.text)
     except Exception as exc:  # noqa: BLE001 - intentionally broad: never lose the message
-        logger.warning("primary extractor failed (%s), falling back to heuristic", exc)
+        # Never log the message text or the key: the exception type is enough.
+        logger.warning("primary extractor failed (%s), falling back to heuristic", type(exc).__name__)
         result = _heuristic_fallback.extract(req.text)
+        method = "heuristic_fallback"
 
     return ExtractionResult(
         category=result.category,
@@ -96,6 +106,9 @@ def extract(req: ExtractionRequest) -> ExtractionResult:
         confidence=result.confidence,
         other_products=getattr(result, "other_products", []) or [],
         ambiguities=getattr(result, "ambiguities", []) or [],
+        headcount=getattr(result, "headcount", None),
+        extraction_method=method,
+        model=anthropic_model() if method == "anthropic" else None,
     )
 
 
