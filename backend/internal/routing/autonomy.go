@@ -64,6 +64,14 @@ type VendorAutonomy struct {
 	Repo   VendorAutonomyRepository
 	Quoted QuotedLookup
 	Now    func() time.Time
+	// Paused (pilot batch item 4): while all automation is paused Majo asks
+	// vendors nothing; their replies are recorded for the operator.
+	Paused func(ctx context.Context) bool
+}
+
+// pausedNow: all automation is paused by an operator.
+func (s *Service) pausedNow(ctx context.Context) bool {
+	return s.auto != nil && s.auto.Paused != nil && s.auto.Paused(ctx)
 }
 
 // SetAutonomy wires the autonomous vendor runtime (nil = legacy behaviour).
@@ -545,6 +553,11 @@ func (s *Service) askWhichRequest(ctx context.Context, v *vendor.Vendor, active 
 	if !s.auto.Flags.AutoResolveVendorContext {
 		return
 	}
+	if s.pausedNow(ctx) {
+		s.recordVendorDecision(ctx, resp.ID, nil, autonomy.DecAskVendorClarification, autonomy.OutcomeDeferred, "",
+			"automation_paused", map[string]any{"open_requests": len(active)})
+		return
+	}
 	list := append([]*VendorRequest{}, active...)
 	sort.SliceStable(list, func(i, j int) bool { return timeOr(list[i].SentAt).After(timeOr(list[j].SentAt)) })
 	if len(list) > 5 {
@@ -582,6 +595,12 @@ func (s *Service) askWhichRequest(ctx context.Context, v *vendor.Vendor, active 
 // from the request (or listing) context.
 func (s *Service) askVendorDetail(ctx context.Context, v *vendor.Vendor, vr *VendorRequest, resp *VendorResponse, attempt int) {
 	if attempt > s.auto.Params.VendorClarifyMaxRounds {
+		return
+	}
+	if s.pausedNow(ctx) {
+		brid := vr.BuyerRequestID
+		s.recordVendorDecision(ctx, resp.ID, &brid, autonomy.DecAskVendorClarification, autonomy.OutcomeDeferred, "",
+			"automation_paused", map[string]any{"attempt": attempt, "vendor_request_id": vr.ID.String()})
 		return
 	}
 	item := "the item"

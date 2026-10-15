@@ -136,6 +136,7 @@ type Engine struct {
 	notices       autonomy.NoticeStore
 	holds         autonomy.HoldStore
 	offerReverter OfferReverter
+	pauses        autonomy.PauseStore // pilot batch item 4: global pause
 }
 
 // OfferReverter returns offers whose delivery the provider later reported
@@ -169,6 +170,8 @@ type Deps struct {
 	Notices        autonomy.NoticeStore
 	Holds          autonomy.HoldStore
 	OfferReverter  OfferReverter
+	// Pilot batch item 4 (optional): the global automation pause.
+	Pauses autonomy.PauseStore
 }
 
 // New builds the engine.
@@ -183,7 +186,8 @@ func New(cfg Config, d Deps) *Engine {
 	return &Engine{cfg: cfg, store: d.Store, ctxStore: d.Context, requests: d.Requests, reqRepo: d.ReqRepo, router: d.Router,
 		routes: d.Routes, listings: d.Listings, vendors: d.Vendors, extractor: d.Extractor, messenger: d.Messenger, convs: d.Convs,
 		enquirer: d.Enquirer, policy: d.Policy, jobs: d.Jobs, events: d.Events, logger: d.Logger, now: time.Now, async: async,
-		vrs: d.VendorRequests, recovery: d.Recovery, notices: d.Notices, holds: d.Holds, offerReverter: d.OfferReverter}
+		vrs: d.VendorRequests, recovery: d.Recovery, notices: d.Notices, holds: d.Holds, offerReverter: d.OfferReverter,
+		pauses: d.Pauses}
 }
 
 // SetClock replaces the clock (tests).

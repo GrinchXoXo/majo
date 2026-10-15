@@ -222,7 +222,7 @@ func newHardeningEnv(t *testing.T, phone, vrStatus string, sentAgo time.Duration
 		ReqRepo: NewRequestRepository(db), Router: env.router, Routes: rr, Extractor: noExtractor{}, Messenger: env.msgr,
 		Convs: NewConversationRepository(db), Jobs: jobStore, Events: NewEventWriter(db), Logger: logger,
 		Async:          func(f func(context.Context)) { f(context.Background()) },
-		VendorRequests: rr, Recovery: wf, Notices: auto, Holds: auto, OfferReverter: NewOfferRepository(db)})
+		VendorRequests: rr, Recovery: wf, Notices: auto, Holds: auto, OfferReverter: NewOfferRepository(db), Pauses: auto})
 	env.worker = jobs.NewWorker(jobStore, jobs.WorkerConfig{PollInterval: 10 * time.Millisecond, Lease: time.Minute, Concurrency: 1,
 		Retry: jobs.RetryPolicy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond}}, logger)
 	env.engine.Register(env.worker)

@@ -210,10 +210,11 @@ func main() {
 		// Phase 4C hardening: vendor-request deadlines and recovery, queued
 		// buyer notices, operator holds, provider-reported failures.
 		VendorRequests: routingRepo, Recovery: workflowRepo, Notices: autonomyRepo, Holds: autonomyRepo, OfferReverter: offerRepo,
+		Pauses: autonomyRepo, // pilot batch item 4: global automation pause
 	})
 	requestService.SetListener(engine)
 	routingService.SetAutonomy(&routing.VendorAutonomy{Flags: cfg.AutonomyFlags, Params: cfg.AutonomyParams, Store: autonomyRepo,
-		Repo: routingRepo, Quoted: convRepo})
+		Repo: routingRepo, Quoted: convRepo, Paused: engine.AutomationPaused})
 	routingService.SetSendFailureListener(engine)
 	routingService.SetLifecycleListener(engine)
 	// Pilot batch item 3: vendor requests outside the 24h window go as the
@@ -423,6 +424,7 @@ func main() {
 	autonomyHandlers := httpserver.NewAutonomyHandlers(cfg.AutonomyFlags, cfg.AutonomyParams, autonomyRepo, autonomyRepo, eventWriter, logger)
 	autonomyHandlers.SetReadvancer(engine)
 	autonomyHandlers.SetControl(engine, messageTrail{workflowRepo, autonomyRepo})
+	autonomyHandlers.SetGlobalControl(engine, autonomyRepo)
 	mux.HandleFunc("GET /api/autonomy/settings", operatorAuth.RequireViewer(autonomyHandlers.Settings))
 	mux.HandleFunc("GET /api/autonomy/metrics", operatorAuth.RequireViewer(autonomyHandlers.Metrics))
 	mux.HandleFunc("GET /api/autonomy/exceptions", operatorAuth.RequireViewer(autonomyHandlers.Exceptions))
@@ -430,6 +432,10 @@ func main() {
 	mux.HandleFunc("GET /api/requests/{id}/autonomy", operatorAuth.RequireViewer(autonomyHandlers.Request))
 	mux.HandleFunc("POST /api/requests/{id}/pause", operatorAuth.Require(autonomyHandlers.Pause))
 	mux.HandleFunc("POST /api/requests/{id}/resume", operatorAuth.Require(autonomyHandlers.Resume))
+	// Pilot batch item 4: pause / resume ALL automation (incident switch).
+	mux.HandleFunc("GET /api/autonomy/pause", operatorAuth.RequireViewer(autonomyHandlers.GlobalPauseStatus))
+	mux.HandleFunc("POST /api/autonomy/pause", operatorAuth.Require(autonomyHandlers.PauseAll))
+	mux.HandleFunc("POST /api/autonomy/resume", operatorAuth.Require(autonomyHandlers.ResumeAll))
 
 	transactionHandlers := httpserver.NewTransactionHandlers(txRepo)
 	mux.HandleFunc("GET /api/transactions/{id}", operatorAuth.RequireViewer(transactionHandlers.Get))

@@ -189,6 +189,10 @@ const (
 	// WorkflowHeld / WorkflowResumed: operator pause of one request.
 	WorkflowHeld    Type = "WORKFLOW_HELD"
 	WorkflowResumed Type = "WORKFLOW_RESUMED"
+	// AutomationPaused / AutomationResumed: operator pause of ALL automation
+	// (pilot batch item 4).
+	AutomationPaused  Type = "AUTOMATION_PAUSED"
+	AutomationResumed Type = "AUTOMATION_RESUMED"
 )
 
 // ActorType identifies who/what caused an event.

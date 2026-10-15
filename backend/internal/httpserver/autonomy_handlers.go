@@ -34,6 +34,8 @@ type AutonomyHandlers struct {
 	advance Readvancer
 	control WorkflowControl // Phase 4C hardening: pause / resume one request
 	trail   MessageTrail
+	global  GlobalControl // pilot batch item 4: pause / resume all automation
+	pauses  PauseHistory
 }
 
 // WorkflowControl pauses and resumes one request's automation.
@@ -51,6 +53,94 @@ type MessageTrail interface {
 
 // SetControl wires pause/resume and the message trail.
 func (h *AutonomyHandlers) SetControl(c WorkflowControl, t MessageTrail) { h.control, h.trail = c, t }
+
+// GlobalControl pauses and resumes ALL automation (pilot batch item 4).
+type GlobalControl interface {
+	PauseAll(ctx context.Context, by, reason string) (*autonomy.AutomationPause, bool, error)
+	ResumeAll(ctx context.Context, by, reason string) (bool, error)
+}
+
+// PauseHistory reads the global pause state.
+type PauseHistory interface {
+	ActivePause(ctx context.Context) (*autonomy.AutomationPause, error)
+	RecentPauses(ctx context.Context, limit int) ([]*autonomy.AutomationPause, error)
+}
+
+// SetGlobalControl wires the global pause.
+func (h *AutonomyHandlers) SetGlobalControl(c GlobalControl, hist PauseHistory) {
+	h.global, h.pauses = c, hist
+}
+
+// GlobalPauseStatus handles GET /api/autonomy/pause: whether all automation
+// is paused, and the recent pauses.
+func (h *AutonomyHandlers) GlobalPauseStatus(w http.ResponseWriter, r *http.Request) {
+	if h.pauses == nil {
+		writeErrorCode(w, http.StatusNotImplemented, "NOT_CONFIGURED", "the global pause is not configured")
+		return
+	}
+	active, err := h.pauses.ActivePause(r.Context())
+	if err != nil {
+		h.logger.ErrorContext(r.Context(), "reading automation pause", "error", err)
+		writeErrorCode(w, http.StatusInternalServerError, "INTERNAL", "could not read the pause state")
+		return
+	}
+	recent, err := h.pauses.RecentPauses(r.Context(), 20)
+	if err != nil {
+		h.logger.ErrorContext(r.Context(), "reading pause history", "error", err)
+		writeErrorCode(w, http.StatusInternalServerError, "INTERNAL", "could not read the pause history")
+		return
+	}
+	if recent == nil {
+		recent = []*autonomy.AutomationPause{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paused": active != nil, "active": active, "recent": recent})
+}
+
+// PauseAll handles POST /api/autonomy/pause {"reason": "..."}.
+func (h *AutonomyHandlers) PauseAll(w http.ResponseWriter, r *http.Request) {
+	h.globalAction(w, r, true)
+}
+
+// ResumeAll handles POST /api/autonomy/resume {"reason": "..."}.
+func (h *AutonomyHandlers) ResumeAll(w http.ResponseWriter, r *http.Request) {
+	h.globalAction(w, r, false)
+}
+
+func (h *AutonomyHandlers) globalAction(w http.ResponseWriter, r *http.Request, pause bool) {
+	if h.global == nil {
+		writeErrorCode(w, http.StatusNotImplemented, "NOT_CONFIGURED", "the global pause is not configured")
+		return
+	}
+	var b struct {
+		Reason string `json:"reason"`
+	}
+	if err := decodeStrict(r, &b); err != nil || strings.TrimSpace(b.Reason) == "" {
+		writeErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "reason is required")
+		return
+	}
+	reason := strings.TrimSpace(b.Reason)
+	if pause {
+		p, created, err := h.global.PauseAll(r.Context(), actorName(r), reason)
+		if err != nil {
+			h.logger.ErrorContext(r.Context(), "pausing all automation", "error", err)
+			writeErrorCode(w, http.StatusInternalServerError, "PAUSE_FAILED", "could not pause automation")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"paused": true, "already_paused": !created, "pause": p})
+		return
+	}
+	released, err := h.global.ResumeAll(r.Context(), actorName(r), reason)
+	if err != nil {
+		h.logger.ErrorContext(r.Context(), "resuming all automation", "error", err)
+		writeErrorCode(w, http.StatusInternalServerError, "RESUME_FAILED", "could not resume automation")
+		return
+	}
+	if !released {
+		writeErrorCode(w, http.StatusConflict, "NOT_PAUSED", "automation is not paused")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paused": false})
+}
 
 // Readvancer hands a request back to Majo once its exception is resolved.
 type Readvancer interface {

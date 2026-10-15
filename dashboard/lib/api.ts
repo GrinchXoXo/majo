@@ -867,6 +867,25 @@ export const pauseRequest = (id: string, reason: string) =>
 export const resumeRequest = (id: string, reason: string) =>
   operatorCall<{ resumed: boolean }>(`/api/requests/${id}/resume`, "POST", { reason });
 
+// --- Pilot batch item 4: global automation pause ---
+
+export type AutomationPause = {
+  id: string;
+  paused_by: string;
+  reason: string;
+  paused_at: string;
+  released_by?: string;
+  release_reason?: string;
+  released_at?: string;
+};
+
+export type PauseStatus = { paused: boolean; active: AutomationPause | null; recent: AutomationPause[] };
+
+export const getPauseStatus = () => operatorCall<PauseStatus>("/api/autonomy/pause");
+export const pauseAllAutomation = (reason: string) =>
+  operatorCall<{ paused: boolean; already_paused: boolean }>("/api/autonomy/pause", "POST", { reason });
+export const resumeAllAutomation = (reason: string) => operatorCall<{ paused: boolean }>("/api/autonomy/resume", "POST", { reason });
+
 // --- Reuse-audit R1: paginated control-plane views ---
 
 export type Page<T> = { rows: T[]; total: number };

@@ -11,6 +11,7 @@ import {
   type Rate,
   type WorkflowException,
 } from "@/lib/api";
+import GlobalPausePanel from "@/components/GlobalPause";
 
 // Phase 4C correction: the control plane. Majo runs the commerce loop on its
 // own; this page shows how autonomous it actually was (raw counts with every
@@ -84,6 +85,8 @@ export default function AutonomyPage() {
         failed deliveries. Operators are the control plane — they handle the exceptions below and can override any step.
       </p>
       {err && <p style={{ color: "crimson" }}>{err}</p>}
+
+      <GlobalPausePanel />
 
       {settings && (
         <section style={{ margin: "16px 0" }}>

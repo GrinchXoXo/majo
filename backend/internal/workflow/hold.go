@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,6 +30,9 @@ var ErrHoldReasonRequired = errors.New("a reason is required")
 // held reports whether the request is paused (errors count as not held:
 // the hold store is the control plane, never a reason to stall commerce).
 func (e *Engine) held(ctx context.Context, buyerRequestID uuid.UUID) bool {
+	if e.globallyPaused(ctx) {
+		return true // pilot batch item 4: a global pause holds every request
+	}
 	if e.holds == nil {
 		return false
 	}
@@ -160,4 +164,106 @@ func (e *Engine) onRecoveryExhausted(ctx context.Context, j *jobs.Job, err error
 	e.raise(ctx, autonomy.SystemException, autonomy.ReasonRecoveryFailed, "buyer_request", *brid, brid,
 		map[string]any{"error": err.Error(), "attempts": j.Attempts, "job_type": j.Type,
 			"why": "Majo could not complete the next step after the vendors went quiet; nothing was sent twice"})
+}
+
+// ---- global automation pause (pilot batch item 4) ------------------------------
+//
+// One operator switch for an incident ("Majo is sending the wrong thing,
+// stop everything"): while paused every request is treated as held (see the
+// top of this file for what that stops), and Majo asks vendors nothing.
+// Inbound messages are still recorded and operator overrides still work.
+// Resuming re-runs the next step of everything left mid-flow.
+
+// globallyPaused: errors count as not paused, like holds (the control plane
+// must never be the reason commerce stalls); they are logged.
+func (e *Engine) globallyPaused(ctx context.Context) bool {
+	if e.pauses == nil {
+		return false
+	}
+	p, err := e.pauses.ActivePause(ctx)
+	if err != nil {
+		e.logger.Error("reading automation pause", "error", err)
+		return false
+	}
+	return p != nil
+}
+
+// AutomationPaused reports whether all automation is paused (vendor runtime hook).
+func (e *Engine) AutomationPaused(ctx context.Context) bool { return e.globallyPaused(ctx) }
+
+// PauseAll pauses all automation. Idempotent: pausing twice keeps the first pause.
+func (e *Engine) PauseAll(ctx context.Context, by, reason string) (*autonomy.AutomationPause, bool, error) {
+	if e.pauses == nil {
+		return nil, false, errors.New("the global pause is not configured")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return nil, false, ErrHoldReasonRequired
+	}
+	p, created, err := e.pauses.PlacePause(ctx, by, reason)
+	if err != nil {
+		return nil, false, err
+	}
+	if created {
+		e.pauseDecision(ctx, p.ID, "paused_all", by, reason)
+		pid := p.ID
+		_ = e.events.Write(ctx, &event.Event{EventType: event.AutomationPaused, EntityType: "automation_pause", EntityID: &pid,
+			ActorType: event.ActorOperator, Payload: map[string]any{"reason": reason, "by": by}})
+		e.logger.Warn("ALL AUTOMATION PAUSED by operator", "by", by, "reason", reason)
+	}
+	return p, created, nil
+}
+
+// ResumeAll releases the global pause and re-runs what was left mid-flow:
+// the next step of every open request, vendor deadlines that passed, and
+// offers that became deliverable. Requests with their own hold stay held.
+func (e *Engine) ResumeAll(ctx context.Context, by, reason string) (bool, error) {
+	if e.pauses == nil {
+		return false, errors.New("the global pause is not configured")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return false, ErrHoldReasonRequired
+	}
+	active, err := e.pauses.ActivePause(ctx)
+	if err != nil {
+		return false, err
+	}
+	released, err := e.pauses.ReleasePause(ctx, by, reason)
+	if err != nil || !released {
+		return released, err
+	}
+	var pid uuid.UUID
+	if active != nil {
+		pid = active.ID
+	}
+	e.pauseDecision(ctx, pid, "resumed_all", by, reason)
+	_ = e.events.Write(ctx, &event.Event{EventType: event.AutomationResumed, EntityType: "automation_pause", EntityID: &pid,
+		ActorType: event.ActorOperator, Payload: map[string]any{"reason": reason, "by": by}})
+	e.logger.Warn("automation resumed by operator", "by", by, "reason", reason)
+
+	e.Recover(ctx) // next step of requests waiting to be confirmed or routed
+	ids, err := e.pauses.OpenConfirmedRequests(ctx, e.now().Add(-7*24*time.Hour))
+	if err != nil {
+		e.logger.Error("listing open requests after resume", "error", err)
+		return true, nil
+	}
+	for _, id := range ids {
+		if e.held(ctx, id) {
+			continue // its own operator hold still applies
+		}
+		e.enqueueRequestRecovery(ctx, id, "resumed_all")
+		if e.offerDeliverer != nil {
+			if err := e.offerDeliverer(ctx, id); err != nil && !errors.Is(err, request.ErrNotConfirmed) {
+				e.logger.Error("delivering offers after resume", "buyer_request_id", id, "error", err)
+			}
+		}
+	}
+	return true, nil
+}
+
+func (e *Engine) pauseDecision(ctx context.Context, pauseID uuid.UUID, what, by, reason string) {
+	if err := e.store.RecordDecision(ctx, &autonomy.Decision{WorkflowType: "control", SubjectType: "automation_pause", SubjectID: pauseID,
+		Kind: autonomy.DecHold, Outcome: autonomy.OutcomeApplied, Reason: what, PolicyVersion: autonomy.PolicyVersion,
+		Inputs: map[string]any{"by": by, "reason": reason, "scope": "global"}, Actor: "OPERATOR"}); err != nil {
+		e.logger.Error("recording pause decision", "error", err)
+	}
 }

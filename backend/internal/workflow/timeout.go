@@ -276,6 +276,9 @@ func (e *Engine) RecoverRequest(ctx context.Context, buyerRequestID uuid.UUID, t
 		if err != nil {
 			return err
 		}
+		if !facts.Held && e.globallyPaused(ctx) {
+			facts.Held = true // pilot batch item 4: a global pause holds every request
+		}
 		inputs := map[string]any{"trigger": trigger, "contacted": facts.Contacted, "awaiting": facts.Awaiting, "usable_responses": facts.Usable,
 			"undecided_replies": facts.Undecided, "active_offers": facts.ActiveOffers, "status": string(facts.Status)}
 		if vrID != nil {

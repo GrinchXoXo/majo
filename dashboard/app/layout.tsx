@@ -1,5 +1,6 @@
 import "./globals.css";
 import OperatorToken from "@/components/OperatorToken";
+import { PauseBanner } from "@/components/GlobalPause";
 
 export const metadata = {
   description: "Majo operator control plane",
@@ -28,6 +29,7 @@ export default function RootLayout({
             <OperatorToken />
           </span>
         </nav>
+        <PauseBanner />
         <main>{children}</main>
       </body>
     </html>

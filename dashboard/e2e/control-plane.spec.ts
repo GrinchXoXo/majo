@@ -64,3 +64,24 @@ test("an operator can pause and resume a request", async ({ page }) => {
   await page.getByRole("button", { name: "Resume automation" }).click();
   await expect(page.getByTestId("hold-status")).toHaveCount(0);
 });
+
+// Pilot batch item 4: the global pause, its banner on every page, and resume.
+test("an operator can pause and resume ALL automation", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/autonomy");
+  const panel = page.getByRole("region", { name: "Global pause" });
+  await expect(panel.getByTestId("pause-state")).toContainText("Running");
+  await panel.getByLabel("Reason").fill("playwright: incident drill");
+  await panel.getByRole("button", { name: "Pause all automation" }).click();
+  await panel.getByRole("button", { name: "Confirm pause" }).click();
+  await expect(panel.getByTestId("pause-state")).toContainText("playwright: incident drill");
+  await page.goto("/requests");
+  await expect(page.getByTestId("pause-banner")).toContainText("ALL AUTOMATION IS PAUSED");
+  await page.goto("/autonomy");
+  await panel.getByLabel("Reason").fill("playwright: drill over");
+  await panel.getByRole("button", { name: "Resume all automation" }).click();
+  await panel.getByRole("button", { name: "Confirm resume" }).click();
+  await expect(panel.getByTestId("pause-state")).toContainText("Running");
+  await page.goto("/requests");
+  await expect(page.getByTestId("pause-banner")).toHaveCount(0);
+});

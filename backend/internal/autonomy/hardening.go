@@ -120,3 +120,32 @@ type HoldStore interface {
 	ActiveHold(ctx context.Context, buyerRequestID uuid.UUID) (*Hold, error)
 	Holds(ctx context.Context, buyerRequestID uuid.UUID) ([]*Hold, error)
 }
+
+// ---- global automation pause (pilot batch item 4) ------------------------------
+
+// AutomationPause is an operator's pause of ALL automation (every request is
+// treated as held until it is released).
+type AutomationPause struct {
+	ID            uuid.UUID  `json:"id"`
+	PausedBy      string     `json:"paused_by"`
+	Reason        string     `json:"reason"`
+	PausedAt      time.Time  `json:"paused_at"`
+	ReleasedBy    *string    `json:"released_by,omitempty"`
+	ReleaseReason *string    `json:"release_reason,omitempty"`
+	ReleasedAt    *time.Time `json:"released_at,omitempty"`
+}
+
+// PauseStore persists the global pause.
+type PauseStore interface {
+	// ActivePause returns the active pause, or nil.
+	ActivePause(ctx context.Context) (*AutomationPause, error)
+	// PlacePause pauses; created=false when already paused (idempotent).
+	PlacePause(ctx context.Context, by, reason string) (*AutomationPause, bool, error)
+	// ReleasePause releases; false when nothing was paused.
+	ReleasePause(ctx context.Context, by, reason string) (bool, error)
+	// RecentPauses lists pauses newest first (control-plane history).
+	RecentPauses(ctx context.Context, limit int) ([]*AutomationPause, error)
+	// OpenConfirmedRequests: confirmed requests created since `since` with
+	// no active selection (re-checked on resume).
+	OpenConfirmedRequests(ctx context.Context, since time.Time) ([]uuid.UUID, error)
+}

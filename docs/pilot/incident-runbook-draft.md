@@ -76,13 +76,27 @@ until it is resumed):
 3. To undo: **Resume automation** with a reason, or
    `POST /api/requests/{id}/resume`.
 
-**Pause automation more widely:**
+**Pause ALL automation (incident switch):**
 
-- The Autonomy page shows the autonomy flags (AUTO_CONFIRM...,
-  AUTO_ROUTE... etc.) as ON/OFF chips, but the dashboard cannot switch
-  them; they come from backend environment settings at startup.
-  TODO(owner): document how flags are changed in production (and whether
-  a global pause is needed for the pilot).
+1. Dashboard → **Autonomy** → **Global pause**: type a reason, click
+   **Pause all automation**, then **Confirm pause** (operator token
+   required). Or `POST /api/autonomy/pause` with `{"reason": "..."}`.
+2. Effect, immediately and without a restart: Majo confirms nothing,
+   routes nothing, asks buyers and vendors nothing, delivers no offers and
+   sends no queued notices. A red banner shows on every dashboard page.
+   Inbound messages are still recorded, and every operator override
+   (confirm, route, deliver, select) still works.
+3. To undo: same panel, **Resume all automation** with a reason (or
+   `POST /api/autonomy/resume`). Majo then re-runs whatever was left
+   mid-flow: requests waiting to be confirmed or routed, vendor deadlines
+   that passed, offers that became deliverable. A request with its own
+   pause stays paused.
+4. Both actions are audited (`AUTOMATION_PAUSED` / `AUTOMATION_RESUMED`
+   events, the decision log, and the history on the panel).
+
+The autonomy flags (AUTO_CONFIRM..., AUTO_ROUTE... chips on the Autonomy
+page) are still environment settings read at startup; changing one needs
+a restart. Use the global pause for anything urgent.
 - Resolving exceptions on the Autonomy page stops the same work being
   raised again.
 
