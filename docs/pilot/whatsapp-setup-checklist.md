@@ -56,8 +56,10 @@ never in git):
     fixtures (`infrastructure/whatsapp/rich_message_test.go`,
     `internal/distribution/config_test.go`,
     `internal/presentation/discovery_test.go`).
-  - TODO(owner): submit the discovery template for approval in Meta, and
-    confirm its final name to put in `DISCOVERY_TEMPLATE_NAME`.
-  - TODO(owner): decide whether the pilot also needs an approved template
-    for core messages (e.g. re-engaging a buyer after 24h); none is
-    wired into the core flow today.
+  - TODO(owner): submit the **vendor request** template
+    (`majo_vendor_request`, wording in `docs/pilot/whatsapp-templates.md`)
+    and set `VENDOR_REQUEST_TEMPLATE_NAME` once approved. Needed for the
+    pilot: without it vendors who have not written in 24h are not reached.
+  - The discovery template (`DISCOVERY_TEMPLATE_NAME`) is not needed for
+    the pilot (discovery stays off).
+  - A buyer-update template is optional for the pilot (see the templates doc).

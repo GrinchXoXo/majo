@@ -261,3 +261,20 @@ func (r *ConversationRepository) OutboundEntityByProviderID(ctx context.Context,
 	}
 	return et.String, &id, nil
 }
+
+// LastInboundAt is when a contact last wrote to Majo on a channel (nil if
+// never). Used for WhatsApp's 24-hour window (pilot batch item 3).
+func (r *ConversationRepository) LastInboundAt(ctx context.Context, channel, externalID string) (*time.Time, error) {
+	var at sql.NullTime
+	err := r.db.QueryRowContext(ctx, `
+		SELECT max(m.created_at) FROM messages m JOIN conversations c ON c.id = m.conversation_id
+		WHERE c.channel = $1 AND c.external_id = $2 AND m.direction = 'INBOUND'`, channel, externalID).Scan(&at)
+	if err != nil {
+		return nil, err
+	}
+	if !at.Valid {
+		return nil, nil
+	}
+	t := at.Time.UTC()
+	return &t, nil
+}

@@ -216,6 +216,13 @@ func main() {
 		Repo: routingRepo, Quoted: convRepo})
 	routingService.SetSendFailureListener(engine)
 	routingService.SetLifecycleListener(engine)
+	// Pilot batch item 3: vendor requests outside the 24h window go as the
+	// approved template (VENDOR_REQUEST_TEMPLATE_NAME; empty = free text only).
+	routingService.SetVendorTemplate(routing.VendorTemplate{Name: cfg.VendorRequestTemplateName, Language: cfg.VendorRequestTemplateLanguage},
+		outbound, convRepo)
+	if cfg.VendorRequestTemplateName == "" {
+		logger.Warn("no vendor-request template configured: vendors who have not written to Majo in 24h cannot be reached (set VENDOR_REQUEST_TEMPLATE_NAME once Meta approves it)")
+	}
 	offerDelivery.SetFailureListener(engine)
 	offerDelivery.SetAutomationHooks(engine)
 	engine.SetOfferDeliverer(func(ctx context.Context, id uuid.UUID) error {

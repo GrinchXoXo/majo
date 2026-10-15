@@ -122,6 +122,10 @@ type Config struct {
 	// Approved template for buyers outside the 24h window ("" = none).
 	DiscoveryTemplateName     string
 	DiscoveryTemplateLanguage string
+	// Pilot batch item 3: approved utility template for vendor requests
+	// outside the 24-hour window. Empty = free text only.
+	VendorRequestTemplateName     string
+	VendorRequestTemplateLanguage string
 	// DiscoveryConsentWording is the current opt-in wording version.
 	DiscoveryConsentWording string
 	// DiscoveryEnquiryConfirmation: how "Ask about it" requests become
@@ -219,6 +223,8 @@ func Load() (*Config, error) {
 	cfg.DiscoveryTimezone = getEnv("DISCOVERY_TIMEZONE", "Africa/Lagos")
 	cfg.DiscoveryTemplateName = os.Getenv("DISCOVERY_TEMPLATE_NAME")
 	cfg.DiscoveryTemplateLanguage = getEnv("DISCOVERY_TEMPLATE_LANGUAGE", "en")
+	cfg.VendorRequestTemplateName = strings.TrimSpace(os.Getenv("VENDOR_REQUEST_TEMPLATE_NAME"))
+	cfg.VendorRequestTemplateLanguage = getEnv("VENDOR_REQUEST_TEMPLATE_LANGUAGE", "en")
 	cfg.DiscoveryConsentWording = getEnv("DISCOVERY_CONSENT_WORDING", "v1")
 	cfg.DiscoveryEnquiryConfirmation = getEnv("DISCOVERY_ENQUIRY_CONFIRMATION", "operator")
 	cfg.DiscoveryRankingWeights = os.Getenv("DISCOVERY_RANKING_WEIGHTS")

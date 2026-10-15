@@ -796,8 +796,8 @@ func (s *Service) ResendVendorRequest(ctx context.Context, vendorRequestID uuid.
 	msg, extra := vendorRequestMessage(vr, req, listing)
 	extra["retry"] = true
 	vrID := vr.ID
-	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID, Extra: extra})
-	if err := s.messaging.SendText(sendCtx, v.WhatsAppExternalID, msg); err != nil {
+	purpose := conversation.OutboundPurpose{Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID, Extra: extra}
+	if _, err := s.sendVendorRequest(ctx, purpose, v.WhatsAppExternalID, vr, req, listing, msg); err != nil {
 		_ = s.routing.MarkSendFailed(ctx, vr.ID, err.Error())
 		return err
 	}

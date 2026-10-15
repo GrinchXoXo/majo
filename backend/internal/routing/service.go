@@ -73,6 +73,13 @@ type Service struct {
 	auto         *VendorAutonomy
 	sendFailures SendFailureListener
 	lifecycle    LifecycleListener
+
+	// Pilot batch item 3: approved template for vendor requests outside the
+	// 24-hour window (empty Name = free text only, the previous behaviour).
+	vendorTemplate VendorTemplate
+	richSender     RichSender
+	inboundWindow  InboundWindow
+	now            func() time.Time
 }
 
 // SendFailureListener is told when a VendorRequest message is rejected by
@@ -346,10 +353,9 @@ func (s *Service) RouteAs(ctx context.Context, req *request.BuyerRequest, vendor
 
 		message, extra := vendorRequestMessage(vr, req, listing)
 		vrID := vr.ID
-		sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
-			Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID, Extra: extra,
-		})
-		if err := s.messaging.SendText(sendCtx, v.WhatsAppExternalID, message); err != nil {
+		purpose := conversation.OutboundPurpose{Kind: "vendor_request", EntityType: "vendor_request", EntityID: &vrID, Extra: extra}
+		sentAs, err := s.sendVendorRequest(ctx, purpose, v.WhatsAppExternalID, vr, req, listing, message)
+		if err != nil {
 			s.logger.Error("sending vendor request via whatsapp", "vendor_id", vendorID, "error", err)
 			// Phase 3.1 §3A-4: a rejected send is a distinct, visible
 			// state (SEND_FAILED), never an "awaiting reply" request.
@@ -395,7 +401,7 @@ func (s *Service) RouteAs(ctx context.Context, req *request.BuyerRequest, vendor
 			ActorType:  actor,
 			Payload: event.Merge(req.FunnelDims(), map[string]any{
 				"vendor_request_id": vr.ID.String(), "vendor_id": vendorID.String(), "reference": ref,
-				"match_score": scorePtr, "channel": "whatsapp", "outcome": outcome,
+				"match_score": scorePtr, "channel": "whatsapp", "outcome": outcome, "sent_as": sentAs,
 				"listing_reconfirmation": listing != nil, "routing": reason,
 			}),
 		}); err != nil {
