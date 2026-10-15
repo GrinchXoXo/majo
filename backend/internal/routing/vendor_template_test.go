@@ -53,7 +53,9 @@ type fakeWindow struct {
 	err error
 }
 
-func (f fakeWindow) LastInboundAt(context.Context, string, string) (*time.Time, error) { return f.at, f.err }
+func (f fakeWindow) LastInboundAt(context.Context, string, string) (*time.Time, error) {
+	return f.at, f.err
+}
 
 var windowRefused = &channel.ProviderError{Provider: "whatsapp", HTTPStatus: 400, Code: 131047, Message: "Re-engagement message"}
 
