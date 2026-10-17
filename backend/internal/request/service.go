@@ -418,6 +418,7 @@ func (s *Service) ClarifyAs(ctx context.Context, requestID uuid.UUID, question s
 
 	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
 		Kind: "clarification", EntityType: "buyer_request", EntityID: &requestID, Extra: extra,
+		Audience: conversation.AudienceBuyer, Keep: keepTerms(req.Product, req.Variant, req.Location),
 	})
 	if err := s.messaging.SendText(sendCtx, conv.ExternalID, question); err != nil {
 		return fmt.Errorf("sending clarification message: %w", err)
@@ -564,4 +565,15 @@ func defaultClarificationQuestion(req *BuyerRequest) string {
 	default:
 		return "Could you share a bit more detail so I can find the best options?"
 	}
+}
+
+// keepTerms: the request's own words the tone layer must not rephrase.
+func keepTerms(vals ...*string) []string {
+	var out []string
+	for _, v := range vals {
+		if v != nil && *v != "" {
+			out = append(out, *v)
+		}
+	}
+	return out
 }

@@ -19,6 +19,21 @@ type OutboundPurpose struct {
 	EntityType string     // e.g. "vendor_request", "buyer_request", "conversation"
 	EntityID   *uuid.UUID //
 	Extra      map[string]any
+	// Audience is who reads the message: AudienceBuyer lets the tone layer
+	// (pilot batch item 7) rewrite it. Empty = sent exactly as written.
+	Audience string
+	// Keep are exact phrases the tone layer must not touch (item, seller).
+	Keep []string
+}
+
+// AudienceBuyer marks a buyer-facing message.
+const AudienceBuyer = "buyer"
+
+// Toner is the tone layer (internal/tone): it returns the text to send and
+// metadata to store with the message (nil when it did nothing). It never
+// fails: on any problem it returns the text unchanged.
+type Toner interface {
+	Tone(ctx context.Context, text string, keep []string) (string, map[string]any)
 }
 
 type outboundPurposeKey struct{}
@@ -55,7 +70,11 @@ type RecordingSender struct {
 	repo    Repository
 	channel string
 	logger  *slog.Logger
+	toner   Toner
 }
+
+// SetToner enables the tone layer for buyer-facing text messages.
+func (r *RecordingSender) SetToner(t Toner) { r.toner = t }
 
 func NewRecordingSender(sender IDSender, repo Repository, channel string, logger *slog.Logger) *RecordingSender {
 	return &RecordingSender{sender: sender, repo: repo, channel: channel, logger: logger}
@@ -64,11 +83,16 @@ func NewRecordingSender(sender IDSender, repo Repository, channel string, logger
 // SendText satisfies the local MessagingProvider interfaces in request/,
 // routing/ and marketplace/.
 func (r *RecordingSender) SendText(ctx context.Context, to, body string) error {
+	var toneMeta map[string]any
+	if p, ok := OutboundPurposeFrom(ctx); ok && p.Audience == AudienceBuyer && r.toner != nil {
+		body, toneMeta = r.toner.Tone(ctx, body, p.Keep)
+	}
 	externalID, err := r.sender.SendTextWithID(ctx, to, body)
 	if err != nil {
 		return err
 	}
-	r.record(ctx, to, body, externalID)
+	content := map[string]any{"text": body}
+	r.save(ctx, to, "text", content, externalID, toneMeta)
 	return nil
 }
 
@@ -88,18 +112,14 @@ func (r *RecordingSender) SendRecorded(ctx context.Context, to string, m channel
 	if err != nil {
 		return nil, "", err
 	}
-	saved := r.save(ctx, to, string(m.Kind), map[string]any{"text": m.Summary(), "rich": m}, externalID)
+	saved := r.save(ctx, to, string(m.Kind), map[string]any{"text": m.Summary(), "rich": m}, externalID, nil)
 	if saved == nil {
 		return nil, externalID, nil
 	}
 	return &saved.ID, externalID, nil
 }
 
-func (r *RecordingSender) record(ctx context.Context, to, body, externalID string) {
-	r.save(ctx, to, "text", map[string]any{"text": body}, externalID)
-}
-
-func (r *RecordingSender) save(ctx context.Context, to, messageType string, content map[string]any, externalID string) *Message {
+func (r *RecordingSender) save(ctx context.Context, to, messageType string, content map[string]any, externalID string, toneMeta map[string]any) *Message {
 	conv, err := r.repo.FindOrCreateByExternalID(ctx, r.channel, to)
 	if err != nil || conv == nil {
 		r.logger.Error("recording outbound message: resolving conversation", "error", err)
@@ -115,6 +135,9 @@ func (r *RecordingSender) save(ctx context.Context, to, messageType string, cont
 		for k, v := range p.Extra {
 			meta[k] = v
 		}
+	}
+	if toneMeta != nil {
+		meta["tone"] = toneMeta
 	}
 	saved, err := r.repo.SaveMessage(ctx, &Message{
 		ConversationID:    conv.ID,

@@ -29,6 +29,9 @@ services:
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
       ANTHROPIC_TIMEOUT_SECONDS: ${ANTHROPIC_TIMEOUT_SECONDS:-10}
       EXTRACTOR: ${EXTRACTOR:-}
+      # Pilot batch item 7: tone layer model (default ANTHROPIC_MODEL).
+      TONE_MODEL: ${TONE_MODEL:-}
+      TONE_TIMEOUT_SECONDS: ${TONE_TIMEOUT_SECONDS:-4}
     ports:
       - "8000:8000"
     healthcheck:
@@ -67,6 +70,8 @@ services:
       DEAL_ANSWER_TTL: ${DEAL_ANSWER_TTL:-72h}
       FREE_DEALS: ${FREE_DEALS:-100}
       INTRO_SHARE_BUYER_CONTACT: ${INTRO_SHARE_BUYER_CONTACT:-false}
+      TONE_LAYER: ${TONE_LAYER:-off}
+      TONE_TIMEOUT: ${TONE_TIMEOUT:-5s}
       SENTRY_DSN: ${BACKEND_SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
     ports:

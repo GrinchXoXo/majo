@@ -40,6 +40,7 @@ import (
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
 	"github.com/middleman/backend/internal/supply"
+	"github.com/middleman/backend/internal/tone"
 	"github.com/middleman/backend/internal/transaction"
 	"github.com/middleman/backend/internal/workflow"
 )
@@ -107,6 +108,12 @@ func main() {
 	// it with its WhatsApp message ID and business purpose so delivery/read
 	// receipts can be measured. Services keep their SendText interface.
 	outbound := conversation.NewRecordingSender(whatsappProvider, convRepo, "whatsapp", logger)
+	// Pilot batch item 7: buyer messages may be rephrased in a Nigerian
+	// register; facts never change (internal/tone). Off unless TONE_LAYER is set.
+	if cfg.ToneLayer != tone.Off {
+		outbound.SetToner(tone.New(tone.Config{Mode: cfg.ToneLayer, Timeout: cfg.ToneTimeout}, aiProvider, logger))
+	}
+	logger.Info("tone layer", "mode", string(cfg.ToneLayer), "timeout", cfg.ToneTimeout.String())
 	buyerRepo := postgres.NewBuyerRepository(pool)
 	requestRepo := postgres.NewRequestRepository(pool)
 	vendorRepo := postgres.NewVendorRepository(pool)

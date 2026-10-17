@@ -677,7 +677,8 @@ def _parse_json_object(raw_text: str) -> dict:
     return obj
 
 
-def _call_anthropic(api_key: str, system: str, text: str, max_tokens: int) -> str:
+def _call_anthropic(api_key: str, system: str, text: str, max_tokens: int,
+                    model: Optional[str] = None, timeout: Optional[float] = None) -> str:
     import httpx
 
     resp = httpx.post(
@@ -688,12 +689,12 @@ def _call_anthropic(api_key: str, system: str, text: str, max_tokens: int) -> st
             "content-type": "application/json",
         },
         json={
-            "model": anthropic_model(),
+            "model": model or anthropic_model(),
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": text}],
         },
-        timeout=anthropic_timeout(),
+        timeout=timeout if timeout is not None else anthropic_timeout(),
     )
     resp.raise_for_status()
     data = resp.json()

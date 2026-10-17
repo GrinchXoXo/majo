@@ -155,7 +155,8 @@ func (d *OfferDelivery) DeliverPendingOffers(ctx context.Context, buyerRequestID
 	reqID := req.ID
 	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
 		Kind: "offer_delivery", EntityType: "buyer_request", EntityID: &reqID,
-		Extra: map[string]any{"offer_ids": idStrs, "ordinals": ordinals},
+		Extra:    map[string]any{"offer_ids": idStrs, "ordinals": ordinals},
+		Audience: conversation.AudienceBuyer, Keep: []string{SummaryOf(req).Product},
 	})
 	if err := d.messaging.SendText(sendCtx, conv.ExternalID, body); err != nil {
 		d.releaseClaim(ctx, ids, err.Error())

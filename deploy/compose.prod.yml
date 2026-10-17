@@ -50,6 +50,8 @@ services:
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
       ANTHROPIC_TIMEOUT_SECONDS: ${ANTHROPIC_TIMEOUT_SECONDS:-10}
       EXTRACTOR: ${EXTRACTOR:-}
+      TONE_MODEL: ${TONE_MODEL:-}
+      TONE_TIMEOUT_SECONDS: ${TONE_TIMEOUT_SECONDS:-4}
     expose:
       - "8000"
     mem_limit: 512m

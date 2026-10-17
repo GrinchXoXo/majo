@@ -366,6 +366,7 @@ func (b *BuyerInbound) reply(ctx context.Context, m InboundBuyerMessage, text, k
 	convID := m.ConversationID
 	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{
 		Kind: kind, EntityType: "conversation", EntityID: &convID, Extra: extra,
+		Audience: conversation.AudienceBuyer,
 	})
 	if err := b.messaging.SendText(sendCtx, m.ReplyTo, text); err != nil {
 		b.logger.Error("sending buyer reply", "kind", kind, "error", err)

@@ -25,6 +25,8 @@ from app.extraction import (
 )
 
 from app.errortrack import init_error_tracking
+from app import tone
+from fastapi import HTTPException
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("majo-ai")
@@ -211,3 +213,38 @@ def extract_vendor_response_endpoint(req: VendorResponseExtractionRequest) -> Ve
         notes=result.notes,
         confidence=result.confidence,
     )
+
+
+# --- Pilot batch item 7: tone layer --------------------------------------
+
+
+class ToneRequest(BaseModel):
+    # Facts are already replaced by [[Fn]] tokens by the backend.
+    text: str
+
+
+class ToneResponse(BaseModel):
+    text: str
+    model: str
+
+
+@app.post("/tone/rewrite", response_model=ToneResponse)
+def tone_rewrite(req: ToneRequest) -> ToneResponse:
+    """Rewrites a buyer message in a Nigerian WhatsApp register. 503 without
+    an API key, 422 when the model's answer broke a rule, 502 when the model
+    call failed. In every error case the backend sends the original text.
+    Never logs the message."""
+    if len(req.text) > 1500:
+        raise HTTPException(status_code=422, detail="too_long")
+    try:
+        out = tone.rewrite(req.text)
+    except tone.ToneUnavailable:
+        raise HTTPException(status_code=503, detail="tone rewriting unavailable (no ANTHROPIC_API_KEY)")
+    except tone.ToneRejected as exc:
+        logger.info("tone rewrite rejected: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — the backend falls back to the original text
+        logger.warning("tone rewrite failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="tone rewrite failed")
+    return ToneResponse(**out)
+

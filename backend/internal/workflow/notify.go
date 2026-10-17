@@ -71,7 +71,8 @@ func (e *Engine) notify(ctx context.Context, conversationID uuid.UUID, requestID
 	if requestID != nil {
 		et, eid = "buyer_request", requestID
 	}
-	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{Kind: kind, EntityType: et, EntityID: eid})
+	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{Kind: kind, EntityType: et, EntityID: eid,
+		Audience: conversation.AudienceBuyer, Keep: e.keepTerms(ctx, requestID)})
 	if err := e.messenger.SendText(sendCtx, conv.ExternalID, text); err != nil {
 		e.logger.Error("sending workflow message", "kind", kind, "error", err)
 		return e.noticeFailed(ctx, conversationID, requestID, kind, text, channel.Classify(err), err.Error(), nil)
@@ -253,7 +254,8 @@ func (e *Engine) deliverNotice(ctx context.Context, n *autonomy.Notice) (channel
 			et, eid = "buyer_request", n.BuyerRequestID
 		}
 		sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{Kind: n.Kind, EntityType: et, EntityID: eid,
-			Extra: map[string]any{"notice_id": n.ID.String(), "late": true}})
+			Extra: map[string]any{"notice_id": n.ID.String(), "late": true}, Audience: conversation.AudienceBuyer,
+			Keep: e.keepTerms(ctx, n.BuyerRequestID)})
 		err = e.messenger.SendText(sendCtx, conv.ExternalID, body)
 	}
 	if err != nil {
@@ -395,4 +397,26 @@ func (e *Engine) questionUndelivered(ctx context.Context, of conversation.Outbou
 	if !f.Retry && !f.WaitForRecipient {
 		e.raiseForFailure(ctx, f, "conversation", of.ConversationID, brid, errText, map[string]any{"clarification_id": cid.String()})
 	}
+}
+
+// keepTerms: the request's own words (product, variant, location) that the
+// tone layer must keep exactly as they are (pilot batch item 7).
+func (e *Engine) keepTerms(ctx context.Context, requestID *uuid.UUID) []string {
+	if requestID == nil || e.reqRepo == nil {
+		return nil
+	}
+	req, err := e.reqRepo.FindByID(ctx, *requestID)
+	if err != nil || req == nil {
+		return nil
+	}
+	var out []string
+	for _, v := range []*string{req.Product, req.Variant, req.Location} {
+		if v != nil && *v != "" {
+			out = append(out, *v)
+		}
+	}
+	if req.Product != nil && req.Variant != nil && *req.Product != "" && *req.Variant != "" {
+		out = append(out, *req.Product+" "+*req.Variant) // "iphone 13 128GB" as one phrase
+	}
+	return out
 }

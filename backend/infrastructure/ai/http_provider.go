@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -132,4 +133,39 @@ func (p *HTTPProvider) ExtractVendorResponse(ctx context.Context, text string) (
 		return nil, fmt.Errorf("decoding vendor response extraction response: %w", err)
 	}
 	return &result, nil
+}
+
+// RewriteTone calls POST /tone/rewrite (pilot batch item 7). The text is
+// already masked by internal/tone: no facts leave the backend. Any non-200
+// answer is an error, and the caller sends the original text.
+func (p *HTTPProvider) RewriteTone(ctx context.Context, masked string) (string, string, error) {
+	body, err := json.Marshal(map[string]string{"text": masked})
+	if err != nil {
+		return "", "", fmt.Errorf("marshaling tone request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/tone/rewrite", bytes.NewReader(body))
+	if err != nil {
+		return "", "", fmt.Errorf("building tone request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return "", "", fmt.Errorf("calling AI service: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var e struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&e)
+		return "", "", fmt.Errorf("AI service returned status %d (%s)", resp.StatusCode, e.Detail)
+	}
+	var out struct {
+		Text  string `json:"text"`
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
+		return "", "", fmt.Errorf("decoding tone response: %w", err)
+	}
+	return out.Text, out.Model, nil
 }

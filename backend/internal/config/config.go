@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"github.com/middleman/backend/internal/autonomy"
+	"github.com/middleman/backend/internal/tone"
 	"os"
 	"strconv"
 	"strings"
@@ -132,6 +133,10 @@ type Config struct {
 	DealAnswerTTL        time.Duration
 	FreeDeals            int
 	IntroShareBuyerPhone bool
+	// Pilot batch item 7: tone layer for buyer messages (TONE_LAYER
+	// off|shadow|on, default off) and the per-message rewrite timeout.
+	ToneLayer   tone.Mode
+	ToneTimeout time.Duration
 	// DiscoveryConsentWording is the current opt-in wording version.
 	DiscoveryConsentWording string
 	// DiscoveryEnquiryConfirmation: how "Ask about it" requests become
@@ -280,6 +285,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if err := loadDeals(cfg); err != nil {
+		return nil, err
+	}
+	if cfg.ToneLayer, err = tone.ParseMode(os.Getenv("TONE_LAYER")); err != nil {
+		return nil, err
+	}
+	if cfg.ToneTimeout, err = getDuration("TONE_TIMEOUT", 5*time.Second); err != nil {
 		return nil, err
 	}
 

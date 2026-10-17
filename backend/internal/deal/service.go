@@ -29,6 +29,10 @@ const (
 	KindVendorConfirm = answer.KindVendorConfirm
 )
 
+// KindVendorAck is the outbound kind of the vendor's "thanks" (outbound
+// kinds containing "vendor" are never rephrased by the tone layer).
+const KindVendorAck = "deal_ack_vendor"
+
 // Job types.
 const (
 	JobFollowUp = "DEAL_FOLLOWUP"
@@ -511,16 +515,16 @@ func (s *Service) VendorAnswered(ctx context.Context, dealID uuid.UUID, answer s
 		phone = v.WhatsAppExternalID
 	}
 	if !changed {
-		s.send(ctx, d, phone, "deal_ack", "Thanks 🙏 I've already noted this one.")
+		s.send(ctx, d, phone, KindVendorAck, "Thanks 🙏 I've already noted this one.")
 		return nil
 	}
 	switch answer {
 	case Yes:
-		s.send(ctx, d, phone, "deal_ack", "Thanks for confirming 🙏")
+		s.send(ctx, d, phone, KindVendorAck, "Thanks for confirming 🙏")
 	case No:
-		s.send(ctx, d, phone, "deal_ack", "Thanks for letting me know 🙏")
+		s.send(ctx, d, phone, KindVendorAck, "Thanks for letting me know 🙏")
 	case NotYet:
-		s.send(ctx, d, phone, "deal_ack", "Okay 👍 I'll check back later.")
+		s.send(ctx, d, phone, KindVendorAck, "Okay 👍 I'll check back later.")
 		s.enqueue(ctx, JobFollowUp, d.ID, "reask:"+Vendor, now.Add(s.cfg.FollowUpDelay), map[string]any{"party": Vendor})
 	}
 	s.afterChange(ctx, d, prev)
@@ -634,8 +638,13 @@ func (s *Service) sendErr(ctx context.Context, d *Deal, to, kind, text string) e
 		return errors.New("no recipient")
 	}
 	id := d.ID
-	sendCtx := conversation.WithOutboundPurpose(ctx, conversation.OutboundPurpose{Kind: kind, EntityType: "deal", EntityID: &id,
-		Extra: map[string]any{"buyer_request_id": d.BuyerRequestID.String(), "transaction_id": d.TransactionID.String()}})
+	p := conversation.OutboundPurpose{Kind: kind, EntityType: "deal", EntityID: &id,
+		Extra: map[string]any{"buyer_request_id": d.BuyerRequestID.String(), "transaction_id": d.TransactionID.String()}}
+	if !strings.Contains(kind, "vendor") { // buyer-facing: the tone layer may rephrase it
+		p.Audience = conversation.AudienceBuyer
+		p.Keep = []string{d.Item, d.VendorName, d.Reference}
+	}
+	sendCtx := conversation.WithOutboundPurpose(ctx, p)
 	return s.d.Messenger.SendText(sendCtx, to, text)
 }
 

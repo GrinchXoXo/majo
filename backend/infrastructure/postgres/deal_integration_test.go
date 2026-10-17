@@ -360,7 +360,7 @@ func TestIntegration_DealVendorAnswersThroughTheVendorRuntime(t *testing.T) {
 	if n := e.count(t, `SELECT count(*) FROM clarifications WHERE vendor_id = $1 AND kind = 'vendor_deal_confirm' AND status = 'ANSWERED'`, v.ID); n != 1 {
 		t.Fatalf("answered, got %d", n)
 	}
-	if n := len(e.msgr.byKind("deal_ack")); n != 1 {
+	if n := len(e.msgr.byKind(deal.KindVendorAck)); n != 1 {
 		t.Fatalf("vendor thanked once, got %d", n)
 	}
 }
