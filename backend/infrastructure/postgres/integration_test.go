@@ -440,8 +440,8 @@ func TestIntegration_DeliveryReceiptsAreIdempotentAndFeedTheFunnel(t *testing.T)
 		got["offer_message_delivered"] != 1 || got["offer_message_read"] != 1 || got["transaction_completed"] != 0 {
 		t.Fatalf("unexpected funnel counts: %v", got)
 	}
-	if len(stages) != 15 {
-		t.Fatalf("expected 15 funnel stages, got %d", len(stages))
+	if len(stages) != 16 { // 16th: deal_confirmed (01a audit)
+		t.Fatalf("expected 16 funnel stages, got %d", len(stages))
 	}
 }
 

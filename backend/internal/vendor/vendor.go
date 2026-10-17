@@ -23,22 +23,22 @@ const (
 // Majo requests. Only ACTIVE vendors are eligible for matching
 // (PRD 2 §5.1).
 type Vendor struct {
-	ID                  uuid.UUID
-	BusinessName        string
-	WhatsAppExternalID  string
-	Phone               string
-	Status              Status
-	PrimaryLocation     string
-	Notes               string
-	Categories          []string
-	ServiceAreas        []string
-	RequestsReceived    int
-	ResponsesReceived   int
-	LastResponseAt      *time.Time
-	LastMessageAt       *time.Time
+	ID                     uuid.UUID
+	BusinessName           string
+	WhatsAppExternalID     string
+	Phone                  string
+	Status                 Status
+	PrimaryLocation        string
+	Notes                  string
+	Categories             []string
+	ServiceAreas           []string
+	RequestsReceived       int
+	ResponsesReceived      int
+	LastResponseAt         *time.Time
+	LastMessageAt          *time.Time
 	LastSupplySubmissionAt *time.Time
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 // Fields is the correctable/settable vendor field set, mirroring the

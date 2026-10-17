@@ -43,7 +43,7 @@ export default function VendorsPage() {
   const handleCreate = async () => {
     setSaving(true);
     try {
-      await createVendor({
+      const created = await createVendor({
         business_name: form.business_name,
         whatsapp_external_id: form.whatsapp_external_id,
         primary_location: form.primary_location,
@@ -53,6 +53,8 @@ export default function VendorsPage() {
       setForm({ business_name: "", whatsapp_external_id: "", primary_location: "", categories: "", service_areas: "" });
       setShowForm(false);
       await load();
+      // Saved, but some categories will never match a buyer request.
+      setError(created.warnings?.length ? `Saved ${created.business_name}. Warning: ${created.warnings.join(" ")}` : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to create vendor");
     } finally {
@@ -83,10 +85,10 @@ export default function VendorsPage() {
       {showForm && (
         <div style={{ background: "#f9fafb", padding: 16, borderRadius: 8, marginBottom: 20, display: "grid", gap: 10, maxWidth: 500 }}>
           <input style={inputStyle} placeholder="Business name" value={form.business_name} onChange={(e) => setForm({ ...form, business_name: e.target.value })} />
-          <input style={inputStyle} placeholder="WhatsApp number (e.g. 2348071112222)" value={form.whatsapp_external_id} onChange={(e) => setForm({ ...form, whatsapp_external_id: e.target.value })} />
+          <input style={inputStyle} placeholder="WhatsApp number (e.g. 0807 111 2222 or +234 807 111 2222)" value={form.whatsapp_external_id} onChange={(e) => setForm({ ...form, whatsapp_external_id: e.target.value })} />
           <input style={inputStyle} placeholder="Primary location (e.g. Benin City)" value={form.primary_location} onChange={(e) => setForm({ ...form, primary_location: e.target.value })} />
-          <input style={inputStyle} placeholder="Categories (comma-separated: electronics, phones)" value={form.categories} onChange={(e) => setForm({ ...form, categories: e.target.value })} />
-          <input style={inputStyle} placeholder="Service areas (comma-separated)" value={form.service_areas} onChange={(e) => setForm({ ...form, service_areas: e.target.value })} />
+          <input style={inputStyle} placeholder="Categories, comma-separated, from: electronics, phones, laptops, gaming, tv, computers, accessories, fashion, furniture, food, services, school" value={form.categories} onChange={(e) => setForm({ ...form, categories: e.target.value })} />
+          <input style={inputStyle} placeholder="Service areas, comma-separated (campus areas, halls, gates, nearby areas buyers name)" value={form.service_areas} onChange={(e) => setForm({ ...form, service_areas: e.target.value })} />
           <button onClick={handleCreate} disabled={saving || !form.business_name || !form.whatsapp_external_id} style={{ padding: "8px 16px", background: "#15803d", color: "white", border: "none", borderRadius: 6, cursor: "pointer" }}>
             {saving ? "Creating..." : "Create Vendor"}
           </button>

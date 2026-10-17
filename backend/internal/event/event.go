@@ -50,6 +50,9 @@ const (
 	VendorUpdated     Type = "VENDOR_UPDATED"
 	VendorActivated   Type = "VENDOR_ACTIVATED"
 	VendorDeactivated Type = "VENDOR_DEACTIVATED"
+	// VendorOptInRequested: a vendor who sent STOP asked to come back
+	// (START); an operator re-activates them (01a audit).
+	VendorOptInRequested Type = "VENDOR_OPT_IN_REQUESTED"
 
 	SupplySignalCreated Type = "SUPPLY_SIGNAL_CREATED"
 	SupplySignalUpdated Type = "SUPPLY_SIGNAL_UPDATED"

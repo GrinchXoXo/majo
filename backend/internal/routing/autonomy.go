@@ -850,6 +850,11 @@ func (s *Service) ResendVendorRequest(ctx context.Context, vendorRequestID uuid.
 	if err != nil || v == nil {
 		return fmt.Errorf("loading vendor: %v", err)
 	}
+	if v.Status != vendor.StatusActive {
+		// Opted out (STOP), deactivated or blocked since: never re-send.
+		s.logger.Info("vendor request not re-sent: vendor not active", "vendor_request_id", vr.ID, "status", v.Status)
+		return nil
+	}
 	var listing *supply.Listing
 	if vr.SupplyListingID != nil && s.listings != nil {
 		listing, _ = s.listings.FindByID(ctx, *vr.SupplyListingID)

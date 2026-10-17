@@ -551,8 +551,9 @@ export default function RequestDetailPage() {
                 Transaction <code>{selection.transaction.id}</code> · {selection.transaction.status} · payment{" "}
                 <strong>{selection.transaction.payment_status}</strong> · fulfilment {selection.transaction.fulfilment_status}
                 <br />
-                Gross ₦{selection.transaction.gross_amount.toLocaleString()} · platform fee ₦
-                {selection.transaction.platform_fee.toLocaleString()} · vendor ₦{selection.transaction.vendor_amount.toLocaleString()}
+                Gross ₦{selection.transaction.gross_amount.toLocaleString()} · illustrative fee ₦
+                {selection.transaction.platform_fee.toLocaleString()} (not charged: the buyer pays the seller directly; see Deals → Revenue
+                lines)
               </div>
             )}
           </div>

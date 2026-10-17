@@ -32,6 +32,7 @@ provider, no warehouse, no event bus. Everything lives in the existing PostgreSQ
 | 11 | Offer selected | `buyer_selections` (ACTIVE), `source` | `BUYER_SELECTION_CREATED`, `OFFER_ACCEPTED` (+ `seconds_since_offer_sent`) |
 | 12 | Transaction created | `transactions.created_at` | `TRANSACTION_CREATED` |
 | 13 | Transaction completed | `transactions.status = 'COMPLETED'` | `TRANSACTION_COMPLETED` — **reserved**; nothing completes a transaction until fulfilment exists |
+| 14 | Deal confirmed | `deals.confirmed_at` | `DEAL_CONFIRMED` — buyer and seller both said yes to Majo's follow-up (pilot batch item 5); the pilot's measure of a sale |
 
 Also recorded: `OFFER_WITHDRAWN`, `BUYER_REPLY_UNRESOLVED` (ambiguous / out-of-range replies —
 a direct measure of conversational friction), `MESSAGE_FAILED` (asynchronous delivery failure),

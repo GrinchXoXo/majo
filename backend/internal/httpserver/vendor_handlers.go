@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/supply"
@@ -22,18 +24,19 @@ func NewVendorHandlers(vendors vendor.Repository, supplies supply.Repository, ev
 }
 
 type vendorDTO struct {
-	ID                string   `json:"id"`
-	BusinessName      string   `json:"business_name"`
-	WhatsAppExternalID string  `json:"whatsapp_external_id"`
-	Phone             string   `json:"phone"`
-	Status            string   `json:"status"`
-	PrimaryLocation   string   `json:"primary_location"`
-	Notes             string   `json:"notes"`
-	Categories        []string `json:"categories"`
-	ServiceAreas      []string `json:"service_areas"`
-	RequestsReceived  int      `json:"requests_received"`
-	ResponsesReceived int      `json:"responses_received"`
-	CreatedAt         string   `json:"created_at"`
+	ID                 string   `json:"id"`
+	BusinessName       string   `json:"business_name"`
+	WhatsAppExternalID string   `json:"whatsapp_external_id"`
+	Phone              string   `json:"phone"`
+	Status             string   `json:"status"`
+	PrimaryLocation    string   `json:"primary_location"`
+	Notes              string   `json:"notes"`
+	Categories         []string `json:"categories"`
+	ServiceAreas       []string `json:"service_areas"`
+	RequestsReceived   int      `json:"requests_received"`
+	ResponsesReceived  int      `json:"responses_received"`
+	CreatedAt          string   `json:"created_at"`
+	Warnings           []string `json:"warnings,omitempty"`
 }
 
 func toVendorDTO(v *vendor.Vendor) vendorDTO {
@@ -64,20 +67,32 @@ func (h *VendorHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if body.BusinessName == "" || body.WhatsAppExternalID == "" {
+	if strings.TrimSpace(body.BusinessName) == "" || body.WhatsAppExternalID == "" {
 		writeError(w, http.StatusBadRequest, "business_name and whatsapp_external_id are required")
 		return
 	}
+	// 01a audit: store the number the way WhatsApp reports it, or the
+	// vendor's replies are never recognised as theirs.
+	waID, err := vendor.NormalizeWhatsAppID(body.WhatsAppExternalID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if existing, _ := h.vendors.FindByWhatsAppID(r.Context(), waID); existing != nil {
+		writeError(w, http.StatusConflict, "a vendor with this WhatsApp number already exists: "+existing.BusinessName)
+		return
+	}
+	categories, unknown := vendor.NormalizeCategories(body.Categories)
 
 	v := &vendor.Vendor{
-		BusinessName:       body.BusinessName,
-		WhatsAppExternalID: body.WhatsAppExternalID,
+		BusinessName:       strings.TrimSpace(body.BusinessName),
+		WhatsAppExternalID: waID,
 		Phone:              body.Phone,
-		PrimaryLocation:    body.PrimaryLocation,
+		PrimaryLocation:    strings.Join(strings.Fields(body.PrimaryLocation), " "),
 		Notes:              body.Notes,
 		Status:             vendor.StatusPending,
-		Categories:         body.Categories,
-		ServiceAreas:       body.ServiceAreas,
+		Categories:         categories,
+		ServiceAreas:       vendor.NormalizeAreas(body.ServiceAreas),
 	}
 
 	created, err := h.vendors.Create(r.Context(), v)
@@ -92,7 +107,18 @@ func (h *VendorHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		// Non-fatal — vendor was created successfully.
 	}
 
-	writeJSON(w, http.StatusCreated, toVendorDTO(created))
+	dto := toVendorDTO(created)
+	dto.Warnings = categoryWarnings(unknown)
+	writeJSON(w, http.StatusCreated, dto)
+}
+
+// categoryWarnings explains categories no buyer request will carry.
+func categoryWarnings(unknown []string) []string {
+	if len(unknown) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("these categories match no buyer request: %s. Use: %s",
+		strings.Join(unknown, ", "), strings.Join(vendor.KnownCategories, ", "))}
 }
 
 // List handles GET /api/vendors?status=ACTIVE&category=electronics
@@ -158,13 +184,19 @@ func (h *VendorHandlers) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	categories, unknown := vendor.NormalizeCategories(body.Categories)
 	fields := vendor.Fields{
 		BusinessName: body.BusinessName, Phone: body.Phone, PrimaryLocation: body.PrimaryLocation,
-		Notes: body.Notes, Categories: body.Categories, ServiceAreas: body.ServiceAreas,
+		Notes: body.Notes, Categories: categories, ServiceAreas: vendor.NormalizeAreas(body.ServiceAreas),
 	}
 	if body.Status != nil {
-		st := vendor.Status(*body.Status)
+		st := vendor.Status(strings.ToUpper(strings.TrimSpace(*body.Status)))
+		if !vendor.ValidStatus(st) {
+			writeError(w, http.StatusBadRequest, "status must be PENDING, ACTIVE, INACTIVE or BLOCKED")
+			return
+		}
 		fields.Status = &st
+		body.Status = (*string)(&st)
 	}
 
 	updated, err := h.vendors.Update(r.Context(), id, fields)
@@ -183,7 +215,9 @@ func (h *VendorHandlers) Patch(w http.ResponseWriter, r *http.Request) {
 		_ = h.events.Write(r.Context(), &event.Event{EventType: evtType, EntityType: "vendor", EntityID: &id, ActorType: event.ActorOperator, ActorID: actorID(r)})
 	}
 
-	writeJSON(w, http.StatusOK, toVendorDTO(updated))
+	dto := toVendorDTO(updated)
+	dto.Warnings = categoryWarnings(unknown)
+	writeJSON(w, http.StatusOK, dto)
 }
 
 type supplySignalDTO struct {

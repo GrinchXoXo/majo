@@ -53,6 +53,10 @@ var funnelStages = []stageQuery{
 		`SELECT count(*) FROM transactions WHERE status <> 'CANCELLED' AND created_at >= $1 AND created_at < $2`},
 	{"transaction_completed", "Transaction completed", "transactions.status = COMPLETED (updated_at)", "no code path completes a transaction yet — always 0 until fulfilment exists",
 		`SELECT count(*) FROM transactions WHERE status = 'COMPLETED' AND updated_at >= $1 AND updated_at < $2`},
+	// Pilot batch / 01a audit: buyers pay sellers directly, so a sale is
+	// known from the deal follow-up, not from the transaction.
+	{"deal_confirmed", "Deal confirmed (buyer and seller both said yes)", "deals.confirmed_at", "asked some hours after the choice; the sale itself happens off Majo",
+		`SELECT count(*) FROM deals WHERE confirmed_at >= $1 AND confirmed_at < $2`},
 }
 
 func (r *FunnelRepository) Funnel(ctx context.Context, since, until time.Time) ([]funnel.Stage, error) {

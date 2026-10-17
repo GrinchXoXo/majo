@@ -334,6 +334,20 @@ func (e *Engine) DraftReady(ctx context.Context, l *supply.Listing) {
 	if !e.cfg.Flags.AutoPublishTrustedVendorLists || e.publisher == nil || e.jobs == nil {
 		return
 	}
+	// 01a audit: a restricted item never goes live without an operator,
+	// however trusted the vendor (the same terms buyers' requests are held for).
+	var text []string
+	for _, f := range []*string{l.Category, l.Product, l.Variant, l.Description} {
+		if f != nil {
+			text = append(text, *f)
+		}
+	}
+	if term := RestrictedTerm(strings.Join(text, " "), e.cfg.Params.RestrictedTerms); term != "" {
+		_ = e.store.RecordDecision(ctx, &autonomy.Decision{WorkflowType: "listing", SubjectType: "supply_listing", SubjectID: l.ID,
+			Kind: autonomy.DecAutoPublish, Outcome: autonomy.OutcomeRejected, Fallback: autonomy.PolicyRejection,
+			Reason: "restricted_item", Result: map[string]any{"term": term}, Actor: "SYSTEM"})
+		return // stays a DRAFT for curation
+	}
 	if _, err := e.jobs.Enqueue(ctx, &jobs.Job{Type: JobListingPublish, IdempotencyKey: "publish:" + l.ID.String(),
 		Payload: map[string]any{"supply_listing_id": l.ID.String(), "vendor_id": l.VendorID.String()}, MaxAttempts: 3, RunAt: e.now().UTC()}); err != nil {
 		e.logger.Error("enqueueing auto-publish", "listing_id", l.ID, "error", err)

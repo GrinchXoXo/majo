@@ -102,7 +102,11 @@ type Params struct {
 // DefaultParams are the starting hypotheses (documented in .env.example).
 func DefaultParams() Params {
 	return Params{ConfirmMinConfidence: 0.45, MaxClarifications: 3, ClarificationTTL: 24 * time.Hour,
-		RouteMinScore: 50, RouteMaxVendors: 3, RouteVendorMaxOpen: 5,
+		// RouteMinScore 45 (was 50, 01a audit): a vendor in the request's
+		// category who serves the buyer's area (category 30 + service area
+		// 17 = 47) is contacted even before they have posted any stock;
+		// category alone (30) or category + a supply guess elsewhere is not.
+		RouteMinScore: 45, RouteMaxVendors: 3, RouteVendorMaxOpen: 5,
 		VendorRequestTTL: 72 * time.Hour, VendorClarifyMaxRounds: 2, RetryMaxAttempts: 5, ContextWindow: 72 * time.Hour,
 		RecoveryMaxRounds: 2, MaxVendorsPerRequest: 6, PendingNoticeTTL: 72 * time.Hour, RestrictedTerms: DefaultRestrictedTerms(),
 		LateReplyWindow: 72 * time.Hour}

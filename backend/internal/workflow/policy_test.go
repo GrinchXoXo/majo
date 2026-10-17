@@ -91,7 +91,7 @@ func TestRoutingPolicyThresholdFanOutBusyAndLocality(t *testing.T) {
 	p := autonomy.DefaultParams()
 	req := &request.BuyerRequest{Product: sp("iphone 13"), Location: sp("Benin City")}
 	f := false
-	low := cand(45, 20, nil)
+	low := cand(40, 20, nil) // below AUTO_ROUTE_MIN_SCORE (45)
 	busy := cand(90, 20, nil)
 	over := cand(95, 20, &f)
 	a, b, c := cand(90, 20, nil), cand(80, 17, nil), cand(70, 20, nil)
@@ -354,5 +354,22 @@ func TestStrongYesOnlySelects(t *testing.T) {
 	}
 	if !StrongYes("Yes") || !StrongYes("I'll take it") {
 		t.Fatal("explicit yes selects")
+	}
+}
+
+// 01a audit: a new pilot vendor (categories and areas set, no stock posted
+// yet) is contacted when the buyer is in their area, however precisely the
+// buyer names it; not when the buyer is elsewhere.
+func TestRoutingNewVendorByArea(t *testing.T) {
+	str := func(s string) *string { return &s }
+	v := &vendor.Vendor{ID: uuid.New(), Status: vendor.StatusActive, Categories: []string{"electronics"},
+		PrimaryLocation: "Unilag", ServiceAreas: []string{"Akoka", "Moremi Hall"}}
+	for loc, routed := range map[string]bool{"Unilag": true, "Unilag main gate": true, "Akoka": true, "moremi hall": true, "Ikeja": false} {
+		req := &request.BuyerRequest{Category: str("electronics"), Product: str("iphone 13"), Location: str(loc)}
+		c := matching.Match(req, []*vendor.Vendor{v}, nil, nil, matching.DefaultWeights(), matching.DefaultMinRelevanceScore, matching.DefaultMaxCandidates)
+		plan := RoutingPolicy(req, c, nil, nil, autonomy.DefaultParams(), time.Now())
+		if got := len(plan.Route) == 1; got != routed {
+			t.Errorf("buyer in %q: routed=%v, want %v (candidates %+v, excluded %v)", loc, got, routed, c, plan.Excluded)
+		}
 	}
 }

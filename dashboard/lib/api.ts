@@ -153,6 +153,8 @@ export type VendorDTO = {
   requests_received: number;
   responses_received: number;
   created_at: string;
+  // e.g. categories no buyer request will ever carry (01a audit)
+  warnings?: string[];
 };
 
 export type MatchCandidateDTO = {
@@ -245,7 +247,11 @@ export async function createVendor(body: CreateVendorBody): Promise<VendorDTO> {
     headers: operatorHeaders(),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`failed to create vendor: ${res.status}`);
+  if (!res.ok) {
+    // The server explains a refused number or a duplicate vendor.
+    const detail = await res.json().then((b) => b?.error as string | undefined).catch(() => undefined);
+    throw new Error(`failed to create vendor: ${detail ?? res.status}`);
+  }
   return res.json();
 }
 
@@ -255,7 +261,10 @@ export async function patchVendor(id: string, body: Partial<CreateVendorBody & {
     headers: operatorHeaders(),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`failed to update vendor: ${res.status}`);
+  if (!res.ok) {
+    const detail = await res.json().then((b) => b?.error as string | undefined).catch(() => undefined);
+    throw new Error(`failed to update vendor: ${detail ?? res.status}`);
+  }
   return res.json();
 }
 

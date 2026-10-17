@@ -165,3 +165,20 @@ func TestMatch_DeterministicTieBreaking(t *testing.T) {
 		t.Error("expected identical ranking regardless of input order (deterministic tie-breaking)")
 	}
 }
+
+// 01a audit: one place named more or less precisely is the same place.
+func TestLocationMatches(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"Unilag", "unilag", true}, {"Unilag", "Unilag main gate", true}, {"Yaba, Lagos", "Yaba", true},
+		{"GRA, Benin City", "GRA", true}, {"Benin", "Benin City", true}, {"Moremi Hall", "moremi  hall", true},
+		{"Unilag", "Akoka", false}, {"Ring Road", "Ikorodu Road", false}, {"Lagos", "Benin City", false},
+		{"", "Lagos", false}, {"ui", "Guinness", false}, {"Ikeja", "Ikeja GRA", true},
+	} {
+		if got := LocationMatches(c.a, c.b); got != c.want {
+			t.Errorf("LocationMatches(%q, %q) = %v", c.a, c.b, got)
+		}
+	}
+}

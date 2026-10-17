@@ -97,7 +97,7 @@ func TestIntegration_SupplyMetrics(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Get(rec, httptest.NewRequest(http.MethodGet, "/api/metrics/funnel?days=30", nil))
 	var rep funnel.Report
-	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &rep) != nil || len(rep.Stages) != 15 || len(rep.Supply) != 15 {
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &rep) != nil || len(rep.Stages) != 16 || len(rep.Supply) != 15 {
 		t.Fatalf("funnel endpoint: %d stages=%d supply=%d", rec.Code, len(rep.Stages), len(rep.Supply))
 	}
 }

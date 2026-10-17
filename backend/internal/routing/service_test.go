@@ -216,6 +216,9 @@ func (f *fakeVendorRepo) Create(ctx context.Context, v *vendor.Vendor) (*vendor.
 	return v, nil
 }
 func (f *fakeVendorRepo) Update(ctx context.Context, id uuid.UUID, fields vendor.Fields) (*vendor.Vendor, error) {
+	if v := f.vendors[id]; v != nil && fields.Status != nil {
+		v.Status = *fields.Status
+	}
 	return f.vendors[id], nil
 }
 func (f *fakeVendorRepo) FindByID(ctx context.Context, id uuid.UUID) (*vendor.Vendor, error) {

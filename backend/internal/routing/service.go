@@ -459,6 +459,9 @@ func (s *Service) ProcessVendorMessage(ctx context.Context, v *vendor.Vendor, ra
 // its source message. VendorRequest handling is unchanged.
 func (s *Service) ProcessVendorMessageFrom(ctx context.Context, v *vendor.Vendor, ref supply.Inbound, rawText string) *VendorResponse {
 	_ = s.vendors.RecordMessageActivity(ctx, v.ID)
+	if s.handleVendorKeyword(ctx, v, rawText) {
+		return nil // STOP / START: never a reply or supply
+	}
 	if s.autoOn() {
 		// Phase 4C correction: context-aware association and clarification.
 		return s.processVendorTextAutonomous(ctx, v, ref, rawText)

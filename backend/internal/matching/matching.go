@@ -6,6 +6,7 @@ package matching
 import (
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/supply"
@@ -43,7 +44,7 @@ type MatchType string
 const (
 	MatchSupplyConfirmed MatchType = "SUPPLY_CONFIRMED"
 	MatchProductCapable  MatchType = "PRODUCT_CAPABLE"
-	MatchCanSource        MatchType = "CAN_SOURCE"
+	MatchCanSource       MatchType = "CAN_SOURCE"
 	MatchCategoryOnly    MatchType = "CATEGORY_ONLY"
 )
 
@@ -163,7 +164,7 @@ func Match(
 		// --- Location (PRD 2 §21) ---
 		locationScore := 0
 		if reqLocation != "" {
-			if normalizeLocation(v.PrimaryLocation) == reqLocation {
+			if LocationMatches(v.PrimaryLocation, reqLocation) {
 				locationScore = weights.LocationMax
 				reasons = append(reasons, "location_match")
 			} else if hasServiceArea(v.ServiceAreas, reqLocation) {
@@ -420,11 +421,49 @@ func categoriesCompatible(a, b string) bool {
 
 func hasServiceArea(areas []string, target string) bool {
 	for _, a := range areas {
-		if normalizeLocation(a) == target {
+		if LocationMatches(a, target) {
 			return true
 		}
 	}
 	return false
+}
+
+// LocationMatches: the same place, or one names the other more precisely
+// ("Unilag" and "Unilag main gate", "Yaba" and "Yaba, Lagos", "GRA" and
+// "GRA, Benin City"): every word of the shorter is a word of the longer.
+// Before the 01a audit only identical strings matched, so a buyer in
+// "Akoka" or at "Unilag main gate" never reached a vendor saved as "Unilag".
+func LocationMatches(a, b string) bool {
+	na, nb := normalizeLocation(a), normalizeLocation(b)
+	if na == "" || nb == "" {
+		return false
+	}
+	if na == nb {
+		return true
+	}
+	ta, tb := locationWords(na), locationWords(nb)
+	if len(ta) == 0 || len(tb) == 0 {
+		return false
+	}
+	if len(ta) > len(tb) {
+		ta, tb = tb, ta
+	}
+	have := map[string]bool{}
+	for _, w := range tb {
+		have[w] = true
+	}
+	for _, w := range ta {
+		if !have[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// locationWords: lower-case words of letters and digits; "benin" alone is
+// read as "benin city" (normalizeLocation).
+func locationWords(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 }
 
 // normalizeProduct matches PRD 2 §19's example: "iPhone 13" / "iphone13" /
