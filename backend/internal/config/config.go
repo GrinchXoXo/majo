@@ -5,6 +5,8 @@ package config
 import (
 	"fmt"
 	"github.com/middleman/backend/internal/autonomy"
+	"github.com/middleman/backend/internal/monetization"
+	"github.com/middleman/backend/internal/payments"
 	"github.com/middleman/backend/internal/tone"
 	"os"
 	"strconv"
@@ -137,6 +139,10 @@ type Config struct {
 	// off|shadow|on, default off) and the per-message rewrite timeout.
 	ToneLayer   tone.Mode
 	ToneTimeout time.Duration
+	// Pilot batch item 8: monetization scaffold. MONETIZATION_STAGE (A),
+	// PAYMENTS_PROVIDER (none) and FEATURE_<LINE> flags, all off; a line
+	// switched on before its stage and provider exist stops startup.
+	Monetization monetization.Settings
 	// DiscoveryConsentWording is the current opt-in wording version.
 	DiscoveryConsentWording string
 	// DiscoveryEnquiryConfirmation: how "Ask about it" requests become
@@ -291,6 +297,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.ToneTimeout, err = getDuration("TONE_TIMEOUT", 5*time.Second); err != nil {
+		return nil, err
+	}
+	if err := loadMonetization(cfg); err != nil {
 		return nil, err
 	}
 
@@ -514,5 +523,31 @@ func loadDeals(cfg *Config) error {
 		// the question would not arrive without a template.
 		fmt.Fprintln(os.Stderr, "warning: DEAL_FOLLOWUP_DELAY >= 24h: the follow-up will usually miss the buyer's WhatsApp window")
 	}
+	return nil
+}
+
+// loadMonetization reads the revenue-line flags (pilot batch item 8).
+func loadMonetization(cfg *Config) error {
+	m := monetization.Default()
+	var err error
+	if m.Stage, err = monetization.ParseStage(os.Getenv("MONETIZATION_STAGE")); err != nil {
+		return err
+	}
+	if m.Provider, err = payments.ParseKind(os.Getenv("PAYMENTS_PROVIDER")); err != nil {
+		return err
+	}
+	for _, l := range monetization.Lines {
+		on, err := getBool(monetization.EnvName(l), false)
+		if err != nil {
+			return err
+		}
+		if on {
+			m.Enabled[l] = true
+		}
+	}
+	if err := m.Validate(); err != nil {
+		return err
+	}
+	cfg.Monetization = m
 	return nil
 }

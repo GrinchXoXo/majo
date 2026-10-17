@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createColumnHelper } from "@tanstack/react-table";
 import DataTable, { Pager, type Features } from "@/components/DataTable";
-import { getDealSummary, listDeals, type DealDTO, type DealSummary } from "@/lib/api";
+import { getDealSummary, getMonetization, listDeals, type DealDTO, type DealSummary, type Monetization } from "@/lib/api";
 
 // Pilot batch item 5. A deal is Majo's follow-up on a buyer's choice: some
 // hours after it, both sides are asked "did you buy / did you sell?". Two
@@ -63,8 +63,57 @@ function Tile({ label, value, sub, warn }: { label: string; value: string; sub?:
   );
 }
 
+const STAGE_NAMES: Record<string, string> = {
+  A: "Stage A: free pilot (unregistered)",
+  B: "Stage B: CAC business name",
+  C: "Stage C: company + licensed partner",
+};
+
+// Revenue lines and the condition each one waits for. Switching one on is
+// a reviewed configuration change; the server refuses it before its stage.
+function RevenueLines({ m }: { m: Monetization }) {
+  const anyOn = m.lines.some((l) => l.on);
+  return (
+    <section aria-label="Revenue lines" style={{ margin: "20px 0" }}>
+      <h2 style={{ fontSize: "1.1em" }}>Revenue lines</h2>
+      <p style={{ color: "#666", maxWidth: 760, margin: "4px 0 8px" }}>
+        {STAGE_NAMES[m.stage] ?? m.stage} · payment provider: <strong>{m.provider}</strong> ·{" "}
+        {anyOn ? "some lines are on" : "nothing is charged: every line is off"}
+        {m.ledger && ` · ledger entries: ${m.ledger.entries}`}
+      </p>
+      <table style={{ borderCollapse: "collapse", fontSize: "0.9em" }}>
+        <thead>
+          <tr>
+            {["Line", "State", "Who pays", "Needs", "Waiting for"].map((h) => (
+              <th key={h} style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "4px 8px" }}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {m.lines.map((l) => (
+            <tr key={l.line}>
+              <td style={{ padding: "4px 8px" }}>
+                <code>{l.line}</code>
+              </td>
+              <td style={{ padding: "4px 8px", color: l.on ? "#15803d" : "#888", fontWeight: 600 }}>{l.on ? "ON" : "off"}</td>
+              <td style={{ padding: "4px 8px" }}>{l.requirement.payer}</td>
+              <td style={{ padding: "4px 8px" }}>
+                Stage {l.requirement.stage}, {l.requirement.providers.join(" or ")}
+              </td>
+              <td style={{ padding: "4px 8px", color: "#555", maxWidth: 420 }}>{l.requirement.gate}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 export default function DealsPage() {
   const [summary, setSummary] = useState<DealSummary | null>(null);
+  const [money, setMoney] = useState<Monetization | null>(null);
   const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);
   const [rows, setRows] = useState<DealDTO[]>([]);
@@ -76,6 +125,9 @@ export default function DealsPage() {
     getDealSummary()
       .then(setSummary)
       .catch((e) => setError(e instanceof Error ? e.message : "unknown error"));
+    getMonetization()
+      .then(setMoney)
+      .catch(() => setMoney(null)); // the deals view works without it
   }, []);
 
   useEffect(() => {
@@ -127,6 +179,7 @@ export default function DealsPage() {
           ))}
         </select>
       </label>
+      {money && <RevenueLines m={money} />}
       {loaded && !error && (
         <>
           <Pager offset={offset} limit={PAGE} total={total} onChange={setOffset} />

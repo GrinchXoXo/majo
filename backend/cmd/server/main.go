@@ -36,6 +36,7 @@ import (
 	"github.com/middleman/backend/internal/marketplace"
 	"github.com/middleman/backend/internal/media"
 	"github.com/middleman/backend/internal/offer"
+	"github.com/middleman/backend/internal/payments"
 	"github.com/middleman/backend/internal/presentation"
 	"github.com/middleman/backend/internal/request"
 	"github.com/middleman/backend/internal/routing"
@@ -461,6 +462,18 @@ func main() {
 	// Pilot batch item 4: pause / resume ALL automation (incident switch).
 	mux.HandleFunc("GET /api/autonomy/pause", operatorAuth.RequireViewer(autonomyHandlers.GlobalPauseStatus))
 	// Pilot batch item 5: deals (read-only).
+	// Pilot batch item 8: monetization scaffold, everything off. Only the
+	// "none" payment provider exists; the ledger is written to by no one yet.
+	if _, err := payments.New(cfg.Monetization.Provider); err != nil {
+		logger.Error("payments", "error", err)
+		os.Exit(1)
+	}
+	ledgerRepo := postgres.NewLedgerRepository(pool)
+	logger.Info("monetization", "stage", string(cfg.Monetization.Stage), "provider", string(cfg.Monetization.Provider),
+		"lines_on", len(cfg.Monetization.Enabled))
+	monetizationHandlers := httpserver.NewMonetizationHandlers(cfg.Monetization, ledgerRepo, logger)
+	mux.HandleFunc("GET /api/monetization", operatorAuth.RequireViewer(monetizationHandlers.Get))
+
 	dealHandlers := httpserver.NewDealHandlers(dealService, logger)
 	mux.HandleFunc("GET /api/deals/summary", operatorAuth.RequireViewer(dealHandlers.Summary))
 	mux.HandleFunc("GET /api/deals", operatorAuth.RequireViewer(dealHandlers.List))

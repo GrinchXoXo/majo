@@ -3,7 +3,7 @@
 // §20-21: BuyerSelection and Transaction are deliberately distinct —
 // selecting an offer must never be conflated with money having moved.
 // No payment execution happens in this package; PaymentProvider
-// (infrastructure/payment) is invoked by a future phase, not this one.
+// (internal/payments) is invoked by a future phase, not this one.
 package transaction
 
 import (

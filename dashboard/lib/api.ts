@@ -1006,5 +1006,15 @@ export type DealSummary = {
 };
 
 export const getDealSummary = () => operatorCall<DealSummary>("/api/deals/summary");
+
+// Pilot batch item 8: the monetization scaffold (read-only; everything off).
+export type Monetization = {
+  stage: "A" | "B" | "C";
+  provider: string;
+  customer_funds_allowed: boolean;
+  lines: { line: string; on: boolean; env_var: string; requirement: { stage: string; providers: string[]; payer: string; gate: string } }[];
+  ledger?: { entries: number; balances_kobo: Record<string, number> };
+};
+export const getMonetization = () => operatorCall<Monetization>("/api/monetization");
 export const listDeals = (status: string, limit: number, offset: number) =>
   readPage<DealDTO>(`/api/deals?status=${encodeURIComponent(status)}&limit=${limit}&offset=${offset}`);

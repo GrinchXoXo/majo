@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -86,5 +87,36 @@ func TestLegacyFreshnessWindowName(t *testing.T) {
 	t.Setenv("SUPPLY_FRESHNESS_WINDOW", "48h")
 	if cfg, err := Load(); err != nil || cfg.SupplyFreshnessWindow.Hours() != 48 {
 		t.Fatalf("new name wins: %v", err)
+	}
+}
+
+// Pilot batch item 8: every revenue line is off, and none can be switched on
+// before its stage and payment provider exist.
+func TestMonetizationAllOffAndGated(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Monetization.Stage != "A" || cfg.Monetization.Provider != "none" || len(cfg.Monetization.Enabled) != 0 {
+		t.Fatalf("%+v", cfg.Monetization)
+	}
+	t.Setenv("FEATURE_LEAD_CREDITS", "true")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LEAD_CREDITS needs stage B") {
+		t.Fatalf("refused in stage A: %v", err)
+	}
+	t.Setenv("MONETIZATION_STAGE", "B")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "PAYMENTS_PROVIDER") {
+		t.Fatalf("refused without a provider: %v", err)
+	}
+	t.Setenv("PAYMENTS_PROVIDER", "stripe")
+	if _, err := Load(); err == nil {
+		t.Fatal("unknown provider refused")
+	}
+	t.Setenv("FEATURE_LEAD_CREDITS", "maybe")
+	t.Setenv("PAYMENTS_PROVIDER", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("bad flag value refused")
 	}
 }
