@@ -19,21 +19,26 @@ Steps:
    - `"status":"ok"` with both checks ok — both services are fine.
    - `"status":"degraded"` — HTTP 503; one of the checks is down.
    - If the page does not load at all, the backend process itself is down.
-3. If the backend is down: restart it (see README "Local run";
-   TODO(owner): document the production start/restart command and where
-   it runs).
-4. If `ai_service` is unreachable: start/restart the AI service
-   (uvicorn on port 8000; see README). The core request flow needs it for
-   extraction.
+3. If the backend is down: on the server, `deploy/scripts/majo.sh status`,
+   then `deploy/scripts/majo.sh logs backend` and
+   `deploy/scripts/majo.sh compose restart backend`
+   (see `docs/operations/deployment.md`). Locally, see README "Local run".
+4. If `ai_service` is unreachable: `deploy/scripts/majo.sh compose restart ai`
+   (locally: uvicorn on port 8000). The core request flow needs it for
+   extraction; without an Anthropic key it uses the heuristic extractor.
 
 ## 2. Database unreachable
 
 1. Check `GET http://<host>:8080/ready`.
 2. If `"postgres": "unreachable: ..."` — the backend cannot reach the
-   database. The owner's database is Neon (per repo docs).
-3. Check the DATABASE_URL still matches the current Neon connection
-   string, and that the Neon project is awake/not suspended.
-   TODO(owner): exact Neon console steps for the account in use.
+   database. Production uses its own database (managed, or Postgres on the
+   server with `--profile localdb`; see `docs/operations/deployment.md`);
+   the dev Neon database is never production.
+3. Managed: check `DATABASE_URL` in `deploy/.env.production` still matches
+   the production project's connection string, and the project is not
+   suspended. On-server: `deploy/scripts/majo.sh compose ps postgres` and
+   `deploy/scripts/majo.sh logs postgres` (disk full is the usual cause:
+   `df -h`). TODO(owner): exact console steps for the provider in use.
 4. After the database is reachable again, `/ready` should return
    `"postgres": "ok"`. Migrations run automatically on server start —
    never run them by hand against the production database.
@@ -81,6 +86,8 @@ until it is resumed):
 1. Dashboard → **Autonomy** → **Global pause**: type a reason, click
    **Pause all automation**, then **Confirm pause** (operator token
    required). Or `POST /api/autonomy/pause` with `{"reason": "..."}`.
+   From the server, even if the dashboard is down:
+   `deploy/scripts/majo.sh pause "what happened"`.
 2. Effect, immediately and without a restart: Majo confirms nothing,
    routes nothing, asks buyers and vendors nothing, delivers no offers and
    sends no queued notices. A red banner shows on every dashboard page.
@@ -114,15 +121,18 @@ Tokens are named; only their SHA-256 hash is stored (per
    — the new token is printed once; give it to the person directly.
 4. In the person's browser, the old token lives in that tab's
    `sessionStorage`; setting the new token in the nav bar replaces it.
-5. If the shared `OPERATOR_API_TOKEN` leaked: rotate that value in the
-   server environment and restart the backend.
-   TODO(owner): confirm where the server environment is managed.
+5. If the shared `OPERATOR_API_TOKEN` leaked: put a new value
+   (`openssl rand -hex 32`) in `deploy/.env.production` on the server and
+   run `deploy/scripts/majo.sh compose up -d backend`.
+   On the server, operatorctl is `deploy/scripts/majo.sh operator list|create|revoke ...`.
 
 ## 6. A leaked database password or other secret
 
 1. **Contain first**: rotate the leaked secret at its source
-   - Database password: change it in the Neon console (TODO(owner):
-     exact steps), then update `DATABASE_URL` and restart the backend.
+   - Database password: change it at the production database's provider
+     (or, on-server, `ALTER ROLE majo PASSWORD ...` plus `POSTGRES_PASSWORD`),
+     update `DATABASE_URL` in `deploy/.env.production`, then
+     `deploy/scripts/majo.sh compose up -d backend`.
    - WhatsApp access token: regenerate in Meta Business Settings
      (System User), update `WHATSAPP_ACCESS_TOKEN`, restart.
    - App secret / verify token: regenerate in the Meta App dashboard and
@@ -138,10 +148,16 @@ Tokens are named; only their SHA-256 hash is stored (per
 
 ## 7. Restoring the database from a backup
 
-TODO(owner): Neon restore steps (point-in-time restore / branch restore
-for the account in use). The repo docs do not describe a restore
-procedure. Until that is written down here: do not improvise restores
-against the live pilot database.
+Nightly dumps (database and media) come from `deploy/scripts/majo.sh backup`;
+test them with `majo.sh restore-test <dump>`. The full restore procedure
+is in `docs/operations/deployment.md` §8. Its rules:
+
+- pause automation first;
+- restore into a new, empty database, never over the damaged one;
+- repoint `DATABASE_URL` and redeploy.
+
+TODO(owner): the managed provider's point-in-time restore steps, if you use
+option A.
 
 ## Sources
 

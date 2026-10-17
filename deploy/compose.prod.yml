@@ -1,0 +1,136 @@
+# Majo production stack for one small server (pilot batch item 6).
+#
+# Always run through deploy/scripts/majo.sh (or the same flags by hand):
+#   docker compose -f deploy/compose.prod.yml --env-file deploy/.env.production ...
+#
+# Only Caddy publishes ports (80/443). Caddy gets the TLS certificate for
+# MAJO_DOMAIN and sends /api/*, /webhooks/*, /health and /ready to the
+# backend and everything else to the dashboard, so the dashboard and the API
+# share one origin (no CORS, one DNS record, one certificate).
+#
+# Database: DATABASE_URL in .env.production points at the production
+# database. Either a managed Postgres created for production only, or the
+# bundled Postgres below (start with --profile localdb). Never the dev Neon.
+# See docs/operations/deployment.md.
+name: majo
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - dashboard
+    environment:
+      MAJO_DOMAIN: ${MAJO_DOMAIN:?set MAJO_DOMAIN in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.production}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: *logging
+
+  ai:
+    build: ../ai
+    restart: unless-stopped
+    environment:
+      SENTRY_DSN: ${AI_SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: production
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
+      ANTHROPIC_TIMEOUT_SECONDS: ${ANTHROPIC_TIMEOUT_SECONDS:-10}
+      EXTRACTOR: ${EXTRACTOR:-}
+    expose:
+      - "8000"
+    mem_limit: 512m
+    logging: *logging
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    depends_on:
+      ai:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+        required: false # only with --profile localdb
+    # Everything in .env.production; the values below always win.
+    env_file: ${MAJO_ENV_FILE:-.env.production}
+    environment:
+      APP_ENV: production
+      APP_PORT: "8080"
+      AI_SERVICE_URL: http://ai:8000
+      MEDIA_STORAGE_DIR: /app/data/media
+      DASHBOARD_URL: https://${MAJO_DOMAIN}
+      CORS_ALLOWED_ORIGINS: https://${MAJO_DOMAIN}
+      SENTRY_DSN: ${BACKEND_SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: production
+      SENTRY_RELEASE: majo-backend@${MAJO_RELEASE:-unknown}
+    expose:
+      - "8080"
+    volumes:
+      - media_data:/app/data/media
+    logging: *logging
+
+  dashboard:
+    build:
+      context: ../dashboard
+      args:
+        # Same origin as the dashboard: Caddy routes /api/* to the backend.
+        NEXT_PUBLIC_API_URL: https://${MAJO_DOMAIN}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    expose:
+      - "3000"
+    logging: *logging
+
+  # --- Option B: Postgres on this server (docker compose --profile localdb) ---
+  # Not published on any host port. Back it up off the server (see the runbook).
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["localdb"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: majo
+      POSTGRES_DB: majo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U majo -d majo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    shm_size: 128mb
+    logging: *logging
+
+  # One-off database tools (backups, restore checks). Never starts on `up`.
+  #   docker compose ... run --rm dbtools pg_dump ...
+  dbtools:
+    # pg_dump must be at least the server's major version: 16 for the
+    # on-server database (set automatically by majo.sh), 17 by default.
+    image: postgres:${DBTOOLS_PG_MAJOR:-17}-alpine
+    profiles: ["tools"]
+    env_file: ${MAJO_ENV_FILE:-.env.production}
+    volumes:
+      - ./backups:/backups
+      - media_data:/media:ro
+    entrypoint: []
+    command: ["true"]
+
+volumes:
+  caddy_data:
+  caddy_config:
+  media_data:
+  postgres_data:

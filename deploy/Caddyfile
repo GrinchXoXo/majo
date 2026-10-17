@@ -1,0 +1,50 @@
+# Majo reverse proxy (pilot batch item 6). Caddy obtains and renews the TLS
+# certificate for MAJO_DOMAIN automatically (ports 80 and 443 must be open
+# and the DNS A record must point at this server).
+{
+	email {$ACME_EMAIL}
+}
+
+{$MAJO_DOMAIN} {
+	encode zstd gzip
+
+	# Backend: operator API, WhatsApp webhook, health checks.
+	@backend path /api/* /webhooks/* /health /ready
+	handle @backend {
+		# WhatsApp webhook payloads are small; media is fetched separately.
+		request_body {
+			max_size 2MB
+		}
+		reverse_proxy backend:8080
+	}
+
+	# Everything else: the operator dashboard.
+	handle {
+		reverse_proxy dashboard:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+		# Never log bearer tokens.
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Cookie delete
+				# Meta's webhook verification sends the verify token in the URL.
+				request>uri query {
+					replace hub.verify_token REDACTED
+				}
+			}
+		}
+	}
+}

@@ -75,7 +75,10 @@ services:
       - media_data:/app/data/media
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080
     restart: unless-stopped
     depends_on:
       - backend

@@ -34,3 +34,8 @@ __pycache__/
 dashboard/next-env.d.ts
 dashboard/test-results/
 dashboard/playwright-report/
+
+# Production deploy (deploy/scripts/majo.sh)
+deploy/.env.production
+deploy/backups/
+deploy/.deploy-history

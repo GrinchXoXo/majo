@@ -4,7 +4,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/server ./cmd/server && mkdir -p /out/data/media
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/server ./cmd/server \
+ && CGO_ENABLED=0 GOOS=linux go build -o /out/operatorctl ./cmd/operatorctl \
+ && mkdir -p /out/data/media
 
 # Runs as the image's non-root user (uid 65532). The media directory is
 # created owned by that user so a fresh named volume inherits it. An existing
@@ -13,6 +15,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/server ./cmd/server && mkdir -p /o
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/server ./server
+# operatorctl manages named operator tokens:
+#   docker compose exec backend /app/operatorctl create -name "Ada" -role OPERATOR
+COPY --from=build /out/operatorctl ./operatorctl
 COPY --from=build /src/migrations ./migrations
 COPY --from=build --chown=65532:65532 /out/data ./data
 USER nonroot:nonroot
