@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback } from "react";
 import { listVendors, createVendor, patchVendor, type VendorDTO } from "@/lib/api";
 
 // Per PRD 2 §6, §51: operator-driven vendor onboarding. No public
@@ -67,6 +67,34 @@ export default function VendorsPage() {
     await load();
   };
 
+  // 01a audit: categories, location and service areas decide which requests
+  // reach a vendor, so they must be editable here, not only through the API.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ primary_location: "", categories: "", service_areas: "", status: "ACTIVE" });
+  const startEdit = (v: VendorDTO) => {
+    setEditing(v.id);
+    setEditForm({ primary_location: v.primary_location, categories: v.categories.join(", "), service_areas: (v.service_areas ?? []).join(", "), status: v.status });
+  };
+  const saveEdit = async () => {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      const updated = await patchVendor(editing, {
+        primary_location: editForm.primary_location,
+        categories: editForm.categories.split(",").map((c) => c.trim()).filter(Boolean),
+        service_areas: editForm.service_areas.split(",").map((s) => s.trim()).filter(Boolean),
+        status: editForm.status,
+      });
+      setEditing(null);
+      await load();
+      setError(updated.warnings?.length ? `Saved ${updated.business_name}. Warning: ${updated.warnings.join(" ")}` : null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to update vendor");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const inputStyle: React.CSSProperties = { padding: "6px 8px", border: "1px solid #ccc", borderRadius: 4, fontSize: "0.9em", width: "100%" };
 
   return (
@@ -108,7 +136,8 @@ export default function VendorsPage() {
         </thead>
         <tbody>
           {vendors.map((v) => (
-            <tr key={v.id} style={{ borderBottom: "1px solid #eee" }}>
+            <Fragment key={v.id}>
+            <tr style={{ borderBottom: "1px solid #eee" }}>
               <td style={{ padding: "8px 4px" }}>
                 <span style={{ color: STATUS_COLORS[v.status], fontWeight: 600, fontSize: "0.85em" }}>{v.status}</span>
               </td>
@@ -117,16 +146,59 @@ export default function VendorsPage() {
                 <div style={{ fontSize: "0.8em", color: "#666" }}>{v.whatsapp_external_id}</div>
               </td>
               <td style={{ padding: "8px 4px" }}>{v.categories.join(", ") || "—"}</td>
-              <td style={{ padding: "8px 4px" }}>{v.primary_location || "—"}</td>
+              <td style={{ padding: "8px 4px" }}>
+                {v.primary_location || "—"}
+                {(v.service_areas ?? []).length > 0 && <div style={{ fontSize: "0.8em", color: "#666" }}>also: {v.service_areas.join(", ")}</div>}
+              </td>
               <td style={{ padding: "8px 4px" }}>{v.requests_received} / {v.responses_received}</td>
               <td style={{ padding: "8px 4px" }}>
-                {v.status !== "ACTIVE" && (
+                {v.status !== "ACTIVE" && v.status !== "BLOCKED" && (
                   <button onClick={() => handleActivate(v.id)} style={{ padding: "4px 10px", fontSize: "0.85em", cursor: "pointer" }}>
                     Activate
                   </button>
-                )}
+                )}{" "}
+                <button onClick={() => startEdit(v)} style={{ padding: "4px 10px", fontSize: "0.85em", cursor: "pointer" }} aria-label={`Edit ${v.business_name}`}>
+                  Edit
+                </button>
               </td>
             </tr>
+            {editing === v.id && (
+                  <tr>
+                    <td colSpan={6} style={{ background: "#f9fafb", padding: 12 }}>
+                      <div style={{ display: "grid", gap: 8, maxWidth: 600 }}>
+                        <label style={{ fontSize: "0.85em" }}>
+                          Primary location
+                          <input style={inputStyle} value={editForm.primary_location} onChange={(e) => setEditForm({ ...editForm, primary_location: e.target.value })} />
+                        </label>
+                        <label style={{ fontSize: "0.85em" }}>
+                          Categories (electronics, phones, laptops, gaming, tv, computers, accessories, fashion, furniture, food, services, school)
+                          <input style={inputStyle} value={editForm.categories} onChange={(e) => setEditForm({ ...editForm, categories: e.target.value })} />
+                        </label>
+                        <label style={{ fontSize: "0.85em" }}>
+                          Service areas (other names buyers use for places this vendor serves)
+                          <input style={inputStyle} value={editForm.service_areas} onChange={(e) => setEditForm({ ...editForm, service_areas: e.target.value })} />
+                        </label>
+                        <label style={{ fontSize: "0.85em" }}>
+                          Status{" "}
+                          <select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
+                            {["PENDING", "ACTIVE", "INACTIVE", "BLOCKED"].map((s) => (
+                              <option key={s}>{s}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <div>
+                          <button onClick={saveEdit} disabled={saving} style={{ padding: "6px 14px", background: "#15803d", color: "white", border: "none", borderRadius: 6, cursor: "pointer" }}>
+                            {saving ? "Saving..." : "Save"}
+                          </button>{" "}
+                          <button onClick={() => setEditing(null)} style={{ padding: "6px 14px", cursor: "pointer" }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+            )}
+            </Fragment>
           ))}
           {vendors.length === 0 && (
             <tr>

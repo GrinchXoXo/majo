@@ -182,3 +182,15 @@ func TestLocationMatches(t *testing.T) {
 		}
 	}
 }
+
+// 01a audit: equally good vendors take turns.
+func TestEqualVendorsRotateByRequestsReceived(t *testing.T) {
+	cat, loc := "electronics", "Unilag"
+	req := &request.BuyerRequest{Category: &cat, Location: &loc}
+	busy := &vendor.Vendor{ID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), Status: vendor.StatusActive, Categories: []string{cat}, PrimaryLocation: loc, RequestsReceived: 9}
+	fresh := &vendor.Vendor{ID: uuid.MustParse("ffffffff-0000-0000-0000-000000000001"), Status: vendor.StatusActive, Categories: []string{cat}, PrimaryLocation: loc, RequestsReceived: 1}
+	c := Match(req, []*vendor.Vendor{busy, fresh}, nil, nil, DefaultWeights(), DefaultMinRelevanceScore, DefaultMaxCandidates)
+	if len(c) != 2 || c[0].Vendor != fresh {
+		t.Fatalf("the vendor with fewer requests goes first: %+v", c)
+	}
+}

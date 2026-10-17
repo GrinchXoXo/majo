@@ -85,3 +85,28 @@ test("an operator can pause and resume ALL automation", async ({ page }) => {
   await page.goto("/requests");
   await expect(page.getByTestId("pause-banner")).toHaveCount(0);
 });
+
+// 01a audit: a vendor typed the way people write numbers is stored the way
+// WhatsApp reports it; a category no request carries is flagged; categories,
+// location and service areas can be edited on the page.
+test("vendor onboarding normalises the number, flags categories and edits areas", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/vendors");
+  const n = String(Date.now()).slice(-7);
+  await page.getByRole("button", { name: "+ Add Vendor" }).click();
+  await page.getByPlaceholder("Business name").fill(`Edit Test ${n}`);
+  await page.getByPlaceholder(/WhatsApp number/).fill(`0809 ${n.slice(0, 3)} ${n.slice(3)}`);
+  await page.getByPlaceholder(/Primary location/).fill("Unilag");
+  await page.getByPlaceholder(/Categories/).fill("Food, Small chops");
+  await page.getByRole("button", { name: "Create Vendor" }).click();
+  await expect(page.getByText(/Warning: these categories match no buyer request: small chops/)).toBeVisible();
+  const row = page.getByRole("row", { name: new RegExp(`Edit Test ${n}`) });
+  await expect(row.getByText(`234809${n}`)).toBeVisible();
+
+  await row.getByRole("button", { name: `Edit Edit Test ${n}` }).click();
+  await page.getByLabel(/Categories \(electronics/).fill("food");
+  await page.getByLabel(/Service areas/).fill("Akoka, Moremi Hall");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(row.getByText("also: Akoka, Moremi Hall")).toBeVisible();
+  await expect(page.getByText(/Warning:/)).toHaveCount(0);
+});

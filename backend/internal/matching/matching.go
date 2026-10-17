@@ -227,6 +227,12 @@ func Match(
 		if candidates[i].Breakdown["product"] != candidates[j].Breakdown["product"] {
 			return candidates[i].Breakdown["product"] > candidates[j].Breakdown["product"]
 		}
+		// 01a audit: among equally good vendors, the one sent fewer
+		// requests so far goes first, so leads rotate instead of always
+		// reaching the same vendors (the ID only breaks exact ties).
+		if candidates[i].Vendor.RequestsReceived != candidates[j].Vendor.RequestsReceived {
+			return candidates[i].Vendor.RequestsReceived < candidates[j].Vendor.RequestsReceived
+		}
 		return candidates[i].Vendor.ID.String() < candidates[j].Vendor.ID.String()
 	})
 

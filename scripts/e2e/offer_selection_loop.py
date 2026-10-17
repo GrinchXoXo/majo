@@ -230,7 +230,9 @@ ok(webhook(BUYER, f"wamid.{RUN}.one", "1") == 200, 'buyer replies "1"')
 ok(wait(lambda: "recorded your choice" in last_text(BUYER)), "selection confirmed to buyer")
 show("buyer receives", last_text(BUYER))
 conf = last_text(BUYER)
-ok("Nothing has been paid" in conf and by_vendor[mike]["public_reference"] in conf,
+# Pilot batch item 5: the confirmation now introduces the seller (link,
+# reference, safety tip) instead of the old "Nothing has been paid yet" line.
+ok(("Nothing has been paid" in conf or "Majo doesn't hold or handle payments" in conf) and by_vendor[mike]["public_reference"] in conf,
    "confirmation uses the existing MM reference and makes no payment claim")
 
 print("\n9-11. BuyerSelection + Transaction")
