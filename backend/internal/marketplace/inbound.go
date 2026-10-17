@@ -73,6 +73,27 @@ type BuyerInbound struct {
 	logger    *slog.Logger
 	discovery DiscoveryInteractions // Phase 4B; nil = not wired
 	auto      Autonomy              // Phase 4C correction; nil = not wired
+	intro     Introducer            // pilot batch item 5; nil = the old "next step" line
+}
+
+// Introducer tells the buyer who the chosen seller is and how to reach them
+// safely (deal.Service implements it). "" = not available.
+type Introducer interface {
+	Introduction(ctx context.Context, offerID uuid.UUID) string
+}
+
+// SetIntroducer wires the seller introduction into the selection confirmation.
+func (b *BuyerInbound) SetIntroducer(i Introducer) { b.intro = i }
+
+// nextStep is the closing paragraph of a selection confirmation: the seller
+// introduction when wired, else the Phase 3.1 line.
+func (b *BuyerInbound) nextStep(ctx context.Context, offerID uuid.UUID) string {
+	if b.intro != nil {
+		if t := b.intro.Introduction(ctx, offerID); t != "" {
+			return t
+		}
+	}
+	return msgNextStep
 }
 
 // Autonomy is the context-resolution step of the autonomous runtime
@@ -215,7 +236,7 @@ func (b *BuyerInbound) handleSelection(ctx context.Context, m InboundBuyerMessag
 		chosen, _ := b.offers.FindByID(ctx, res.OfferID)
 		var text string
 		if result.AlreadyRecorded {
-			text = fmt.Sprintf("You've already chosen option %d ✅%s\n\n%s", res.Ordinal, b.referenceSuffix(ctx, chosen), msgNextStep)
+			text = fmt.Sprintf("You've already chosen option %d ✅%s\n\n%s", res.Ordinal, b.referenceSuffix(ctx, chosen), b.nextStep(ctx, res.OfferID))
 		} else {
 			text = b.selectionConfirmation(ctx, res, chosen)
 		}
@@ -290,9 +311,12 @@ func (b *BuyerInbound) selectionConfirmation(ctx context.Context, res Resolution
 	} else {
 		fmt.Fprintf(&sb, "Option %d\n", res.Ordinal)
 	}
-	sb.WriteString(b.referenceSuffix(ctx, chosen))
+	next := b.nextStep(ctx, res.OfferID)
+	if next == msgNextStep {
+		sb.WriteString(b.referenceSuffix(ctx, chosen)) // the introduction carries the reference itself
+	}
 	sb.WriteString("\n\n")
-	sb.WriteString(msgNextStep)
+	sb.WriteString(next)
 	return sb.String()
 }
 

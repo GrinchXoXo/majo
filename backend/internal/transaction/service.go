@@ -42,7 +42,18 @@ type Service struct {
 	audits   audit.Writer
 	logger   *slog.Logger
 	now      func() time.Time
+	listener Listener
 }
+
+// Listener is told about every NEW transaction, whatever the source (pilot
+// batch item 5: the deal follow-up introduces buyer and vendor). Called
+// after the transaction is stored; must not block for long.
+type Listener interface {
+	OnSelected(ctx context.Context, tx *Transaction, source string)
+}
+
+// SetListener wires the listener (nil = none).
+func (s *Service) SetListener(l Listener) { s.listener = l }
 
 func NewService(repo Repository, offers offer.Repository, requests RequestReader, events event.Writer, audits audit.Writer, logger *slog.Logger) *Service {
 	return &Service{repo: repo, offers: offers, requests: requests, events: events, audits: audits, logger: logger, now: time.Now}
@@ -145,6 +156,9 @@ func (s *Service) Select(ctx context.Context, buyerRequestID, offerID, buyerID u
 	}
 
 	s.recordSelection(ctx, req, o, selection, tx, buyerID)
+	if s.listener != nil {
+		s.listener.OnSelected(ctx, tx, source)
+	}
 	return &SelectionResult{Selection: selection, Transaction: tx}, nil
 }
 

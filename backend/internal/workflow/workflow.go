@@ -137,6 +137,7 @@ type Engine struct {
 	holds         autonomy.HoldStore
 	offerReverter OfferReverter
 	pauses        autonomy.PauseStore // pilot batch item 4: global pause
+	deals         DealAnswers         // pilot batch item 5: deal follow-up
 }
 
 // OfferReverter returns offers whose delivery the provider later reported

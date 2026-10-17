@@ -193,6 +193,12 @@ const (
 	// (pilot batch item 4).
 	AutomationPaused  Type = "AUTOMATION_PAUSED"
 	AutomationResumed Type = "AUTOMATION_RESUMED"
+	// Deals (pilot batch item 5): Majo's follow-up on a buyer's choice.
+	DealCreated   Type = "DEAL_CREATED"
+	DealConfirmed Type = "DEAL_CONFIRMED"
+	DealDisputed  Type = "DEAL_DISPUTED"
+	DealRated     Type = "DEAL_RATED"
+	DealClosed    Type = "DEAL_CLOSED"
 )
 
 // ActorType identifies who/what caused an event.

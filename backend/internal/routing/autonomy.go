@@ -33,6 +33,7 @@ import (
 	"github.com/middleman/backend/infrastructure/ai"
 	"github.com/middleman/backend/internal/autonomy"
 	"github.com/middleman/backend/internal/conversation"
+	"github.com/middleman/backend/internal/deal/answer"
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/matching"
 	"github.com/middleman/backend/internal/request"
@@ -67,6 +68,45 @@ type VendorAutonomy struct {
 	// Paused (pilot batch item 4): while all automation is paused Majo asks
 	// vendors nothing; their replies are recorded for the operator.
 	Paused func(ctx context.Context) bool
+}
+
+// VendorDealAnswers records a vendor's "did you sell?" answer (pilot batch
+// item 5; deal.Service implements it).
+type VendorDealAnswers interface {
+	VendorAnswered(ctx context.Context, dealID uuid.UUID, ans string) error
+}
+
+// SetDeals wires the deal follow-up.
+func (s *Service) SetDeals(d VendorDealAnswers) { s.deals = d }
+
+// answerVendorDeal: yes / no / not yet answers the question. A substantive
+// message (a reply to a buyer request, new stock) is not swallowed: it takes
+// the normal path and the question stays open. Asked again once, then left.
+func (s *Service) answerVendorDeal(ctx context.Context, v *vendor.Vendor, c *autonomy.Clarification, rawText string, ref supply.Inbound) bool {
+	id, err := uuid.Parse(fmt.Sprint(c.Context["deal_id"]))
+	if err != nil || s.deals == nil {
+		return false
+	}
+	ans := answer.Parse(rawText)
+	if ans == "" {
+		if !isShortAnswer(rawText) || strings.ContainsAny(rawText, "0123456789₦") {
+			return false // a reply of its own (stock, a price): normal path
+		}
+		if c.Attempts >= 2 {
+			s.closeVendorClarification(ctx, c, autonomy.ClarExhausted, rawText, ref, map[string]any{"reason": "no_answer"})
+			return true
+		}
+		q := "Sorry, I didn't catch that 🙏 " + c.Question
+		if _, err := s.auto.Store.BumpClarification(ctx, c.ID, q, s.auto.Now().UTC().Add(s.auto.Params.ClarificationTTL)); err == nil {
+			s.sendVendor(ctx, v, q, c, nil)
+		}
+		return true
+	}
+	s.closeVendorClarification(ctx, c, autonomy.ClarAnswered, rawText, ref, map[string]any{"answer": ans})
+	if err := s.deals.VendorAnswered(ctx, id, ans); err != nil {
+		s.logger.Error("recording vendor deal answer", "deal_id", id, "error", err)
+	}
+	return true
 }
 
 // pausedNow: all automation is paused by an operator.
@@ -351,6 +391,8 @@ func (s *Service) respondClassified(ctx context.Context, v *vendor.Vendor, vr *V
 func (s *Service) answerVendorClarification(ctx context.Context, v *vendor.Vendor, c *autonomy.Clarification, rawText string, ref supply.Inbound) (*VendorResponse, bool) {
 	now := s.auto.Now().UTC()
 	switch c.Kind {
+	case answer.KindVendorConfirm:
+		return nil, s.answerVendorDeal(ctx, v, c, rawText, ref)
 	case autonomy.KindVendorWhichRequest:
 		opt := MatchVendorOption(rawText, c.Options)
 		result, _ := s.aiProvider.ExtractVendorResponse(ctx, rawText)

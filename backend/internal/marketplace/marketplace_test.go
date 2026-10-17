@@ -989,3 +989,37 @@ func (r reqRepo) FindDiscoveryAsk(ctx context.Context, deliveryID, listingID uui
 func (r reqRepo) SetStatus(ctx context.Context, id uuid.UUID, from []request.Status, to request.Status) (*request.BuyerRequest, error) {
 	return nil, nil
 }
+
+type fakeIntroducer struct{ text string }
+
+func (f fakeIntroducer) Introduction(context.Context, uuid.UUID) string { return f.text }
+
+// Pilot batch item 5: with the deal service wired, the confirmation
+// introduces the seller instead of "handled in the next step".
+func TestSelection_ConfirmationIntroducesTheSeller(t *testing.T) {
+	h, _ := twoOfferHarness(t)
+	h.inbound.SetIntroducer(fakeIntroducer{text: "Seller: Mike Gadgets\nChat with them on WhatsApp: https://wa.me/2348000000001\nMention reference MM-1.\n\n🔒 Stay safe"})
+	h.buyerSays("1")
+	msg := h.out.last()
+	for _, want := range []string{"recorded your choice", "₦620,000", "Seller: Mike Gadgets", "wa.me/2348000000001", "Stay safe"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("confirmation missing %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "Nothing has been paid") || strings.Count(msg, "Reference: MM-") != 0 {
+		t.Errorf("the introduction replaces the old line and carries the reference itself:\n%s", msg)
+	}
+	h.buyerSays("1") // repeated: still introduces
+	if !strings.Contains(h.out.last(), "Seller: Mike Gadgets") {
+		t.Errorf("repeat confirmation:\n%s", h.out.last())
+	}
+}
+
+func TestSelection_EmptyIntroductionFallsBackToTheOldLine(t *testing.T) {
+	h, _ := twoOfferHarness(t)
+	h.inbound.SetIntroducer(fakeIntroducer{})
+	h.buyerSays("1")
+	if msg := h.out.last(); !strings.Contains(msg, "Nothing has been paid") || !strings.Contains(msg, "Reference: MM-") {
+		t.Errorf("fallback:\n%s", msg)
+	}
+}

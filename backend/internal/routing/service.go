@@ -80,6 +80,9 @@ type Service struct {
 	richSender     RichSender
 	inboundWindow  InboundWindow
 	now            func() time.Time
+
+	// Pilot batch item 5: vendors' answers to "did you sell?".
+	deals VendorDealAnswers
 }
 
 // SendFailureListener is told when a VendorRequest message is rejected by

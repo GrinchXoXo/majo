@@ -963,3 +963,48 @@ export function listJobs(status: string, jobType: string, limit: number, offset:
 export async function getJobSummary(): Promise<JobSummary[]> {
   return (await readPage<JobSummary>(`/api/jobs/summary`)).rows;
 }
+
+// --- Pilot batch item 5: deals (follow-up on a buyer's choice) ---
+
+export type DealDTO = {
+  id: string;
+  transaction_id: string;
+  buyer_request_id: string;
+  vendor_id: string;
+  vendor_name?: string;
+  item: string;
+  reference: string;
+  amount?: number;
+  status: string;
+  ask_at: string;
+  buyer_answer?: string;
+  vendor_answer?: string;
+  buyer_unreachable: boolean;
+  vendor_unreachable: boolean;
+  deal_number?: number;
+  free: boolean;
+  buyer_rating?: number;
+  confirmed_at?: string;
+  closed_at?: string;
+  created_at: string;
+};
+
+export type DealSummary = {
+  summary: {
+    total: number;
+    by_status: Record<string, number>;
+    confirmed: number;
+    free_limit: number;
+    free_used: number;
+    free_remaining: number;
+    ratings: number;
+    average_rating: number | null;
+    low_ratings: number;
+    confirmed_value: number;
+  };
+  settings: { follow_up: boolean; follow_up_delay: string; answer_ttl: string; free_deals: number; share_buyer_contact: boolean };
+};
+
+export const getDealSummary = () => operatorCall<DealSummary>("/api/deals/summary");
+export const listDeals = (status: string, limit: number, offset: number) =>
+  readPage<DealDTO>(`/api/deals?status=${encodeURIComponent(status)}&limit=${limit}&offset=${offset}`);

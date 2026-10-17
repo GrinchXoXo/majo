@@ -441,7 +441,7 @@ func (r *AutonomyRepository) Metrics(ctx context.Context, since *time.Time) (*au
 		OR EXISTS (SELECT 1 FROM events e JOIN vendor_responses vr ON vr.id = e.entity_id JOIN vendor_requests v ON v.id = vr.vendor_request_id
 			WHERE e.entity_type = 'vendor_response' AND v.buyer_request_id = br.id AND e.event_type = 'VENDOR_RESPONSE_CORRECTED' AND e.actor_type = 'OPERATOR'),
 		EXISTS (SELECT 1 FROM buyer_selections s WHERE s.buyer_request_id = br.id AND s.source <> 'whatsapp_reply'),
-		EXISTS (SELECT 1 FROM clarifications c WHERE c.status = 'ANSWERED' AND (c.buyer_request_id = br.id
+		EXISTS (SELECT 1 FROM clarifications c WHERE c.status = 'ANSWERED' AND c.kind NOT IN ('deal_confirm', 'deal_rating', 'vendor_deal_confirm') AND (c.buyer_request_id = br.id
 			OR c.vendor_request_id IN (SELECT id FROM vendor_requests WHERE buyer_request_id = br.id))),
 		EXISTS (SELECT 1 FROM workflow_decisions d WHERE d.buyer_request_id = br.id AND d.decision = 'RETRY_DELIVERY' AND d.reason = 'recovered'),
 		EXISTS (SELECT 1 FROM workflow_exceptions x WHERE x.buyer_request_id = br.id AND x.class = 'SYSTEM_EXCEPTION'),
@@ -504,7 +504,7 @@ func (r *AutonomyRepository) Metrics(ctx context.Context, since *time.Time) (*au
 
 	var answered, issued int
 	if err := r.eachRowAuto(ctx, `SELECT party, count(*) FILTER (WHERE status = 'ANSWERED'), count(*) FILTER (WHERE status <> 'CANCELLED')
-		FROM clarifications WHERE asked_at >= $1 GROUP BY party`, []any{from}, func(sc func(...any) error) error {
+		FROM clarifications WHERE asked_at >= $1 AND kind NOT IN ('deal_confirm', 'deal_rating', 'vendor_deal_confirm') GROUP BY party`, []any{from}, func(sc func(...any) error) error {
 		var party string
 		var a, i int
 		if err := sc(&party, &a, &i); err != nil {

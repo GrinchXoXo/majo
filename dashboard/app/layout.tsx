@@ -21,6 +21,7 @@ export default function RootLayout({
           <a href="/vendors">Vendors</a>
           <a href="/unmatched-responses">Unmatched Responses</a>
           <a href="/offers">Supply Listings</a>
+          <a href="/deals">Deals</a>
           <a href="/autonomy">Autonomy</a>
           <a href="/discovery">Discovery</a>
           <a href="/events">Events</a>

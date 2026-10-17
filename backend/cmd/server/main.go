@@ -26,6 +26,7 @@ import (
 	"github.com/middleman/backend/internal/autonomy"
 	"github.com/middleman/backend/internal/config"
 	"github.com/middleman/backend/internal/conversation"
+	"github.com/middleman/backend/internal/deal"
 	"github.com/middleman/backend/internal/discovery"
 	"github.com/middleman/backend/internal/distribution"
 	"github.com/middleman/backend/internal/errortrack"
@@ -235,6 +236,24 @@ func main() {
 	listingService.SetDraftListener(engine)
 	engine.SetListingPublisher(listingPublisher{listingService, workflowRepo})
 	engine.Register(durableWorker)
+
+	// Pilot batch item 5: introduce buyer and vendor at the buyer's choice,
+	// then follow up ("did you buy / sell?"), ratings and the free-deal counter.
+	dealRepo := postgres.NewDealRepository(pool)
+	dealService := deal.NewService(deal.Config{Enabled: cfg.DealFollowUp, FollowUpDelay: cfg.DealFollowUpDelay, AnswerTTL: cfg.DealAnswerTTL,
+		FreeDeals: cfg.FreeDeals, ShareBuyerContact: cfg.IntroShareBuyerPhone}, deal.Deps{
+		Repo: dealRepo, Offers: offerRepo, Requests: requestRepo, Vendors: vendorRepo, Conversations: convRepo, References: dealRepo,
+		Messenger: outbound, Store: autonomyRepo, Jobs: jobStore, Events: eventWriter, Logger: logger, Holds: engine,
+		VendorBusy: func(ctx context.Context, vendorID uuid.UUID) bool {
+			active, err := routingRepo.ListActiveByVendor(ctx, vendorID)
+			return err == nil && len(active) > 0
+		},
+	})
+	dealService.Register(durableWorker)
+	txService.SetListener(dealService)
+	buyerInbound.SetIntroducer(dealService)
+	engine.SetDeals(dealService)
+	routingService.SetDeals(dealService)
 	logger.Info("autonomous runtime", "flags", cfg.AutonomyFlags.Map(), "route_max_vendors", cfg.AutonomyParams.RouteMaxVendors,
 		"route_min_score", cfg.AutonomyParams.RouteMinScore, "vendor_request_ttl", cfg.AutonomyParams.VendorRequestTTL.String())
 
@@ -434,6 +453,10 @@ func main() {
 	mux.HandleFunc("POST /api/requests/{id}/resume", operatorAuth.Require(autonomyHandlers.Resume))
 	// Pilot batch item 4: pause / resume ALL automation (incident switch).
 	mux.HandleFunc("GET /api/autonomy/pause", operatorAuth.RequireViewer(autonomyHandlers.GlobalPauseStatus))
+	// Pilot batch item 5: deals (read-only).
+	dealHandlers := httpserver.NewDealHandlers(dealService, logger)
+	mux.HandleFunc("GET /api/deals/summary", operatorAuth.RequireViewer(dealHandlers.Summary))
+	mux.HandleFunc("GET /api/deals", operatorAuth.RequireViewer(dealHandlers.List))
 	mux.HandleFunc("POST /api/autonomy/pause", operatorAuth.Require(autonomyHandlers.PauseAll))
 	mux.HandleFunc("POST /api/autonomy/resume", operatorAuth.Require(autonomyHandlers.ResumeAll))
 

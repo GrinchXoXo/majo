@@ -18,9 +18,9 @@ func (r *AutonomyRepository) hardeningMetrics(ctx context.Context, m *autonomy.M
 	if err := r.db.QueryRowContext(ctx, `WITH w AS (
 		SELECT br.id, br.status,
 			EXISTS (SELECT 1 FROM transactions t WHERE t.buyer_request_id = br.id) AS done,
-			EXISTS (SELECT 1 FROM clarifications c WHERE c.status <> 'CANCELLED' AND NOT COALESCE(c.resolution->>'reason' = 'undelivered', false)
+			EXISTS (SELECT 1 FROM clarifications c WHERE c.status <> 'CANCELLED' AND NOT COALESCE(c.resolution->>'reason' = 'undelivered', false) AND c.kind NOT IN ('deal_confirm', 'deal_rating', 'vendor_deal_confirm')
 				AND (c.buyer_request_id = br.id OR c.vendor_request_id IN (SELECT id FROM vendor_requests WHERE buyer_request_id = br.id))) AS clarified,
-			EXISTS (SELECT 1 FROM workflow_exceptions x WHERE x.buyer_request_id = br.id) AS escalated,
+			EXISTS (SELECT 1 FROM workflow_exceptions x WHERE x.buyer_request_id = br.id AND x.subject_type <> 'deal') AS escalated,
 			EXISTS (SELECT 1 FROM events e WHERE e.entity_type = 'buyer_request' AND e.entity_id = br.id AND e.actor_type = 'OPERATOR'
 				AND e.event_type IN ('REQUEST_CONFIRMED', 'CLARIFICATION_SENT'))
 			OR EXISTS (SELECT 1 FROM events e JOIN vendor_requests v ON v.id = e.entity_id WHERE e.entity_type = 'vendor_request'
@@ -32,7 +32,7 @@ func (r *AutonomyRepository) hardeningMetrics(ctx context.Context, m *autonomy.M
 			EXISTS (SELECT 1 FROM workflow_decisions d WHERE d.buyer_request_id = br.id AND d.outcome = 'APPLIED'
 				AND (d.decision = 'NO_MATCH' OR (d.decision = 'RECOVER_REQUEST' AND d.reason IN ('buyer_told_no_reply_yet',
 				'max_recovery_rounds_reached', 'vendor_contact_limit_reached', 'auto_recovery_disabled')))) AS ended,
-			br.status = 'AWAITING_BUYER' AND (SELECT c.status FROM clarifications c WHERE c.buyer_request_id = br.id
+			br.status = 'AWAITING_BUYER' AND (SELECT c.status FROM clarifications c WHERE c.buyer_request_id = br.id AND c.kind NOT IN ('deal_confirm', 'deal_rating', 'vendor_deal_confirm')
 				ORDER BY c.asked_at DESC LIMIT 1) IN ('EXPIRED', 'EXHAUSTED') AS abandoned,
 			EXISTS (SELECT 1 FROM workflow_exceptions x WHERE x.buyer_request_id = br.id AND x.class = 'SYSTEM_EXCEPTION') AS sysfail,
 			EXISTS (SELECT 1 FROM buyer_selections s WHERE s.buyer_request_id = br.id AND s.source <> 'whatsapp_reply') AS opselect
@@ -61,7 +61,7 @@ func (r *AutonomyRepository) hardeningMetrics(ctx context.Context, m *autonomy.M
 			EXISTS (SELECT 1 FROM clarifications l WHERE l.id <> c.id AND l.asked_at > c.asked_at AND l.status <> 'CANCELLED'
 				AND ((c.buyer_request_id IS NOT NULL AND l.buyer_request_id = c.buyer_request_id AND COALESCE(l.field, '') = COALESCE(c.field, '') AND l.kind = c.kind)
 				  OR (c.vendor_request_id IS NOT NULL AND l.vendor_request_id = c.vendor_request_id AND l.kind = c.kind))) AS asked_again
-		FROM clarifications c WHERE c.asked_at >= $1)
+		FROM clarifications c WHERE c.asked_at >= $1 AND c.kind NOT IN ('deal_confirm', 'deal_rating', 'vendor_deal_confirm'))
 		SELECT count(*) FILTER (WHERE status <> 'CANCELLED' AND NOT undelivered),
 			COALESCE(sum(attempts) FILTER (WHERE status <> 'CANCELLED' AND NOT undelivered), 0),
 			count(*) FILTER (WHERE status = 'ANSWERED'),

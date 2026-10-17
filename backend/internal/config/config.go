@@ -126,6 +126,12 @@ type Config struct {
 	// outside the 24-hour window. Empty = free text only.
 	VendorRequestTemplateName     string
 	VendorRequestTemplateLanguage string
+	// Pilot batch item 5: deal follow-up, ratings and the free-deal counter.
+	DealFollowUp         bool
+	DealFollowUpDelay    time.Duration
+	DealAnswerTTL        time.Duration
+	FreeDeals            int
+	IntroShareBuyerPhone bool
 	// DiscoveryConsentWording is the current opt-in wording version.
 	DiscoveryConsentWording string
 	// DiscoveryEnquiryConfirmation: how "Ask about it" requests become
@@ -271,6 +277,9 @@ func Load() (*Config, error) {
 	}
 
 	if err := loadAutonomy(cfg); err != nil {
+		return nil, err
+	}
+	if err := loadDeals(cfg); err != nil {
 		return nil, err
 	}
 
@@ -461,4 +470,38 @@ func getBool(key string, fallback bool) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("%s must be true or false, got %q", key, os.Getenv(key))
+}
+
+// loadDeals reads the deal follow-up settings (pilot batch item 5).
+func loadDeals(cfg *Config) error {
+	var err error
+	if cfg.DealFollowUp, err = getBool("DEAL_FOLLOWUP", true); err != nil {
+		return err
+	}
+	if cfg.DealFollowUpDelay, err = getDuration("DEAL_FOLLOWUP_DELAY", 6*time.Hour); err != nil {
+		return err
+	}
+	if cfg.DealAnswerTTL, err = getDuration("DEAL_ANSWER_TTL", 72*time.Hour); err != nil {
+		return err
+	}
+	free, err := getInt("FREE_DEALS", 100)
+	if err != nil {
+		return err
+	}
+	if free < 0 || free > 1_000_000 {
+		return fmt.Errorf("FREE_DEALS must be between 0 and 1000000")
+	}
+	cfg.FreeDeals = int(free)
+	if cfg.IntroShareBuyerPhone, err = getBool("INTRO_SHARE_BUYER_CONTACT", false); err != nil {
+		return err
+	}
+	if cfg.DealFollowUpDelay <= 0 || cfg.DealAnswerTTL <= 0 {
+		return fmt.Errorf("DEAL_FOLLOWUP_DELAY and DEAL_ANSWER_TTL must be positive")
+	}
+	if cfg.DealFollowUpDelay >= 24*time.Hour {
+		// Not an error, but the buyer's 24h window will usually have closed:
+		// the question would not arrive without a template.
+		fmt.Fprintln(os.Stderr, "warning: DEAL_FOLLOWUP_DELAY >= 24h: the follow-up will usually miss the buyer's WhatsApp window")
+	}
+	return nil
 }

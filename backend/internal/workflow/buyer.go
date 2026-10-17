@@ -12,6 +12,7 @@ import (
 
 	"github.com/middleman/backend/infrastructure/ai"
 	"github.com/middleman/backend/internal/autonomy"
+	"github.com/middleman/backend/internal/deal/answer"
 	"github.com/middleman/backend/internal/event"
 	"github.com/middleman/backend/internal/jobs"
 	"github.com/middleman/backend/internal/matching"
@@ -222,6 +223,9 @@ func (e *Engine) liveReference(ctx context.Context, m BuyerText) bool {
 
 func (e *Engine) answerBuyer(ctx context.Context, m BuyerText, c *autonomy.Clarification, cb Callbacks) {
 	switch c.Kind {
+	case answer.KindBuyerConfirm, answer.KindBuyerRating:
+		e.answerDeal(ctx, m, c, cb)
+		return
 	case autonomy.KindMissingField:
 		e.answerMissingField(ctx, m, c, cb)
 	case autonomy.KindWhichItem:
@@ -1017,4 +1021,52 @@ func FirstReading(text string, shownItems int) string {
 // AnswerPatch is answerPatch for tests and evaluation.
 func AnswerPatch(field, text string, ex *ai.ExtractionResult, req *request.BuyerRequest) (request.Fields, bool) {
 	return answerPatch(field, text, ex, req)
+}
+
+// ---- deal follow-up answers (pilot batch item 5) ------------------------------
+
+// DealAnswers records answers to the deal follow-up (deal.Service).
+type DealAnswers interface {
+	BuyerAnswered(ctx context.Context, dealID uuid.UUID, ans string) error
+	BuyerRated(ctx context.Context, dealID uuid.UUID, score int) error
+}
+
+// SetDeals wires the deal follow-up.
+func (e *Engine) SetDeals(d DealAnswers) { e.deals = d }
+
+// answerDeal: "did you buy?" takes yes / no / not yet; "how would you rate?"
+// takes 1-5. Anything else is not an answer (asked once more, or the message
+// takes the ordinary path if it looks like a new request).
+func (e *Engine) answerDeal(ctx context.Context, m BuyerText, c *autonomy.Clarification, cb Callbacks) {
+	id, err := uuid.Parse(fmt.Sprint(c.Context["deal_id"]))
+	if err != nil || e.deals == nil {
+		_ = e.closeBuyerClarification(ctx, c, autonomy.ClarSuperseded, m, map[string]any{"reason": "deal_not_wired"})
+		cb.Default(ctx)
+		return
+	}
+	if c.Kind == answer.KindBuyerRating {
+		score := answer.ParseRating(m.Text)
+		if score == 0 {
+			e.notAnAnswer(ctx, m, c, cb)
+			return
+		}
+		if e.closeBuyerClarification(ctx, c, autonomy.ClarAnswered, m, map[string]any{"rating": score}) != nil {
+			return
+		}
+		if err := e.deals.BuyerRated(ctx, id, score); err != nil {
+			e.logger.Error("recording deal rating", "deal_id", id, "error", err)
+		}
+		return
+	}
+	ans := answer.Parse(m.Text)
+	if ans == "" {
+		e.notAnAnswer(ctx, m, c, cb)
+		return
+	}
+	if e.closeBuyerClarification(ctx, c, autonomy.ClarAnswered, m, map[string]any{"answer": ans}) != nil {
+		return
+	}
+	if err := e.deals.BuyerAnswered(ctx, id, ans); err != nil {
+		e.logger.Error("recording deal answer", "deal_id", id, "error", err)
+	}
 }
