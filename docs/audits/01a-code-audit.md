@@ -390,3 +390,29 @@ an owner decision after the pilot.
 - **13:** cost counts (LLM, templates) per period and per deal; time
   series; export; per-vendor view.
 - **14:** a campus alias table.
+
+## Addendum: independent review (18 October)
+
+A separate reviewer, who had not seen the work being made, tried to break
+pilot batch items 6–8 and these fixes. Every finding below was reproduced
+and is now fixed with a regression test (commit `a2501ba`).
+
+| Area | Finding | Fix |
+|---|---|---|
+| Tone layer (**High**) | A rewrite could keep every fact token and still change the meaning: a reversed rating scale ("1 (great) … 5 (bad)"), YES/NO given new meanings, "after" → "before", "with" → "without", added "brand new sealed", fullwidth digits, bare links | The check now requires the template's words in their original order. A rewrite may only add words from a small register list and drop filler words. Any-script digits and bare domains are rejected. Every case is in `TestCheckRejectsMeaningFlips` |
+| Tone layer | Deal messages counted as buyer-facing based only on their kind name | Also requires that the recipient is not the vendor's number (fails closed) |
+| Ledger (**Medium**) | A committed entry could gain postings in a later transaction; accounts could be updated (currency, customer-funds flag) | Postings are accepted only in the entry's own transaction; an account's identity is fixed; CHECK `customer:*` ⇔ customer funds |
+| Ledger | Same idempotency key with different content was treated as "already done"; a revenue account could be posted to with its line off when `revenue_line` was left empty | `ErrIdempotencyConflict`; the line is derived from `majo:revenue:*` postings |
+| Vendors (**Medium**) | STOP/START never reached PENDING or INACTIVE vendors, because the webhook only treats ACTIVE vendors as vendors. "START" made the sender a buyer | The webhook hands STOP/START from any non-blocked vendor to the keyword handling. Polite filler is accepted ("Stop please") |
+| Vendors (**Medium**) | "8031234567" was not given 234; non-ASCII digits were accepted; old rows were not fixed | 10-digit 7/8/9 numbers get 234; ASCII digits only; migration `0020` normalises existing rows (skipping conflicts) |
+| Ranking (**Medium**) | With the route floor at 45, loose substring evidence ("ac" in "macbook", "tv" in "tvstand", sold-out "iphone") could route a vendor on its own | A family match needs a prefix or suffix of 3+ letters and an available or can-source signal |
+| Geography | "GRA", "Road", "Phase 1" alone matched any city's place of that name | Generic place words never match alone |
+| Deploy (Low) | A stray env scan in `public_check` could crash a deploy; `pg_dump` saw the password in its argv; a multi-line pause reason produced invalid JSON | Fixed |
+
+Sound as reviewed: the monetization gates (no configuration change alone
+can switch a line or a provider on), masking round-trips, ports and
+routing, and the concurrent idempotency of ledger posts.
+
+Accepted, documented: on the bundled Postgres option the app runs as the
+database owner. Create a non-owner role before any revenue line goes live
+(`docs/operations/deployment.md`).
