@@ -66,6 +66,38 @@ the system and never get a request.
 - **Activate** the vendor after checking them. New vendors start as
   PENDING and get nothing.
 
+## Pilot campus: Uniben
+
+Majo has no map. It matches the **place names** buyers type against the
+names stored on each vendor. A map would not help; a list of the names
+students actually use does. The suggested setup:
+
+- **Server:** `PILOT_DEFAULT_LOCATION=Uniben`. A buyer who doesn't say
+  where they are counts as "Uniben".
+- **Each vendor's primary location:** `Uniben`. Longer forms match too:
+  "Uniben main gate" and "uniben hostel" reach a vendor saved as
+  `Uniben`.
+- **Each vendor's service areas:** every name a buyer might type for a
+  place the vendor will deliver to or meet at:
+  - other names for the campus: `University of Benin`, `Ugbowo`;
+  - hostels on campus: `Hall 1` … `Hall 7`, `NDDC Hostel`,
+    `Festus Akingbola`, `Intercontinental Hostel`, `Keystone Hostel`,
+    `Dentistry Hostel`;
+  - off-campus areas: `Ekosodin`, `BDPA`, `EDPA`, `Osasogie`, `Adolor`,
+    `Evbuomore`, `Isihor`, `Oluku`, `Evidence`, `Uselu`;
+  - only for vendors who go there: the Ekehuan campus (`Ekehuan`,
+    `PG Hostel`) and `Benin City` (city-wide).
+
+The hostel and area names come from a student-accommodation guide
+([studentship.com.ng](https://studentship.com.ng/uniben-hostel-accommodation/)).
+Check them with a few students and add the nicknames they really use
+(for example a gate or junction name).
+
+A buyer who names a place on nobody's list is not lost. Majo asks
+whether to search further, and the operator sees the request on the
+dashboard. Add the new name to the vendors who cover it, and the next
+buyer goes straight through.
+
 ## Leaving and coming back
 
 - **STOP** (or "unsubscribe", "remove me") makes the vendor inactive at once.

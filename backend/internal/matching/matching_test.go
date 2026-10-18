@@ -178,6 +178,8 @@ func TestLocationMatches(t *testing.T) {
 		{"", "Lagos", false}, {"ui", "Guinness", false}, {"Ikeja", "Ikeja GRA", true},
 		{"GRA", "GRA, Port Harcourt", false}, {"Road", "Ikorodu Road", false}, {"Island", "Victoria Island", false},
 		{"Phase 1", "Phase 1, Gwarinpa, Abuja", false}, {"GRA", "gra", true}, {"Moremi Hall", "Moremi", true},
+		{"Hall 1", "hall 1", true}, {"Hall 1", "Hall 2", false}, {"Uniben", "uniben hostel", true}, {"Uniben", "Hall 3 Uniben", true},
+		{"Ekosodin", "ekosodin junction", true}, {"Uniben", "Ugbowo", false},
 	} {
 		if got := LocationMatches(c.a, c.b); got != c.want {
 			t.Errorf("LocationMatches(%q, %q) = %v", c.a, c.b, got)

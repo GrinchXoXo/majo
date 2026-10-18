@@ -25,6 +25,10 @@ services:
       SENTRY_DSN: ${AI_SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
       # Pilot batch: the AI extractor. Without a key the free heuristic runs.
+      # LLM: Gemini or Anthropic (docs/architecture/llm-providers.md).
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-5-5}
       ANTHROPIC_TIMEOUT_SECONDS: ${ANTHROPIC_TIMEOUT_SECONDS:-10}

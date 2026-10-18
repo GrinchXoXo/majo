@@ -6,15 +6,18 @@ Run from the ai/ folder, with the AI service's venv:
     Windows:  .venv\\Scripts\\python.exe eval_extractor.py
     Linux:    .venv/bin/python eval_extractor.py
 
-It scores the free heuristic extractor and, when ANTHROPIC_API_KEY is set
-(in the environment, or in ../.env.local), the Anthropic extractor on:
+It scores the free heuristic extractor and, when GEMINI_API_KEY or
+ANTHROPIC_API_KEY is set (in the environment, or in ../.env.local), the LLM
+extractor of that provider (LLM_PROVIDER picks one if both are set) on:
 
   - the 60 pilot samples (docs/pilot/buyer-message-samples.md), and
   - the 40-message held-out set (never used to tune the heuristic).
 
 Output is scores only: no message text, no model output, never the key.
 Failing messages are listed by number so they can be looked up in
-ai/tests/data/. About 100 short API calls (a few cents with Haiku).
+ai/tests/data/. About 100 short API calls (free on Gemini's free tier, a few
+cents on a paid one). The 100 messages are made-up samples, so sending them
+to a free tier is fine.
 
 Options:
     --heuristic-only    do not call the API
@@ -28,7 +31,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.corpus_eval import load_corpus, score  # noqa: E402
-from app.extraction import AnthropicExtractor, HeuristicExtractor, anthropic_model  # noqa: E402
+from app import llm  # noqa: E402
+from app.extraction import HeuristicExtractor, get_extractor  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETS = {
@@ -37,25 +41,29 @@ SETS = {
 }
 
 
-def key_from_env_local() -> str:
-    """Read ANTHROPIC_API_KEY from ../.env.local without printing anything."""
+KEYS = ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "LLM_PROVIDER", "ANTHROPIC_MODEL", "GEMINI_MODEL")
+
+
+def load_env_local() -> None:
+    """Copy the LLM settings from ../.env.local into the environment (only
+    those not already set), without printing anything."""
     path = os.path.join(HERE, "..", ".env.local")
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
-                if line.strip().startswith("ANTHROPIC_API_KEY="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+                name, _, value = line.strip().partition("=")
+                if name in KEYS and value and not os.getenv(name):
+                    os.environ[name] = value.strip().strip('"').strip("'")
     except OSError:
         pass
-    return ""
 
 
 class Counting:
-    """Wraps the Anthropic extractor: on any API failure, falls back to the
+    """Wraps the LLM extractor: on any API failure, falls back to the
     heuristic exactly as the service does, and counts it."""
 
-    def __init__(self, key):
-        self.ai, self.h = AnthropicExtractor(key), HeuristicExtractor()
+    def __init__(self):
+        self.ai, self.h = get_extractor(), HeuristicExtractor()
         self.fallbacks, self.calls, self.seconds = 0, 0, 0.0
 
     def __call__(self, text):
@@ -85,25 +93,29 @@ def main():
     ap.add_argument("--set", choices=["samples", "holdout", "both"], default="both")
     args = ap.parse_args()
 
-    key = "" if args.heuristic_only else (os.getenv("ANTHROPIC_API_KEY") or key_from_env_local())
+    if not args.heuristic_only:
+        load_env_local()
+    os.environ.pop("EXTRACTOR", None)
+    provider = None if args.heuristic_only else llm.provider()
     sets = list(SETS) if args.set == "both" else [args.set]
-    ai = Counting(key) if key else None
+    ai = Counting() if provider else None
 
     for name in sets:
         corpus = load_corpus(SETS[name])
         print(f"\n== {name} ({len(corpus)} messages)")
         report("heuristic", score(HeuristicExtractor().extract, corpus))
         if ai:
-            report("anthropic", score(ai, corpus))
+            report(provider, score(ai, corpus))
 
     if ai:
         avg = ai.seconds / ai.calls if ai.calls else 0
-        print(f"\nModel: {anthropic_model()}   calls: {ai.calls}   API failures (fell back): {ai.fallbacks}   "
+        print(f"\nProvider: {provider}   model: {llm.model(provider)}   calls: {ai.calls}   API failures (fell back): {ai.fallbacks}   "
               f"avg {avg:.1f}s per message")
         if ai.fallbacks:
-            print("Some calls failed: check the key, the model name (ANTHROPIC_MODEL) and the network.")
+            print("Some calls failed: check the key, the model name (GEMINI_MODEL / ANTHROPIC_MODEL), "
+                  "the free-tier rate limit and the network.")
     elif not args.heuristic_only:
-        print("\nNo ANTHROPIC_API_KEY found (environment or ../.env.local): heuristic only.")
+        print("\nNo GEMINI_API_KEY or ANTHROPIC_API_KEY found (environment or ../.env.local): heuristic only.")
 
 
 if __name__ == "__main__":

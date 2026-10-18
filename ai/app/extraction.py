@@ -679,26 +679,10 @@ def _parse_json_object(raw_text: str) -> dict:
 
 def _call_anthropic(api_key: str, system: str, text: str, max_tokens: int,
                     model: Optional[str] = None, timeout: Optional[float] = None) -> str:
-    import httpx
-
-    resp = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": model or anthropic_model(),
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": text}],
-        },
-        timeout=timeout if timeout is not None else anthropic_timeout(),
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return "".join(block["text"] for block in data["content"] if block["type"] == "text")
+    """Kept for callers and tests that name Anthropic; see app.llm."""
+    from app import llm
+    return llm.call(system, text, max_tokens, model_name=model or anthropic_model(),
+                    timeout_s=timeout if timeout is not None else anthropic_timeout(), p="anthropic", key=api_key)
 
 
 # Amounts a message can support: every number, read as plain Naira, as "k"
@@ -764,36 +748,52 @@ def guard_llm_result(text: str, r: ExtractionResult) -> ExtractionResult:
     return r
 
 
-class AnthropicExtractor:
+class LLMExtractor:
     """
-    LLM-backed extractor using the Anthropic API. Only used when
-    ANTHROPIC_API_KEY is present. The model is ANTHROPIC_MODEL (default
-    claude-haiku-5-5): the cheapest reliable model for this task. Its output
-    passes guard_llm_result before anything reaches the Go side.
+    LLM-backed extractor (Anthropic or Google Gemini, see app.llm). Its
+    output passes guard_llm_result before anything reaches the Go side.
     """
 
-    method = "anthropic"
-
-    def __init__(self, api_key: str):
+    def __init__(self, provider: str, api_key: str):
+        self.provider = provider
         self.api_key = api_key
+        self.method = provider
 
     def extract(self, text: str) -> ExtractionResult:
-        parsed = _parse_json_object(_call_anthropic(self.api_key, ANTHROPIC_EXTRACTION_SYSTEM_PROMPT, text, 500))
+        from app import llm
+        raw = llm.call(ANTHROPIC_EXTRACTION_SYSTEM_PROMPT, text, 500, p=self.provider, key=self.api_key)
+        parsed = _parse_json_object(raw)
         known = set(ExtractionResult.__dataclass_fields__)
         return guard_llm_result(text, ExtractionResult(**{k: v for k, v in parsed.items() if k in known}))
 
 
+class AnthropicExtractor(LLMExtractor):
+    """The extractor on Anthropic (ANTHROPIC_MODEL, default claude-haiku-5-5)."""
+
+    def __init__(self, api_key: str):
+        super().__init__("anthropic", api_key)
+
+
+class GeminiExtractor(LLMExtractor):
+    """The extractor on Google Gemini (GEMINI_MODEL, default gemini-3.1-flash-lite)."""
+
+    def __init__(self, api_key: str):
+        super().__init__("gemini", api_key)
+
+
 def get_extractor():
     """
-    Composition point: returns the AnthropicExtractor if a key is
-    configured, otherwise falls back to the free heuristic extractor.
-    Callers should still catch exceptions from .extract() and fall back
-    to the heuristic result — see main.py. EXTRACTOR=heuristic forces the
+    Composition point: the LLM extractor of the configured provider
+    (app.llm.provider: LLM_PROVIDER, or whichever key is set), otherwise
+    the free heuristic. Callers still catch exceptions from .extract() and
+    fall back to the heuristic (main.py). EXTRACTOR=heuristic forces the
     heuristic even with a key set (a switch for the pilot).
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if api_key and os.getenv("EXTRACTOR", "").strip().lower() != "heuristic":
-        return AnthropicExtractor(api_key)
+    from app import llm
+    p = llm.provider()
+    if p and os.getenv("EXTRACTOR", "").strip().lower() != "heuristic":
+        cls = GeminiExtractor if p == "gemini" else AnthropicExtractor
+        return cls(llm.api_key(p))
     return HeuristicExtractor()
 
 
@@ -937,15 +937,18 @@ Rules:
 
 class AnthropicVendorResponseExtractor:
     """
-    Optional LLM-backed vendor-response classifier, used only when
-    ANTHROPIC_API_KEY is set (PRD 2.1 §9: AI is optional, never required).
+    Optional LLM-backed vendor-response classifier (any provider, see
+    app.llm), used only when a key is set (PRD 2.1 §9: AI is optional,
+    never required). The name is kept from when Anthropic was the only one.
     """
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, provider: str = "anthropic"):
         self.api_key = api_key
+        self.provider = provider
 
     def extract(self, text: str) -> VendorResponseExtractionResult:
-        parsed = _parse_json_object(_call_anthropic(self.api_key, ANTHROPIC_VENDOR_RESPONSE_SYSTEM_PROMPT, text, 300))
+        from app import llm
+        parsed = _parse_json_object(llm.call(ANTHROPIC_VENDOR_RESPONSE_SYSTEM_PROMPT, text, 300, p=self.provider, key=self.api_key))
         known = set(VendorResponseExtractionResult.__dataclass_fields__) - {"review_state"}
         parsed = {k: v for k, v in parsed.items() if k in known}
         if parsed.get("status") not in ("AVAILABLE", "UNAVAILABLE", "CAN_SOURCE", "ALTERNATIVE", "UNCLASSIFIED"):
@@ -960,9 +963,10 @@ class AnthropicVendorResponseExtractor:
 def get_vendor_response_ai_extractor() -> Optional[AnthropicVendorResponseExtractor]:
     """Returns None (meaning "run heuristic only") when no API key is
     configured — vendor response classification must work standalone."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if api_key:
-        return AnthropicVendorResponseExtractor(api_key)
+    from app import llm
+    p = llm.provider()
+    if p:
+        return AnthropicVendorResponseExtractor(llm.api_key(p), p)
     return None
 
 

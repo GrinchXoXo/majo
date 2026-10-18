@@ -139,7 +139,7 @@ check() {
 	tok="$(envget OPERATOR_API_TOKEN)"
 	[[ ${#tok} -ge 32 ]] || err "OPERATOR_API_TOKEN must be at least 32 characters (openssl rand -hex 32)"
 	[[ "$(envget APP_ENV)" == "" || "$(envget APP_ENV)" == "production" ]] || warn "APP_ENV in the env file is ignored; production always runs APP_ENV=production"
-	[[ -n "$(envget ANTHROPIC_API_KEY)" ]] || warn "ANTHROPIC_API_KEY is empty: the heuristic extractor will run"
+	[[ -n "$(envget GEMINI_API_KEY)$(envget ANTHROPIC_API_KEY)" ]] || warn "no GEMINI_API_KEY or ANTHROPIC_API_KEY: the heuristic extractor will run"
 	[[ -n "$(envget VENDOR_REQUEST_TEMPLATE_NAME)" ]] || warn "VENDOR_REQUEST_TEMPLATE_NAME is empty: vendors outside the 24-hour window cannot be reached"
 	local disc
 	disc="$(envget DISCOVERY_MODE)"

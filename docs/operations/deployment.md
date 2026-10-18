@@ -54,6 +54,22 @@ operator token; the dashboard page itself is only a shell that asks for one.
 
 Pick one and write the choice in the handoff doc.
 
+**Neon's free plan is not enough for production.** Majo's job worker
+checks the database every 2 seconds, so the database never sleeps. A
+0.25-CU compute running all month uses about 180 CU-hours. The free plan
+gives 100 per project, and Neon suspends the compute when they run out
+(around day 16), so Majo would stop. Free-plan history is also only 6
+hours. If you use Neon for production, use the pay-as-you-go **Launch**
+plan:
+- about $0.106 per CU-hour, so about $19 a month always on at 0.25 CU,
+  plus storage;
+- 7 days of restore history.
+
+Otherwise use option B, which costs nothing extra.
+([Neon pricing](https://neon.com/pricing),
+[free plan limits](https://neon.com/faqs/free-plan-limits-and-quotas),
+checked 18 October 2026.)
+
 **A. Managed Postgres, new project (recommended in the reuse audit).**
 Create a *new* project (for Neon: a separate project, not a branch of the dev
 project), in the same region as the server, named for example `majo-prod`.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,9 @@ func TestLocalProvider_PutGetDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("expected exactly one stored object, got %v", entries)
 	}
 	info, _ := os.Stat(filepath.Join(root, filepath.FromSlash(key)))
-	if info.Mode().Perm() != 0o600 {
+	// Windows has no POSIX permission bits (Go reports rw-rw-rw-); the
+	// production server is Linux, where 0600 is enforced.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("expected 0600 file mode, got %v", info.Mode().Perm())
 	}
 	if err := p.Delete(ctx, key); err != nil {

@@ -13,7 +13,8 @@ import os
 import re
 from typing import Optional
 
-from app.extraction import _call_anthropic, _parse_json_object, anthropic_model
+from app import llm
+from app.extraction import _parse_json_object
 
 TOKEN = re.compile(r"\[\[F\d+\]\]")
 
@@ -48,7 +49,7 @@ Answer with JSON only: {"text": "<the rewritten message>"}"""
 
 
 def tone_model() -> str:
-    return (os.getenv("TONE_MODEL") or "").strip() or anthropic_model()
+    return (os.getenv("TONE_MODEL") or "").strip() or llm.model() or ""
 
 
 def tone_timeout() -> float:
@@ -84,12 +85,11 @@ def check_rewrite(original: str, rewritten: str) -> Optional[str]:
     return None
 
 
-def rewrite(text: str, api_key: Optional[str] = None) -> dict:
-    key = api_key if api_key is not None else os.getenv("ANTHROPIC_API_KEY", "")
-    if not key:
-        raise ToneUnavailable("no ANTHROPIC_API_KEY")
-    raw = _call_anthropic(key, TONE_SYSTEM_PROMPT, text, max_tokens=600,
-                          model=tone_model(), timeout=tone_timeout())
+def rewrite(text: str) -> dict:
+    p = llm.provider()
+    if p is None:
+        raise ToneUnavailable("no LLM key")
+    raw = llm.call(TONE_SYSTEM_PROMPT, text, max_tokens=600, model_name=tone_model(), timeout_s=tone_timeout(), p=p)
     obj = _parse_json_object(raw)
     out = obj.get("text")
     if not isinstance(out, str):

@@ -25,7 +25,7 @@ from app.extraction import (
 )
 
 from app.errortrack import init_error_tracking
-from app import tone
+from app import llm, tone
 from fastapi import HTTPException
 
 logging.basicConfig(level=logging.INFO)
@@ -110,7 +110,7 @@ def extract(req: ExtractionRequest) -> ExtractionResult:
         ambiguities=getattr(result, "ambiguities", []) or [],
         headcount=getattr(result, "headcount", None),
         extraction_method=method,
-        model=anthropic_model() if method == "anthropic" else None,
+        model=llm.model(method) if method in llm.PROVIDERS else None,
     )
 
 
@@ -239,7 +239,7 @@ def tone_rewrite(req: ToneRequest) -> ToneResponse:
     try:
         out = tone.rewrite(req.text)
     except tone.ToneUnavailable:
-        raise HTTPException(status_code=503, detail="tone rewriting unavailable (no ANTHROPIC_API_KEY)")
+        raise HTTPException(status_code=503, detail="tone rewriting unavailable (no LLM key)")
     except tone.ToneRejected as exc:
         logger.info("tone rewrite rejected: %s", exc)
         raise HTTPException(status_code=422, detail=str(exc))
