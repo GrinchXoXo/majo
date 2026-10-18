@@ -640,9 +640,13 @@ func (s *Service) sendErr(ctx context.Context, d *Deal, to, kind, text string) e
 	id := d.ID
 	p := conversation.OutboundPurpose{Kind: kind, EntityType: "deal", EntityID: &id,
 		Extra: map[string]any{"buyer_request_id": d.BuyerRequestID.String(), "transaction_id": d.TransactionID.String()}}
-	if !strings.Contains(kind, "vendor") { // buyer-facing: the tone layer may rephrase it
-		p.Audience = conversation.AudienceBuyer
-		p.Keep = []string{d.Item, d.VendorName, d.Reference}
+	// Buyer-facing only when the kind says so AND the recipient is not the
+	// vendor's number (fail closed: on any doubt the text is sent as written).
+	if !strings.Contains(kind, "vendor") {
+		if v, err := s.d.Vendors.FindByID(ctx, d.VendorID); err == nil && v != nil && v.WhatsAppExternalID != to {
+			p.Audience = conversation.AudienceBuyer
+			p.Keep = []string{d.Item, d.VendorName, d.Reference}
+		}
 	}
 	sendCtx := conversation.WithOutboundPurpose(ctx, p)
 	return s.d.Messenger.SendText(sendCtx, to, text)

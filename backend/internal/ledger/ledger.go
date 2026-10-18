@@ -127,6 +127,28 @@ func (e *Entry) Validate() error {
 // ErrLineOff: the entry belongs to a revenue line that is switched off.
 var ErrLineOff = errors.New("ledger: revenue line is switched off")
 
+// ErrIdempotencyConflict: an entry with this key exists with other content.
+var ErrIdempotencyConflict = errors.New("ledger: idempotency key already used for a different entry")
+
+// SameEntry: same kind, line and postings (order-insensitive).
+func SameEntry(a, b *Entry) bool {
+	if a.Kind != b.Kind || (a.RevenueLine == nil) != (b.RevenueLine == nil) ||
+		(a.RevenueLine != nil && *a.RevenueLine != *b.RevenueLine) || len(a.Postings) != len(b.Postings) {
+		return false
+	}
+	count := map[Posting]int{}
+	for _, p := range a.Postings {
+		count[p]++
+	}
+	for _, p := range b.Postings {
+		if count[p] == 0 {
+			return false
+		}
+		count[p]--
+	}
+	return true
+}
+
 // ErrCustomerFunds: the entry touches customer funds before they are allowed.
 var ErrCustomerFunds = errors.New("ledger: customer funds are not allowed before split payments or escrow are switched on")
 
@@ -160,6 +182,15 @@ func (s *Service) Post(ctx context.Context, e *Entry) (*Entry, bool, error) {
 	}
 	if e.RevenueLine != nil && !s.settings.On(*e.RevenueLine) {
 		return nil, false, fmt.Errorf("%w: %s", ErrLineOff, *e.RevenueLine)
+	}
+	// A revenue account names its line: posting to it needs the line on,
+	// whatever RevenueLine says.
+	for _, p := range e.Postings {
+		if rest, ok := strings.CutPrefix(p.Account, "majo:revenue:"); ok {
+			if l := monetization.Line(strings.ToUpper(rest)); !s.settings.On(l) {
+				return nil, false, fmt.Errorf("%w: %s", ErrLineOff, l)
+			}
+		}
 	}
 	if !s.settings.CustomerFundsAllowed() {
 		for _, a := range e.Accounts {

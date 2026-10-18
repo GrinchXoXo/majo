@@ -260,7 +260,7 @@ func scoreProduct(reqProduct, reqVariant string, signals []*supply.Signal, maxPo
 		sp := *s.NormalizedProduct
 
 		exactProduct := sp == reqProduct
-		familyMatch := !exactProduct && (strings.Contains(sp, reqProduct) || strings.Contains(reqProduct, sp))
+		familyMatch := !exactProduct && signalFamily(sp, reqProduct)
 
 		if !exactProduct && !familyMatch {
 			continue
@@ -268,6 +268,12 @@ func scoreProduct(reqProduct, reqVariant string, signals []*supply.Signal, maxPo
 
 		fresh := s.AvailabilityStatus == supply.AvailabilityAvailable
 		canSource := s.AvailabilityStatus == supply.AvailabilityCanSource
+		if familyMatch && !fresh && !canSource {
+			// Independent review: a loose family match on a signal that is
+			// not available is no evidence at all ("iphone" sold out says
+			// nothing about an iphone 13 today).
+			continue
+		}
 		variantMatch := reqVariant != "" && s.Variant != nil && strings.EqualFold(*s.Variant, reqVariant)
 
 		var score int
@@ -297,6 +303,27 @@ func scoreProduct(reqProduct, reqVariant string, signals []*supply.Signal, maxPo
 		return 0, "", nil
 	}
 	return bestScore, bestType, bestSignal
+}
+
+// signalFamily: one compact product name extends the other at the start or
+// the end ("iphone" / "iphone13", "bags" / "ladiesbags"), and the shorter has
+// at least 3 letters. Before the independent review any substring counted,
+// so "ac" matched "macbook" and "tv" matched "tvstand".
+func signalFamily(a, b string) bool {
+	if minLen(a, b) < 3 {
+		return false
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	return strings.HasPrefix(b, a) || strings.HasSuffix(b, a)
+}
+
+func minLen(a, b string) int {
+	if len(a) < len(b) {
+		return len(a)
+	}
+	return len(b)
 }
 
 func evListing(ev *evidence) *supply.Listing {
@@ -345,7 +372,7 @@ func scoreListings(reqProduct, reqVariant string, listings []supply.MatchableLis
 		for _, lp := range names {
 			if lp == rp {
 				exact = true
-			} else if strings.Contains(lp, rp) || strings.Contains(rp, lp) {
+			} else if minLen(lp, rp) >= 3 && (strings.Contains(lp, rp) || strings.Contains(rp, lp)) {
 				family = true
 			}
 		}
@@ -435,8 +462,9 @@ func hasServiceArea(areas []string, target string) bool {
 }
 
 // LocationMatches: the same place, or one names the other more precisely
-// ("Unilag" and "Unilag main gate", "Yaba" and "Yaba, Lagos", "GRA" and
-// "GRA, Benin City"): every word of the shorter is a word of the longer.
+// ("Unilag" and "Unilag main gate", "Yaba" and "Yaba, Lagos"): every word
+// of the shorter is a word of the longer, and at least one of them is not a
+// generic place word ("GRA", "Road", "Phase 1" alone never match).
 // Before the 01a audit only identical strings matched, so a buyer in
 // "Akoka" or at "Unilag main gate" never reached a vendor saved as "Unilag".
 func LocationMatches(a, b string) bool {
@@ -458,8 +486,29 @@ func LocationMatches(a, b string) bool {
 	for _, w := range tb {
 		have[w] = true
 	}
+	specific := false
 	for _, w := range ta {
 		if !have[w] {
+			return false
+		}
+		specific = specific || !genericPlaceWord(w)
+	}
+	// "GRA", "Road", "Phase 1" alone exist in many cities: they never make
+	// a match on their own (independent review).
+	return specific
+}
+
+var genericPlaceWords = map[string]bool{"gra": true, "road": true, "rd": true, "street": true, "st": true, "close": true,
+	"avenue": true, "ave": true, "estate": true, "phase": true, "island": true, "junction": true, "area": true, "layout": true,
+	"extension": true, "quarters": true, "gate": true, "main": true, "hall": true, "hostel": true, "market": true, "park": true,
+	"new": true, "old": true, "the": true, "of": true, "and": true, "by": true, "near": true, "off": true}
+
+func genericPlaceWord(w string) bool {
+	if genericPlaceWords[w] {
+		return true
+	}
+	for _, r := range w {
+		if !unicode.IsDigit(r) {
 			return false
 		}
 	}

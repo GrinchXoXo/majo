@@ -21,18 +21,37 @@ const (
 	msgVendorStart   = "Thanks 🙏 The Majo team will switch your buyer requests back on shortly."
 )
 
-// vendorKeyword reads a whole message as STOP or START ("" otherwise).
+// vendorKeyword reads a whole message as STOP or START ("" otherwise): the
+// keyword (or phrase) plus at most polite filler ("pls stop", "stop o",
+// "STOP please"), never a sentence that merely contains the word.
 func vendorKeyword(text string) string {
-	t := strings.ToLower(strings.Join(strings.FieldsFunc(text, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
-	}), " "))
-	switch t {
-	case "stop", "unsubscribe", "stop majo", "remove me", "opt out", "optout", "stop requests", "stop sending":
+	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !(r >= 'a' && r <= 'z') })
+	var core []string
+	for _, w := range words {
+		if !keywordFiller[w] {
+			core = append(core, w)
+		}
+	}
+	switch strings.Join(core, " ") {
+	case "stop", "unsubscribe", "remove me", "opt out", "optout", "stop requests", "stop sending", "stop messages", "stop sending me requests":
 		return "STOP"
-	case "start", "resume", "unstop", "start majo", "start again", "start requests":
+	case "start", "resume", "unstop", "start again", "start requests", "add me back":
 		return "START"
 	}
 	return ""
+}
+
+var keywordFiller = map[string]bool{"please": true, "pls": true, "plz": true, "abeg": true, "o": true, "oh": true, "majo": true,
+	"now": true, "thanks": true, "thank": true, "you": true, "kindly": true, "sir": true, "ma": true}
+
+// HandleVendorKeyword applies STOP/START from a vendor of any status but
+// BLOCKED (the webhook calls it for PENDING and INACTIVE vendors, who
+// otherwise take the buyer path); it reports whether the text was one.
+func (s *Service) HandleVendorKeyword(ctx context.Context, v *vendor.Vendor, text string) bool {
+	if v == nil || v.Status == vendor.StatusBlocked {
+		return false
+	}
+	return s.handleVendorKeyword(ctx, v, text)
 }
 
 // handleVendorKeyword applies STOP/START; it reports whether it did.

@@ -69,11 +69,19 @@ Double-entry, integer kobo, debit positive and credit negative.
   Corrections are reversing entries (`reverses_entry_id`, at most one
   reversal per entry);
 - one entry per `idempotency_key` (a payment reference), so a webhook
-  delivered twice is booked once.
+  delivered twice is booked once. The same key with different content is
+  refused (`ErrIdempotencyConflict`), never quietly treated as done;
+- postings can only be added in the transaction that created their entry,
+  so a committed entry can never be changed by adding lines to it later;
+- an account's code, type, owner, currency and customer-funds flag never
+  change (only its name may), and accounts are never deleted;
+- customer-funds accounts are exactly the `customer:*` codes (CHECK).
 
 **The service enforces:**
 
-- an entry for a revenue line that is off is refused (`ErrLineOff`);
+- an entry for a revenue line that is off is refused (`ErrLineOff`). This
+  applies both to its `revenue_line` and to any posting to a
+  `majo:revenue:<line>` account;
 - an entry touching an account with `holds_customer_funds` (escrow, buyer
   deposits, vendor payables) is refused until split payments or escrow are
   on (`ErrCustomerFunds`). Before that, Majo books only its own income.

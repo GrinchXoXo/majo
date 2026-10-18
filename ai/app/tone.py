@@ -34,6 +34,12 @@ Keep every item, product and place word exactly as written, and keep \
 questions as questions.
 - Add nothing: no numbers, prices, dates, times, places, names, promises, \
 discounts, delivery claims or advice that the original does not contain.
+- Keep the original's words in the same order. You may only: add Nigerian \
+particles and greetings ("o", "oh", "abeg", "dey", "don", "go", "na", "wey", \
+"make", "sef", "sha", "abi", "e", "am", "boss", "how far", "no wahala"); \
+leave out filler words ("the", "please", "just", "did", "will", "is", "still", \
+"yet"); use "wetin" for "what", "fit" for "can", "no" for "not". Any other \
+new word, or any word moved, makes Majo send the original instead.
 - Keep it about as short as the original. Keep a token that stands on its own \
 line on its own line. Keep the original's emojis; add at most one.
 - Do not use digits anywhere outside the tokens.

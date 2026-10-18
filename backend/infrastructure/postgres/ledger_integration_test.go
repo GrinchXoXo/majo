@@ -106,8 +106,33 @@ func TestIntegration_Ledger(t *testing.T) {
 	}
 	clash := ledger.LeadCreditPurchase(vendorID, 1, 100, "Bachs", "PAY-2", now)
 	clash.Accounts[0].HoldsCustomerFunds = true
-	if _, _, err := repo.Post(ctx, clash); err == nil || !strings.Contains(err.Error(), "different") {
+	if _, _, err := repo.Post(ctx, clash); err == nil || !(strings.Contains(err.Error(), "different") || strings.Contains(err.Error(), "check constraint")) {
 		t.Fatalf("account redefinition: %v", err)
+	}
+
+	// Independent review: a committed entry can't gain postings; an
+	// account's identity can't change; a reused key with other content fails.
+	if err := exec(`INSERT INTO ledger_postings (entry_id, account_id, amount_kobo, currency)
+		SELECT '`+saved.ID.String()+`', id, -100, 'NGN' FROM ledger_accounts WHERE code = 'majo:bank'`,
+		`INSERT INTO ledger_postings (entry_id, account_id, amount_kobo, currency)
+		SELECT '`+saved.ID.String()+`', id, 100, 'NGN' FROM ledger_accounts WHERE code = 'majo:cash:bachs'`); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("postings added to a committed entry: %v", err)
+	}
+	for _, q := range []string{`UPDATE ledger_accounts SET currency = 'USD' WHERE code = 'majo:bank'`,
+		`UPDATE ledger_accounts SET holds_customer_funds = true WHERE code = 'majo:bank'`, `DELETE FROM ledger_accounts WHERE code = 'majo:bank'`} {
+		if err := exec(q); err == nil {
+			t.Fatalf("account changed: %s", q)
+		}
+	}
+	if err := exec(`UPDATE ledger_accounts SET name = 'Main bank' WHERE code = 'majo:bank'`); err != nil {
+		t.Fatalf("renaming is fine: %v", err)
+	}
+	if err := exec(`INSERT INTO ledger_accounts (code, name, type, owner_type, currency, holds_customer_funds) VALUES ('customer:x', 'x', 'ASSET', 'PROVIDER', 'NGN', false)`); err == nil {
+		t.Fatal("a customer: account must hold customer funds")
+	}
+	other := ledger.LeadCreditPurchase(vendorID, 10, 999999, "Bachs", "PAY-1", now)
+	if _, _, err := svc.Post(ctx, other); !errors.Is(err, ledger.ErrIdempotencyConflict) {
+		t.Fatalf("reused key with another amount: %v", err)
 	}
 
 	entries, balances, err := repo.Summary(ctx)

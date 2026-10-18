@@ -316,6 +316,13 @@ func (h *WhatsAppWebhookHandler) processInboundMessage(ctx context.Context, msg 
 		return
 	}
 	isVendor := v != nil && v.Status == vendor.StatusActive
+	// 01a review: a PENDING or INACTIVE vendor's STOP/START (the opt-out
+	// confirmation tells them to reply START) must reach the vendor
+	// keyword handling, not the buyer path.
+	if v != nil && !isVendor && msg.Type == "text" && h.routingService != nil && h.routingService.HandleVendorKeyword(ctx, v, msg.Text) {
+		log.Info("vendor keyword handled", "vendor_id", v.ID, "status", v.Status)
+		return
+	}
 
 	actor := event.ActorBuyer
 	if isVendor {

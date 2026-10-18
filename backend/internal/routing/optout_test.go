@@ -11,7 +11,7 @@ import (
 
 func TestVendorKeyword(t *testing.T) {
 	for in, want := range map[string]string{"STOP": "STOP", " stop. ": "STOP", "Stop Majo": "STOP", "unsubscribe": "STOP", "remove me!": "STOP",
-		"START": "START", "start again": "START", "stop by 5pm": "", "I have stopped selling iphone": "", "yes": "", "": ""} {
+		"START": "START", "start again": "START", "Stop please": "STOP", "pls stop": "STOP", "STOP o 🙏": "STOP", "add me back": "START", "stop by 5pm": "", "I have stopped selling iphone": "", "yes": "", "": ""} {
 		if got := vendorKeyword(in); got != want {
 			t.Errorf("vendorKeyword(%q) = %q, want %q", in, got, want)
 		}

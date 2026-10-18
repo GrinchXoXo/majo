@@ -39,19 +39,36 @@ anything untagged are sent exactly as written.
    - the terms the sender marks as fixed: product, variant, location, item,
      seller name.
 
-   The model never sees prices, phone numbers or references.
+   The model never sees prices, phone numbers or references. A
+   one-word name at the start of a sentence ("Tunde replied") is not
+   masked; the model sees it, but the check keeps it exactly.
 2. **Rewrite (Python, `ai/app/tone.py`).** The model is told to keep every
    token once and in order, add nothing, and answer with JSON. The service
    does a first check, then the backend checks again.
-3. **Check (Go).** The rewrite is refused if any of these fail:
-   - the tokens are not identical and in the same order;
-   - it adds a digit, `₦`, a link, or `@`;
-   - it adds a number word, a time word ("tomorrow", "soon"), or a claim
-     ("free", "delivery", "discount", "guaranteed", "price");
-   - it drops an uncommon word (item words such as "rechargeable");
-   - it changes negation ("No wahala" does not count as negation);
-   - it turns a question into a statement;
-   - its length is outside about ⅓× to 2× the original.
+3. **Check (Go).** The rule is that the template's words survive, in order.
+   - The tokens must be identical and in the same order.
+   - Every word of the template must still be there, in the same order.
+     Words are compared after expanding contractions, removing plain
+     plural and tense endings, and mapping a few Pidgin equivalents: "no" =
+     not, "fit" = can, "wetin" = what, "una" = you; "I no fit find" reads
+     as "I can not find". Two exceptions: filler words ("the", "please",
+     "did", "will", "still", "yet", "and"...) may be left out, and the
+     fixed expressions "no wahala", "no problem" and "how far" are ignored.
+   - Added words must come from a small register list: Pidgin particles
+     ("o", "abeg", "dey", "don", "go", "na", "wey", "make", "sef", "sha",
+     "abi"...), greetings, and grammatical glue.
+   - The rewrite may not add a digit of any script, `₦`, a link (including a
+     bare domain such as `bit.ly/x`) or `@`.
+   - Negation must stay the same, questions must stay questions, and the
+     length must stay within about ⅓× to 2× the original.
+
+   So a rewrite cannot swap "bad" and "great" on a rating scale, turn
+   "after" into "before", give YES and NO new meanings, add "free",
+   "without" or "brand new", or drop an item word. An independent review
+   tried each of these against the first version, which passed them; all
+   are now regression tests (`TestCheckRejectsMeaningFlips`). The price of
+   this is that the model may only *season* the template, not rephrase it.
+   Shadow mode shows how often that still reads naturally.
 4. **Unmask or fall back.** If the check passes, the facts go back in. If
    the check fails, or the call fails, times out (`TONE_TIMEOUT`, 5s), or
    there is no API key, **the original template text is sent**.

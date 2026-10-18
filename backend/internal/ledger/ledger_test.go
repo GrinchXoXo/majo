@@ -196,3 +196,23 @@ func TestReverse(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+
+// Independent review: a revenue account cannot be posted to with the line
+// off by leaving RevenueLine empty; same key + other content is a conflict.
+func TestRevenueAccountNeedsItsLine(t *testing.T) {
+	s := NewService(on(monetization.StageB, payments.KindPaymentLink, monetization.LeadCredits), newFake())
+	e, _ := ServicePayment(monetization.VendorPro, 1000, "Bachs", "p9", now)
+	e.RevenueLine = nil
+	if _, _, err := s.Post(context.Background(), e); !errors.Is(err, ErrLineOff) {
+		t.Fatalf("VENDOR_PRO is off: %v", err)
+	}
+	a := LeadCreditPurchase(uuid.New(), 1, 100, "Bachs", "p1", now)
+	b := LeadCreditPurchase(*a.VendorID, 1, 100, "Bachs", "p1", now)
+	if !SameEntry(a, b) {
+		t.Fatal("same content")
+	}
+	b.Postings[0].AmountKobo, b.Postings[1].AmountKobo = 200, -200
+	if SameEntry(a, b) {
+		t.Fatal("different amount")
+	}
+}

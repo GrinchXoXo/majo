@@ -85,9 +85,9 @@ func TestCheckAcceptsGoodRewrites(t *testing.T) {
 	for _, c := range []struct{ text, keep, rewrite string }{
 		{dealQ, "small chops|Mama Chops", "How far 👋 you don buy the [[F1]] from [[F2]]? Abeg reply [[F3]], [[F4]] or [[F5]]."},
 		{budgetQ, "office chair", "Wetin be your budget for the [[F1]]? Rough range is fine o, like [[F2]]."},
-		{searchAk, "laptop", "Thank you! I dey search for sellers near [[F1]] for your [[F2]] now. I go message you once someone replies."},
-		{lateMsg, "", "[[F1]] I no fit find seller for [[F2]] o. Make I search for nearby areas too? Reply [[F3]] or [[F4]]."},
-		{offerMsg, "iphone 13", "Good news! I found [[F1]] options for [[F2]] 👀\n\n[[F3]]\n   [[F4]]\n   [[F5]]\n\n[[F6]]\n   [[F7]]\n   [[F8]]\n\nReply with the number ([[F9]]) of the one you want."},
+		{searchAk, "laptop", "Thank you! I dey search for sellers near [[F1]] for your [[F2]] now. I go message you when someone replies."},
+		{lateMsg, "", "[[F1]] I no fit find seller in [[F2]] o. Can I search in nearby areas too? Abeg reply [[F3]] or [[F4]]."},
+		{offerMsg, "iphone 13", "Great! I found [[F1]] options for [[F2]] 👀\n\n[[F3]]\n   [[F4]]\n   [[F5]]\n\n[[F6]]\n   [[F7]]\n   [[F8]]\n\nReply with the number ([[F9]]) of the one you want."},
 		{"Sorry, no seller has replied yet for the gas cylinder. I'm still checking and I'll update you.", "gas cylinder",
 			"Sorry o, no seller don reply yet for the [[F1]]. I still dey check, I go update you."},
 		{"Okay 👍 I'll check back later.", "", "No wahala 👍 I go check back later."},
@@ -114,11 +114,14 @@ func TestCheckRejects(t *testing.T) {
 		"digits_added":      "You don buy the 2 [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]].",
 		"digits_added ":     "You don buy the [[F1]] from [[F2]] for ₦? Reply [[F3]], [[F4]] or [[F5]].",
 		"link_added":        "You don buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]] on wa.me/x.",
-		"added:tomorrow":    "You don buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]] before tomorrow.",
+		"added:tomorrow":    "You don buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]] tomorrow.",
+		"added:before":      "You don buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]] before.",
+		"added:sell":        "You don sell the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]].",
+		"changed:you":       "Hi, buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]].",
 		"added:free":        "You don buy the [[F1]] from [[F2]]? It is free. Reply [[F3]], [[F4]] or [[F5]].",
-		"added:delivery":    "You don buy the [[F1]] from [[F2]] with delivery? Reply [[F3]], [[F4]] or [[F5]].",
-		"question_lost":     "Tell me if you buy the [[F1]] from [[F2]]. Reply [[F3]], [[F4]] or [[F5]].",
-		"negation_changed":  "You no buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]].",
+		"added:delivery":    "You don buy the [[F1]] from [[F2]] delivery? Reply [[F3]], [[F4]] or [[F5]].",
+		"question_lost":     "You buy the [[F1]] from [[F2]]. Reply [[F3]], [[F4]] or [[F5]].",
+		"added:not":         "You no buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]].",
 		"length":            "Hi you buy the [[F1]] from [[F2]]? Reply [[F3]], [[F4]] or [[F5]]." + strings.Repeat(" please", 30),
 	} {
 		if got := Check(m, bad); got != strings.TrimSpace(want) {
@@ -127,7 +130,7 @@ func TestCheckRejects(t *testing.T) {
 	}
 	// An item word outside the masked terms must survive.
 	m2 := Mask("I'm still looking for a rechargeable fan for you.", nil)
-	if got := Check(m2, "I still dey look for a fan for you."); got != "dropped:rechargeable" {
+	if got := Check(m2, "I still dey look for a fan for you."); got != "changed:rechargeable" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -312,6 +315,31 @@ func TestSamplesMaskEveryFact(t *testing.T) {
 		}
 		if Check(m, m.Text) != "" {
 			t.Errorf("%s: the unchanged text must pass its own check: %s", s.Name, Check(m, m.Text))
+		}
+	}
+}
+
+// Independent review: meaning flips that keep every token must fail.
+func TestCheckRejectsMeaningFlips(t *testing.T) {
+	cases := []struct{ text, keep, rewrite string }{
+		{"Great! How would you rate Mama Chops from 1 (bad) to 5 (great)? Reply with a number.", "Mama Chops",
+			"How would you rate [[F1]] from [[F2]] (great) to [[F3]] (bad)? Reply with a number."},
+		{dealQ, "small chops|Mama Chops", "Reply [[F3]] if you are still waiting, [[F4]] if you did buy the [[F1]] from [[F2]], or [[F5]]?"},
+		{lateMsg, "", "[[F1]] I couldn't find a seller in [[F2]]. Can I search in nearby areas too? Reply [[F3]] to stop or [[F4]] to search."},
+		{"Tip: pay on delivery or after you see the item.", "", "[[F1]] pay before delivery or after you see the item."},
+		{"Pickup is with delivery included?", "", "Pickup is without delivery included?"},
+		{"I'm already on it for iphone 13 👀 I'll send you options as soon as sellers reply.", "iphone 13",
+			"I'm already on it for [[F1]] brand new sealed 👀 I'll send you options as soon as sellers reply."},
+		{"I'm already on it for iphone 13 👀 I'll send you options as soon as sellers reply.", "iphone 13",
+			"I'm already on it for [[F1]] 👀 Send the sellers your options as soon as they reply."},
+		{"I'll send you options soon.", "", "I'll send you options soon, sixteen of them."},
+		{"I'll send you options soon.", "", "I'll send you ５ options soon."},
+		{"I'll send you options soon.", "", "I'll send you options soon: bit.ly/majo-x"},
+	}
+	for _, c := range cases {
+		m := Mask(c.text, strings.Split(c.keep, "|"))
+		if r := Check(m, c.rewrite); r == "" {
+			t.Errorf("accepted a meaning change:\n%s\n%s\n%s", c.text, m.Text, c.rewrite)
 		}
 	}
 }

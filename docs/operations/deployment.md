@@ -61,7 +61,10 @@ Use its own role and password. Take the connection string with
 `sslmode=require`. Check what restore window the plan includes. The nightly
 dumps below cover you either way, but point-in-time restore is better.
 
-**B. Postgres on the server** (`--profile localdb`). Cheapest and simplest;
+**B. Postgres on the server** (`--profile localdb`). Note: the app then
+connects as the database owner, which could switch the ledger's protective
+triggers off. Before any revenue line goes live, create a separate,
+non-owner role for the app (01b/06). Cheapest and simplest;
 the database never leaves the server's private Docker network. Backups are
 then entirely ours: the off-server copy (`BACKUP_RCLONE_TARGET`) is not
 optional.

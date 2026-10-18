@@ -4,7 +4,6 @@ import (
 	"errors"
 	"sort"
 	"strings"
-	"unicode"
 )
 
 // ErrBadWhatsAppNumber: not a usable WhatsApp number.
@@ -20,7 +19,7 @@ func NormalizeWhatsAppID(s string) (string, error) {
 	var b strings.Builder
 	for _, r := range strings.TrimSpace(s) {
 		switch {
-		case unicode.IsDigit(r):
+		case r >= '0' && r <= '9': // ASCII only: WhatsApp IDs never carry other digits
 			b.WriteRune(r)
 		case r == '+' || r == ' ' || r == '-' || r == '(' || r == ')' || r == '.':
 		default:
@@ -33,6 +32,9 @@ func NormalizeWhatsAppID(s string) (string, error) {
 	}
 	if len(d) == 11 && strings.HasPrefix(d, "0") { // Nigerian local format
 		d = "234" + d[1:]
+	}
+	if len(d) == 10 && strings.ContainsRune("789", rune(d[0])) { // "803 123 4567": Nigerian, no 0 or 234
+		d = "234" + d
 	}
 	if strings.HasPrefix(d, "2340") { // +234 (0)803...
 		d = "234" + d[4:]

@@ -26,7 +26,9 @@ CREATE TABLE ledger_accounts (
     -- (Stage C / B with a licensed partner); the application refuses earlier.
     holds_customer_funds  BOOLEAN NOT NULL DEFAULT false,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CHECK ((owner_type IN ('VENDOR', 'BUYER')) = (owner_id IS NOT NULL) OR owner_type IN ('MAJO', 'PROVIDER'))
+    CHECK ((owner_type IN ('VENDOR', 'BUYER')) = (owner_id IS NOT NULL) OR owner_type IN ('MAJO', 'PROVIDER')),
+    -- Customer-funds accounts are exactly the customer:* codes.
+    CHECK (holds_customer_funds = (code LIKE 'customer:%'))
 );
 
 CREATE TABLE ledger_entries (
@@ -100,6 +102,40 @@ BEGIN
 END $$;
 CREATE CONSTRAINT TRIGGER ledger_entries_have_postings AFTER INSERT ON ledger_entries
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ledger_entry_has_postings();
+
+-- Postings join an entry only in the transaction that created the entry:
+-- a committed entry can never be changed by adding postings later.
+CREATE FUNCTION ledger_entry_opened() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM set_config('ledger.open_' || replace(NEW.id::text, '-', ''), '1', true);
+    RETURN NULL;
+END $$;
+CREATE TRIGGER ledger_entry_opened AFTER INSERT ON ledger_entries
+    FOR EACH ROW EXECUTE FUNCTION ledger_entry_opened();
+CREATE FUNCTION ledger_posting_entry_open() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF current_setting('ledger.open_' || replace(NEW.entry_id::text, '-', ''), true) IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION 'ledger: entry % is closed; post a new entry instead', NEW.entry_id;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER ledger_posting_entry_open BEFORE INSERT ON ledger_postings
+    FOR EACH ROW EXECUTE FUNCTION ledger_posting_entry_open();
+
+-- An account's identity never changes (its name may).
+CREATE FUNCTION ledger_account_fixed() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'ledger: accounts are never deleted';
+    END IF;
+    IF (NEW.code, NEW.type, NEW.owner_type, NEW.owner_id, NEW.currency, NEW.holds_customer_funds)
+       IS DISTINCT FROM (OLD.code, OLD.type, OLD.owner_type, OLD.owner_id, OLD.currency, OLD.holds_customer_funds) THEN
+        RAISE EXCEPTION 'ledger: account % is fixed (only its name may change)', OLD.code;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER ledger_account_fixed BEFORE UPDATE OR DELETE ON ledger_accounts
+    FOR EACH ROW EXECUTE FUNCTION ledger_account_fixed();
 
 -- Append-only.
 CREATE FUNCTION ledger_append_only() RETURNS trigger LANGUAGE plpgsql AS $$

@@ -56,7 +56,15 @@ func (r *LedgerRepository) Post(ctx context.Context, e *ledger.Entry) (*ledger.E
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = tx.Rollback()
 		existing, err := r.Entry(ctx, e.IdempotencyKey)
-		return existing, false, err
+		if err != nil || existing == nil {
+			return existing, false, err
+		}
+		// Same key, different content: a bug or a reused reference, never
+		// "already done".
+		if !ledger.SameEntry(existing, e) {
+			return nil, false, fmt.Errorf("%w: %s", ledger.ErrIdempotencyConflict, e.IdempotencyKey)
+		}
+		return existing, false, nil
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("ledger: inserting entry: %w", err)

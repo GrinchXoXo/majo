@@ -170,24 +170,6 @@ wait_ready() {
 }
 
 public_check() {
-	# Docker Compose expands $NAME inside env-file values (even in double
-	# quotes), which silently corrupts a password containing "$". Only single
-	# quotes keep a value literal.
-	local line lineno=0 raw
-	while IFS= read -r line || [[ -n "$line" ]]; do
-		lineno=$((lineno + 1))
-		line="${line%$'\r'}"
-		[[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-		[[ "$line" == *=* ]] || { err "line $lineno is not KEY=value"; continue; }
-		raw="${line#*=}"
-		if [[ "$raw" == *'$'* && ! ( "${raw:0:1}" == "'" && "${raw: -1}" == "'" ) ]]; then
-			err "line $lineno (${line%%=*}) contains \$: wrap the value in single quotes, or Docker Compose will rewrite it"
-		fi
-		if [[ "$raw" == *" #"* && "${raw:0:1}" != "'" && "${raw:0:1}" != '"' ]]; then
-			warn "line $lineno (${line%%=*}): ' #' starts a comment in an unquoted value; quote the value if the # is part of it"
-		fi
-	done <"$ENV_FILE"
-
 	local domain
 	domain="$(envget MAJO_DOMAIN)"
 	if curl -fsS --max-time 15 "https://$domain/health" >/dev/null 2>&1; then
@@ -208,8 +190,20 @@ backup() {
 	media="majo-media-$ts.tar.gz"
 	note "dumping database to deploy/backups/$db"
 	# shellcheck disable=SC2016 # expanded inside the container, on purpose
-	compose --profile tools run --rm -T dbtools sh -c \
-		'pg_dump --format=custom --no-owner --no-acl --dbname="$DATABASE_URL" --file="/backups/$1.partial" && mv "/backups/$1.partial" "/backups/$1"' \
+	# The password goes to pg_dump through PGPASSWORD, not on its command
+	# line (visible to ps). A percent-encoded password (rare with the
+	# recommended hex passwords) stays in the URL.
+	compose --profile tools run --rm -T dbtools sh -c '
+		url="$DATABASE_URL"
+		pw=$(printf "%s" "$url" | sed -nE "s#^[a-z]+://[^:/@]*:([^@]*)@.*#\1#p")
+		case "$pw" in
+		"" | *%*) ;;
+		*)
+			export PGPASSWORD="$pw"
+			url=$(printf "%s" "$url" | sed -E "s#^([a-z]+://[^:/@]*):[^@]*@#\1@#")
+			;;
+		esac
+		pg_dump --format=custom --no-owner --no-acl --dbname="$url" --file="/backups/$1.partial" && mv "/backups/$1.partial" "/backups/$1"' \
 		sh "$db"
 	note "archiving media to deploy/backups/$media"
 	# shellcheck disable=SC2016 # expanded inside the container, on purpose
@@ -308,6 +302,9 @@ automation() {
 	tok="$(envget OPERATOR_API_TOKEN)"
 	reason="${reason//\\/\\\\}"
 	reason="${reason//\"/\\\"}"
+	reason="${reason//$'\n'/ }"
+	reason="${reason//$'\r'/ }"
+	reason="${reason//$'\t'/ }"
 	body="{\"reason\":\"$reason\"}"
 	# The token goes in through a file descriptor, never on the command line.
 	curl -fsS --max-time 20 -X POST "https://$domain/api/autonomy/$action" \

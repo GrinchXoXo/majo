@@ -394,6 +394,15 @@ func sentenceStart(line string, at int) bool {
 // --- checks ----------------------------------------------------------------
 
 // Check returns why a rewrite of m cannot be sent, or "" if it can.
+//
+// The rewrite may only (a) add words from a small register list (Pidgin
+// particles, greetings, auxiliaries: "abeg", "o", "don", "dey"...), (b)
+// drop filler words ("the", "please", "did", "will"...), and (c) map a few
+// Pidgin equivalents ("wetin" = what, "fit" = can, "no" = not). Every other
+// word of the template, and every fact token, must still be there in the
+// same order. So a rewrite cannot swap "bad" and "great", "before" and
+// "after", YES and NO, add "free" or "without", or drop an item word
+// (independent review of pilot batch 7).
 func Check(m Masked, rewritten string) string {
 	r := strings.TrimSpace(rewritten)
 	if r == "" {
@@ -407,22 +416,36 @@ func Check(m Masked, rewritten string) string {
 	if strings.Contains(rest, "[[") || strings.Contains(rest, "]]") {
 		return "tokens_changed"
 	}
-	if strings.ContainsAny(rest, "0123456789₦") {
+	if strings.ContainsRune(rest, '₦') || strings.IndexFunc(rest, unicode.IsDigit) >= 0 {
 		return "digits_added"
 	}
-	if linkRe.MatchString(rest) || strings.Contains(rest, "@") {
+	if linkRe.MatchString(rest) || bareDomain.MatchString(rest) || strings.Contains(rest, "@") {
 		return "link_added"
 	}
-	ow, rw := wordSet(origRest), wordSet(rest)
-	for _, w := range normWords(rest) {
-		if risky[w] && !ow[w] {
+	ow, rw := canonWords(m.Text), canonWords(r)
+	inOrig := map[string]bool{}
+	for _, w := range ow {
+		inOrig[w] = true
+	}
+	for _, w := range rw {
+		if !inOrig[w] && !tokenRe.MatchString(w) && !register[w] {
 			return "added:" + w
 		}
 	}
-	for _, w := range normWords(origRest) {
-		if !common[w] && !rw[w] && !risky[w] && !negationWords[w] {
-			return "dropped:" + w
+	// The template's meaningful words and tokens, in order, must be a
+	// subsequence of the rewrite's.
+	i := 0
+	for _, w := range ow {
+		if droppable[w] {
+			continue
 		}
+		for i < len(rw) && rw[i] != w {
+			i++
+		}
+		if i == len(rw) {
+			return "changed:" + w
+		}
+		i++
 	}
 	if negated(origRest) != negated(rest) {
 		return "negation_changed"
@@ -436,6 +459,91 @@ func Check(m Masked, rewritten string) string {
 	}
 	return ""
 }
+
+// A bare domain ("bit.ly/x", "majo.ng") is a link too.
+var bareDomain = regexp.MustCompile(`(?i)\b[\p{L}\p{N}-]+\.(com|ng|ly|io|co|me|net|org|app|link|xyz|info|biz)\b`)
+
+var (
+	canonTokenRe = regexp.MustCompile(`\[\[F\d+\]\]|[\p{L}]+(?:'[\p{L}]+)*`)
+	// Fixed expressions that carry no fact; removed before comparing.
+	fixedPhrases = regexp.MustCompile(`(?i)\b(no wahala|no problem|no worries|no shaking|how far)\b`)
+	contractions = []struct{ suffix, expand string }{
+		{"n't", " not"}, {"'ll", " will"}, {"'m", " am"}, {"'re", " are"}, {"'ve", " have"}, {"'d", " would"}, {"'s", ""},
+	}
+	irregularNot = map[string]string{"won't": "will not", "can't": "can not", "cannot": "can not", "shan't": "shall not", "ain't": "not"}
+	synonyms     = map[string]string{"could": "can", "fit": "can", "wetin": "what", "una": "you", "no": "not", "nor": "not", "never": "not"}
+)
+
+// canonWords: the comparison form of a text: tokens kept as they are,
+// words lower-cased, contractions expanded, plain plural/tense endings
+// removed, Pidgin equivalents mapped, fixed expressions dropped.
+func canonWords(s string) []string {
+	s = strings.ReplaceAll(strings.ToLower(s), "’", "'")
+	s = fixedPhrases.ReplaceAllString(s, " ")
+	var out []string
+	for _, w := range canonTokenRe.FindAllString(s, -1) {
+		if strings.HasPrefix(w, "[[") {
+			out = append(out, strings.ToUpper(w))
+			continue
+		}
+		if x, ok := irregularNot[w]; ok {
+			w = x
+		} else {
+			for _, c := range contractions {
+				if strings.HasSuffix(w, c.suffix) && len(w) > len(c.suffix) {
+					w = strings.TrimSuffix(w, c.suffix) + c.expand
+					break
+				}
+			}
+		}
+		for _, part := range strings.Fields(w) {
+			part = stem(part)
+			if syn, ok := synonyms[part]; ok {
+				part = syn
+			}
+			out = append(out, part)
+		}
+	}
+	// Pidgin puts the negation before the modal ("I no fit find" = "I
+	// can not find"): compare in the English order.
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "not" && modals[out[i+1]] {
+			out[i], out[i+1] = out[i+1], out[i]
+			i++
+		}
+	}
+	return out
+}
+
+var modals = set("can will do would should shall did doe")
+
+func stem(w string) string {
+	switch {
+	case len(w) > 4 && (strings.HasSuffix(w, "ies") || strings.HasSuffix(w, "ied")):
+		return w[:len(w)-3] + "y"
+	case len(w) > 5 && strings.HasSuffix(w, "ing"):
+		return w[:len(w)-3]
+	case len(w) > 4 && strings.HasSuffix(w, "ed"):
+		return w[:len(w)-2]
+	case len(w) > 3 && strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss"):
+		return w[:len(w)-1]
+	}
+	return w
+}
+
+// droppable: template words a rewrite may leave out.
+var droppable = set(`
+a an the hi hello hey thanks thank please kindly just so very really also okay ok alright well great sure good nice
+did do doe is are am was were be been being has have had will would shall should it that this there here then too still yet and
+`)
+
+// register: words a rewrite may add (Nigerian WhatsApp register and
+// grammatical glue that carries no fact).
+var register = set(`
+o oh abeg pls biko dey don go wey na make sef sha abi e am boss
+hi hello hey please kindly thanks thank sorry okay ok alright great nice good
+the a an just so very really well and is are be was will have ha do did it
+`)
 
 var wordRe = regexp.MustCompile(`[\p{L}]+(?:['’][\p{L}]+)*`)
 
